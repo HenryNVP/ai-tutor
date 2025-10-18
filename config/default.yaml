@@ -1,0 +1,60 @@
+project_name: "Personal STEM Instructor"
+
+model:
+  name: "gemini-1.5-pro"
+  provider: "litellm"
+  temperature: 0.15
+  max_output_tokens: 2048
+  mode: "chat"
+
+embeddings:
+  model: "sentence-transformers/all-MiniLM-L6-v2"
+  provider: "sentence-transformers"
+  batch_size: 32
+  normalize: true
+
+chunking:
+  chunk_size: 900
+  chunk_overlap: 120
+  tokenizer: null
+
+retrieval:
+  initial_k: 20
+  top_k: 8
+  min_score: 0.3
+  rerank_top_k: 0
+
+guardrails:
+  min_hits: 2
+  min_score: 0.35
+  academic_integrity_mode: "learning"
+  blocked_topics:
+    - "violence"
+    - "adult content"
+    - "illicit behavior"
+
+search_tool:
+  enabled: true
+  min_hits_before_search: 1
+  provider: "tavily"
+  max_results: 5
+
+course_defaults:
+  weeks: 12
+  lessons_per_week: 3
+  assessment_frequency: 2
+  domains:
+    - "math"
+    - "physics"
+    - "cs"
+
+paths:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  vector_store_dir: "data/vector_store"
+  chunks_index: "data/processed/chunks.jsonl"
+  logs_dir: "logs"
+
+logging:
+  level: "INFO"
+  json: false
