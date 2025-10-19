@@ -1,40 +1,30 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Iterable, List, Optional
 
 import numpy as np
-
 from ai_tutor.config.schema import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingClient:
-    """Wrapper around sentence-transformers style models with lazy loading."""
+    """Wrapper around sentence-transformers models with lazy loading."""
 
     def __init__(self, config: EmbeddingConfig, api_key: Optional[str] = None):
-        """Capture embedding configuration and defer provider setup until first use."""
+        """Capture embedding configuration and defer model setup; `api_key` is ignored."""
         self.config = config
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_GENAI_API_KEY")
         self._model = None
-        self._litellm = None
-        self._genai = None
-        self._google_configured = False
         self._device: str = "cpu"
 
     def _ensure_model(self):
-        """Instantiate the configured embedding provider if it has not been loaded yet."""
+        """Instantiate the sentence-transformers model if it has not been loaded yet."""
         if self._model is not None:
             return
-        provider = self.config.provider.lower()
+        provider = (self.config.provider or "sentence-transformers").lower()
         if provider in {"sentence-transformers", "hf", "huggingface"}:
             self._load_sentence_transformer()
-        elif provider == "litellm":
-            self._load_litellm()
-        elif provider in {"google-genai", "google", "gemini"}:
-            self._configure_google()
         else:
             raise ValueError(f"Unsupported embedding provider: {self.config.provider}")
 
@@ -61,104 +51,6 @@ class EmbeddingClient:
                 self._device = "cpu"
             else:
                 raise
-
-    def _load_litellm(self):
-        """Import litellm for embedding calls when using API-based providers."""
-        if self._litellm is not None:
-            return
-        try:
-            import litellm
-        except ImportError as exc:
-            raise RuntimeError("litellm package is required for embeddings provider 'litellm'.") from exc
-        self._litellm = litellm
-
-    def _configure_google(self):
-        """Set up the Google Generative AI client when using Gemini embeddings."""
-        if self._google_configured:
-            return
-        if not self.api_key:
-            raise RuntimeError("Google Generative AI embeddings require an API key.")
-        try:
-            import google.generativeai as genai
-        except ImportError as exc:
-            raise RuntimeError(
-                "google-generativeai package is required for embeddings provider 'google-genai'."
-            ) from exc
-        genai.configure(api_key=self.api_key)
-        self._genai = genai
-        self._google_configured = True
-
-    @staticmethod
-    def _normalize(vector: List[float]) -> List[float]:
-        """L2-normalize a dense vector if possible, protecting against zero norms."""
-        array = np.array(vector, dtype=np.float32)
-        norm = np.linalg.norm(array)
-        if norm == 0:
-            return vector
-        return (array / norm).tolist()
-
-    def _litellm_kwargs(self, texts: List[str]) -> dict:
-        """Assemble keyword arguments for litellm embedding requests."""
-        kwargs = {
-            "model": self.config.model,
-            "input": texts,
-            "api_key": self.api_key,
-        }
-        if self.config.dimension is not None:
-            # Different providers expect different field names; include both.
-            kwargs["dimensions"] = self.config.dimension
-            kwargs["output_dimensionality"] = self.config.dimension
-        return kwargs
-
-    def _embed_with_litellm(self, texts: List[str]) -> List[List[float]]:
-        """Call litellm's embedding endpoint and normalize the returned vectors."""
-        self._load_litellm()
-        assert self._litellm is not None
-        kwargs = self._litellm_kwargs(texts)
-        response = self._litellm.embedding(**kwargs)
-        data = getattr(response, "data", None)
-        if not data:
-            raise RuntimeError("Embedding response did not contain data.")
-        embeddings: List[List[float]] = []
-        for item in data:
-            embedding = None
-            if isinstance(item, dict):
-                embedding = item.get("embedding")
-            else:
-                embedding = getattr(item, "embedding", None)
-            if embedding is None:
-                raise RuntimeError("Embedding item missing 'embedding' vector.")
-            embeddings.append(list(embedding))
-
-        if self.config.normalize:
-            embeddings = [self._normalize(vector) for vector in embeddings]
-        return embeddings
-
-    def _embed_with_google(self, texts: List[str], task_type: str) -> List[List[float]]:
-        """Use the Google Generative AI SDK to embed text for the given task type."""
-        self._configure_google()
-        assert self._genai is not None
-        embeddings: List[List[float]] = []
-        for text in texts:
-            kwargs = {
-                "model": self.config.model,
-                "content": text,
-                "task_type": task_type,
-            }
-            if self.config.dimension is not None:
-                kwargs["output_dimensionality"] = self.config.dimension
-            response = self._genai.embed_content(**kwargs)
-            if isinstance(response, dict):
-                embedding = response.get("embedding")
-            else:
-                embedding = getattr(response, "embedding", None)
-            if embedding is None:
-                raise RuntimeError("Google Generative AI response missing 'embedding'.")
-            vector = list(embedding)
-            if self.config.normalize:
-                vector = self._normalize(vector)
-            embeddings.append(vector)
-        return embeddings
 
     def _select_device(self) -> str:
         """Choose CUDA when available, otherwise fall back to CPU execution."""
@@ -233,39 +125,22 @@ class EmbeddingClient:
 
     def embed_documents(self, texts: Iterable[str]) -> List[List[float]]:
         """
-        Embed document chunks according to the configured provider.
+        Embed document chunks using the configured sentence-transformers model.
 
-        Collects the input iterable, dispatches to one of the provider-specific helpers
-        (`_encode_with_sentence_transformer`, `_embed_with_litellm`, or `_embed_with_google`),
-        and returns the resulting batch of vectors ready for persistence in the vector store.
+        Collects the input iterable and runs `_encode_with_sentence_transformer`, returning
+        the resulting batch of vectors ready for persistence in the vector store.
         """
         text_list = list(texts)
         if not text_list:
             return []
-        provider = self.config.provider.lower()
-        if provider in {"sentence-transformers", "hf", "huggingface"}:
-            return self._encode_with_sentence_transformer(text_list)
-        if provider == "litellm":
-            return self._embed_with_litellm(text_list)
-        if provider in {"google-genai", "google", "gemini"}:
-            return self._embed_with_google(text_list, task_type="retrieval_document")
-        raise ValueError(f"Unsupported embedding provider: {self.config.provider}")
+        return self._encode_with_sentence_transformer(text_list)
 
     def embed_query(self, text: str) -> List[float]:
         """
         Embed a learner query so it can be compared against stored document vectors.
 
-        Mirrors `embed_documents` but operates on a single string and chooses the provider-specific
-        helper aligned with the configuration, producing a normalized vector for retrieval.
+        Mirrors `embed_documents` but operates on a single string, producing a normalized vector
+        for retrieval.
         """
-        provider = self.config.provider.lower()
-        if provider in {"sentence-transformers", "hf", "huggingface"}:
-            embeddings = self._encode_with_sentence_transformer([text])
-            return embeddings[0]
-        if provider == "litellm":
-            embeddings = self._embed_with_litellm([text])
-            return embeddings[0]
-        if provider in {"google-genai", "google", "gemini"}:
-            embeddings = self._embed_with_google([text], task_type="retrieval_query")
-            return embeddings[0]
-        raise ValueError(f"Unsupported embedding provider: {self.config.provider}")
+        embeddings = self._encode_with_sentence_transformer([text])
+        return embeddings[0]

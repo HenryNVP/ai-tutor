@@ -18,7 +18,7 @@ class EmbeddingConfig(BaseModel):
     """Configuration describing which embedding provider and parameters to use."""
 
     model: str = Field(..., description="Embedding model identifier.")
-    provider: str = Field("sentence-transformers", description="Embedding backend.")
+    provider: str = Field("sentence-transformers", description="Embedding backend (sentence-transformers only).")
     batch_size: int = Field(32, ge=1)
     normalize: bool = True
     dimension: int | None = Field(
