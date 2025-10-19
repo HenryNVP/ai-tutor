@@ -6,6 +6,7 @@ from ai_tutor.learning.models import LearnerProfile
 
 
 def generate_feedback(profile: LearnerProfile) -> Dict[str, List[str]]:
+    """Summarize learner strengths, focus areas, and suggested actions from profile data."""
     strengths = sorted(
         profile.domain_strengths.items(), key=lambda item: item[1], reverse=True
     )

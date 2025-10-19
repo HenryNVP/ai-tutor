@@ -7,12 +7,16 @@ from typing import Dict, List, Optional
 
 @dataclass
 class LearningObjective:
+    """Goal describing a specific knowledge or skill target."""
+
     description: str
     mastery_level: float = 0.0  # 0-1 scale
 
 
 @dataclass
 class LessonPlan:
+    """Structured lesson outline including objectives, resources, and practice."""
+
     title: str
     objectives: List[LearningObjective]
     resources: List[str]
@@ -22,6 +26,8 @@ class LessonPlan:
 
 @dataclass
 class CourseUnit:
+    """Collection of lesson plans grouped under a thematic unit."""
+
     title: str
     focus_topics: List[str]
     lessons: List[LessonPlan]
@@ -29,6 +35,8 @@ class CourseUnit:
 
 @dataclass
 class CoursePlan:
+    """Full course blueprint covering multiple units over several weeks."""
+
     course_title: str
     duration_weeks: int
     units: List[CourseUnit]
@@ -36,6 +44,8 @@ class CoursePlan:
 
 @dataclass
 class AssessmentItem:
+    """Single assessment prompt with answer key and optional choices."""
+
     question: str
     answer: str
     rationale: str
@@ -44,12 +54,16 @@ class AssessmentItem:
 
 @dataclass
 class Assessment:
+    """Assessment comprised of multiple items for a particular unit."""
+
     title: str
     items: List[AssessmentItem]
 
 
 @dataclass
 class AttemptRecord:
+    """Learner's recorded attempt at an assessment with score and responses."""
+
     assessment_title: str
     timestamp: datetime
     score: float
@@ -58,6 +72,8 @@ class AttemptRecord:
 
 @dataclass
 class LearnerProfile:
+    """Aggregated learner state capturing skills, history, and time on task."""
+
     learner_id: str
     name: str
     domain_strengths: Dict[str, float] = field(default_factory=dict)

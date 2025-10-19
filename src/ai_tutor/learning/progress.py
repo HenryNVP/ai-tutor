@@ -9,14 +9,19 @@ from ai_tutor.learning.models import AttemptRecord, LearnerProfile
 
 
 class ProgressTracker:
+    """Handle persistence and incremental updates for learner progress data."""
+
     def __init__(self, base_dir: Path):
+        """Create the storage directory that will hold learner progress files."""
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def profile_path(self, learner_id: str) -> Path:
+        """Return the JSON file path for a given learner ID."""
         return self.base_dir / f"{learner_id}.json"
 
     def load_profile(self, learner_id: str, name: str | None = None) -> LearnerProfile:
+        """Load a learner profile from disk or create a default one if missing."""
         path = self.profile_path(learner_id)
         if not path.exists():
             return LearnerProfile(learner_id=learner_id, name=name or learner_id)
@@ -43,6 +48,7 @@ class ProgressTracker:
         return profile
 
     def save_profile(self, profile: LearnerProfile) -> None:
+        """Serialize the learner profile (including attempts) back to disk."""
         path = self.profile_path(profile.learner_id)
         serialized = {
             "learner_id": profile.learner_id,
@@ -72,6 +78,12 @@ class ProgressTracker:
         responses: Dict[str, str] | None = None,
         concepts: Dict[str, float] | None = None,
     ) -> LearnerProfile:
+        """
+        Append an assessment attempt and adjust mastery deltas on the profile.
+
+        Creates a timestamped `AttemptRecord`, extends the profile's attempt list, and
+        optionally updates concept mastery scores with bounded deltas.
+        """
         record = AttemptRecord(
             assessment_title=assessment_title,
             timestamp=datetime.utcnow(),
@@ -86,15 +98,18 @@ class ProgressTracker:
         return profile
 
     def update_time_on_task(self, profile: LearnerProfile, minutes: float) -> LearnerProfile:
+        """Accumulate minutes spent learning onto the profile's time counter."""
         profile.total_time_minutes += minutes
         return profile
 
     def mark_strength(self, profile: LearnerProfile, domain: str, delta: float) -> LearnerProfile:
+        """Adjust the learner's strength score for a domain within bounds."""
         current = profile.domain_strengths.get(domain, 0.0)
         profile.domain_strengths[domain] = max(0.0, min(1.0, current + delta))
         return profile
 
     def mark_struggle(self, profile: LearnerProfile, domain: str, delta: float) -> LearnerProfile:
+        """Adjust the learner's struggle score for a domain within bounds."""
         current = profile.domain_struggles.get(domain, 0.0)
         profile.domain_struggles[domain] = max(0.0, min(1.0, current + delta))
         return profile

@@ -17,6 +17,7 @@ class Parser(ABC):
 
     @abstractmethod
     def parse(self, path: Path) -> Document:
+        """Convert a filesystem path into a normalized `Document` instance."""
         raise NotImplementedError
 
 
@@ -24,6 +25,7 @@ class TextParser(Parser):
     extensions = [".txt"]
 
     def parse(self, path: Path) -> Document:
+        """Read plain-text files verbatim and attach minimal metadata."""
         text = path.read_text(encoding="utf-8")
         metadata = DocumentMetadata(
             doc_id=path.stem, title=path.stem, source_path=path, extra={"format": "txt"}
@@ -35,6 +37,7 @@ class MarkdownParser(Parser):
     extensions = [".md", ".markdown"]
 
     def parse(self, path: Path) -> Document:
+        """Load Markdown documents as raw text and prettify the inferred title."""
         text = path.read_text(encoding="utf-8")
         metadata = DocumentMetadata(
             doc_id=path.stem,
@@ -49,6 +52,7 @@ class PdfParser(Parser):
     extensions = [".pdf"]
 
     def parse(self, path: Path) -> Document:
+        """Extract text and page metadata from PDFs using PyMuPDF."""
         try:
             import fitz  # type: ignore
         except ImportError as exc:
@@ -75,6 +79,7 @@ class PdfParser(Parser):
 
 
 def discover_parsers() -> Dict[str, Parser]:
+    """Map supported file extensions to their parser instances."""
     parser_classes: List[Type[Parser]] = [TextParser, MarkdownParser, PdfParser]
     parsers: Dict[str, Parser] = {}
     for parser_cls in parser_classes:
@@ -85,6 +90,7 @@ def discover_parsers() -> Dict[str, Parser]:
 
 
 def parse_path(path: Path) -> Document:
+    """Select the appropriate parser for the file extension and return a `Document`."""
     parsers = discover_parsers()
     parser = parsers.get(path.suffix.lower())
     if not parser:

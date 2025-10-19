@@ -29,6 +29,7 @@ UNIT_LIBRARY: Dict[str, List[Dict[str, Sequence[str]]]] = {
 
 
 def _derive_strengths(profile: LearnerProfile | None, domain: str) -> List[str]:
+    """Return the top mastered topics for a learner filtered by domain keyword."""
     if not profile:
         return []
     strengths = sorted(
@@ -40,6 +41,7 @@ def _derive_strengths(profile: LearnerProfile | None, domain: str) -> List[str]:
 
 
 def _derive_struggles(profile: LearnerProfile | None, domain: str) -> List[str]:
+    """Return the top struggle topics for a learner filtered by domain keyword."""
     if not profile:
         return []
     struggles = sorted(
@@ -51,7 +53,10 @@ def _derive_struggles(profile: LearnerProfile | None, domain: str) -> List[str]:
 
 
 class CoursePlanner:
+    """Generate lightweight course outlines to guide tutoring plans."""
+
     def __init__(self, defaults: CourseDefaults):
+        """Store default planning parameters such as weeks and lessons per week."""
         self.defaults = defaults
 
     def plan_course(
@@ -61,6 +66,14 @@ class CoursePlanner:
         weeks: int | None = None,
         lessons_per_week: int | None = None,
     ) -> CoursePlan:
+        """
+        Assemble a course plan tailored to a domain and optional learner profile.
+
+        Determines schedule bounds using defaults, selects units from `UNIT_LIBRARY`,
+        derives learner strengths/struggles via `_derive_strengths` and `_derive_struggles`,
+        and expands each unit into `LessonPlan` instances with scaffolded objectives and materials.
+        Returns a `CoursePlan` capturing the sequenced units and duration.
+        """
         weeks = weeks or self.defaults.weeks
         lessons_per_week = lessons_per_week or self.defaults.lessons_per_week
         library = UNIT_LIBRARY.get(domain, UNIT_LIBRARY["math"])

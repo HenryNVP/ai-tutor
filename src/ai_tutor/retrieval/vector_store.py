@@ -12,17 +12,17 @@ class VectorStore(ABC):
 
     @abstractmethod
     def add(self, chunks: Iterable[Chunk]) -> None:
-        ...
+        """Insert or update chunk embeddings within the store."""
 
     @abstractmethod
     def search(self, embedding: List[float], top_k: int) -> List[RetrievalHit]:
-        ...
+        """Return the top-k matches for the provided embedding."""
 
     @abstractmethod
     def persist(self) -> None:
-        ...
+        """Flush any in-memory state to persistent storage."""
 
     @classmethod
     @abstractmethod
     def from_path(cls, path: Path) -> "VectorStore":
-        ...
+        """Instantiate a vector store using resources stored at the supplied path."""

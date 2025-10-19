@@ -18,12 +18,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TutorResponse:
+    """Structured answer bundle returned to callers, including hits and formatted citations."""
+
     answer: str
     hits: List[RetrievalHit]
     citations: List[str]
 
 
 class TutorAgent:
+    """Coordinates retrieval-augmented prompting to produce grounded tutoring answers."""
+
     def __init__(
         self,
         retrieval_config: RetrievalConfig,
@@ -31,6 +35,7 @@ class TutorAgent:
         vector_store: VectorStore,
         llm_client: LLMClient,
     ):
+        """Cache collaborating components and build a Retriever with the shared embedder."""
         self.embedder = embedder
         self.vector_store = vector_store
         self.llm = llm_client
@@ -39,6 +44,14 @@ class TutorAgent:
         )
 
     def answer(self, question: str, mode: str = "learning") -> TutorResponse:
+        """
+        Retrieve supporting evidence and craft a cited answer for the learner.
+
+        Builds a `Query`, gathers hits through the `Retriever`, and shortcuts with a helpful
+        fallback if nothing is retrieved. Otherwise it assembles prompt messages via
+        `build_messages`, invokes `LLMClient.generate` for the final response, and attaches
+        human-readable citations derived from the hits.
+        """
         query = Query(text=question)
         hits = self.retriever.retrieve(query)
 
@@ -63,6 +76,7 @@ class TutorAgent:
 
     @staticmethod
     def _format_citation(hit: RetrievalHit) -> str:
+        """Convert a retrieval hit into a user-facing citation string with title and page."""
         metadata = hit.chunk.metadata
         page = metadata.page or "N/A"
         return f"{metadata.title} ({metadata.doc_id}) p.{page}"

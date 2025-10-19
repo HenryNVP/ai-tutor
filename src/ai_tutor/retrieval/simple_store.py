@@ -16,6 +16,7 @@ class SimpleVectorStore(VectorStore):
     """Lightweight cosine-similarity vector store persisted on disk."""
 
     def __init__(self, directory: Path):
+        """Prepare storage paths and eager-load any previously persisted state."""
         self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
         self.embeddings_path = self.directory / "embeddings.npy"
@@ -26,6 +27,7 @@ class SimpleVectorStore(VectorStore):
         self._load()
 
     def _load(self) -> None:
+        """Load persisted embeddings and metadata if they are present on disk."""
         if self.embedding_file_exists and self.metadata_path.exists():
             self._matrix = np.load(self.embeddings_path)
             with self.metadata_path.open("r", encoding="utf-8") as handle:
@@ -52,9 +54,11 @@ class SimpleVectorStore(VectorStore):
 
     @property
     def embedding_file_exists(self) -> bool:
+        """Return True when a saved embeddings matrix exists on disk."""
         return self.embeddings_path.exists()
 
     def add(self, chunks: Iterable[Chunk]) -> None:
+        """Insert new chunk embeddings or update existing entries in the index."""
         new_chunks = [chunk for chunk in chunks if chunk.embedding is not None]
         if not new_chunks:
             return
@@ -88,6 +92,7 @@ class SimpleVectorStore(VectorStore):
                 self._chunk_ids.append(chunk_id)
 
     def search(self, embedding: List[float], top_k: int) -> List[RetrievalHit]:
+        """Return the highest-scoring hits by cosine similarity for the query embedding."""
         if self._matrix is None or not len(self._chunks):
             return []
         query = np.array(embedding).reshape(1, -1)
@@ -110,6 +115,7 @@ class SimpleVectorStore(VectorStore):
         return hits
 
     def persist(self) -> None:
+        """Save the embeddings matrix and accompanying chunk metadata to disk."""
         if self._matrix is not None:
             np.save(self.embeddings_path, self._matrix)
         with self.metadata_path.open("w", encoding="utf-8") as handle:
@@ -126,4 +132,5 @@ class SimpleVectorStore(VectorStore):
 
     @classmethod
     def from_path(cls, path: Path) -> "SimpleVectorStore":
+        """Rehydrate a store stored under `path`, creating it if necessary."""
         return cls(path)

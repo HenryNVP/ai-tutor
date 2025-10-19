@@ -7,6 +7,12 @@ import structlog
 
 
 def configure_logging(level: str = "INFO", json_output: bool = False) -> None:
+    """
+    Initialize Python logging and structlog with consistent formatting.
+
+    Builds a processor pipeline, swapping between console and JSON renderers, and configures
+    structlog to honor the requested level so the rest of the system can use structured logging.
+    """
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO))
     processors = [
         structlog.processors.TimeStamper(fmt="iso"),
@@ -29,4 +35,5 @@ def configure_logging(level: str = "INFO", json_output: bool = False) -> None:
 
 
 def get_logger(name: Optional[str] = None):
+    """Return a structlog logger that inherits the global configuration."""
     return structlog.get_logger(name)

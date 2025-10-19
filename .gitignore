@@ -151,3 +151,7 @@ dump.rdb
 
 # data
 data/
+
+# plantuml .jar
+*.jar
+*.png

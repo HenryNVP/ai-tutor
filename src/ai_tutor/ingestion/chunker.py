@@ -9,11 +9,13 @@ from ai_tutor.data_models import Chunk, ChunkMetadata, Document
 
 
 def _hash_chunk(text: str, doc_id: str, index: int) -> str:
+    """Create a deterministic identifier for a chunk based on its text and source."""
     digest = hashlib.sha1(f"{doc_id}:{index}:{text[:100]}".encode("utf-8")).hexdigest()
     return f"{doc_id}-{index}-{digest[:8]}"
 
 
 def _word_chunks(words: List[str], chunk_size: int, overlap: int) -> Iterable[Tuple[int, List[str]]]:
+    """Yield windowed word slices along with their sequential chunk indices."""
     step = chunk_size - overlap
     if step <= 0:
         step = chunk_size
@@ -22,6 +24,12 @@ def _word_chunks(words: List[str], chunk_size: int, overlap: int) -> Iterable[Tu
 
 
 def chunk_document(document: Document, config: ChunkingConfig) -> List[Chunk]:
+    """
+    Split a parsed document into overlapping text chunks ready for embedding.
+
+    Slides a fixed-size word window across the document, assigns hashed chunk IDs, infers
+    approximate page labels when available, and returns a list of `Chunk` objects with metadata.
+    """
     words = document.text.split()
     chunks: List[Chunk] = []
     for chunk_index, chunk_words in _word_chunks(

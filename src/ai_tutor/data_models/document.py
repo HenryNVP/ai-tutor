@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 
 class DocumentMetadata(BaseModel):
+    """Metadata describing a raw document that has been parsed into the system."""
+
     doc_id: str
     title: str
     source_path: Path
@@ -18,6 +20,8 @@ class DocumentMetadata(BaseModel):
 
 
 class Document(BaseModel):
+    """Parsed document containing plain text and optional page mapping."""
+
     metadata: DocumentMetadata
     text: str
     page_map: Dict[int, str] = Field(
@@ -26,6 +30,8 @@ class Document(BaseModel):
 
 
 class ChunkMetadata(BaseModel):
+    """Metadata for an individual chunk derived from a document."""
+
     chunk_id: str
     doc_id: str
     title: str
@@ -36,6 +42,8 @@ class ChunkMetadata(BaseModel):
 
 
 class Chunk(BaseModel):
+    """Chunk of text ready for embedding and retrieval."""
+
     metadata: ChunkMetadata
     text: str
     embedding: Optional[list[float]] = None
@@ -43,10 +51,14 @@ class Chunk(BaseModel):
 
 
 class RetrievalHit(BaseModel):
+    """Result returned by vector search, pairing a chunk with its similarity score."""
+
     chunk: Chunk
     score: float
 
 
 class Query(BaseModel):
+    """Learner question or statement to embed for retrieval."""
+
     text: str
     domain: Optional[str] = None

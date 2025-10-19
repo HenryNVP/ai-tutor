@@ -8,12 +8,15 @@ from ai_tutor.learning.models import Assessment, AssessmentItem, CoursePlan
 
 @dataclass
 class AssessmentConfig:
+    """Configuration toggles for generating formative assessments."""
+
     questions_per_unit: int = 4
     include_short_answer: bool = True
 
 
 class AssessmentGenerator:
     def __init__(self, config: AssessmentConfig | None = None):
+        """Store assessment preferences, defaulting to `AssessmentConfig` when omitted."""
         self.config = config or AssessmentConfig()
 
     def generate_unit_assessment(
@@ -21,6 +24,13 @@ class AssessmentGenerator:
         course_plan: CoursePlan,
         unit_index: int,
     ) -> Assessment:
+        """
+        Build a multiple-choice and optional short-answer check-in for a unit.
+
+        Pulls the target unit from `course_plan`, drafts scenario-based items for each focus
+        topic, includes a synthesis prompt when configured, and returns an `Assessment`
+        limited to the configured question count.
+        """
         unit = course_plan.units[unit_index]
         items: List[AssessmentItem] = []
         topics = unit.focus_topics

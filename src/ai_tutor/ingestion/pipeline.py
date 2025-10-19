@@ -20,12 +20,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class IngestionResult:
+    """Container summarizing ingestion outcomes, including skipped files."""
+
     documents: List[Document]
     chunks: List[Chunk]
     skipped: List[Path]
 
 
 class IngestionPipeline:
+    """Pipeline that parses, chunks, embeds, and persists learner materials."""
+
     def __init__(
         self,
         settings: Settings,
@@ -33,12 +37,22 @@ class IngestionPipeline:
         vector_store: VectorStore,
         chunk_store: ChunkJsonlStore,
     ):
+        """Store collaborators so repeated ingestion runs can reuse shared state."""
         self.settings = settings
         self.embedder = embedder
         self.vector_store = vector_store
         self.chunk_store = chunk_store
 
     def ingest_paths(self, paths: Iterable[Path]) -> IngestionResult:
+        """
+        Process raw document paths into embedded chunks ready for retrieval.
+
+        Iterates over source files, parsing each via `parse_path`, chunking them with
+        `chunk_document`, and batching embeddings through `EmbeddingClient.embed_documents`.
+        The resulting chunks are upserted into `ChunkJsonlStore` and indexed in the `VectorStore`
+        (which is persisted afterward). Returns an `IngestionResult` capturing successes and
+        skipped files for reporting.
+        """
         documents: List[Document] = []
         chunks: List[Chunk] = []
         skipped: List[Path] = []
@@ -72,6 +86,7 @@ class IngestionPipeline:
         return IngestionResult(documents=documents, chunks=chunks, skipped=skipped)
 
     def _infer_domain(self, path: Path) -> str:
+        """Guess a subject domain from the file name, falling back to 'general'."""
         lowercase = path.name.lower()
         default_domains = ["math", "physics", "cs"]
         configured_domains = getattr(

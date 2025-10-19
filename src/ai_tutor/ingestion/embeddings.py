@@ -15,6 +15,7 @@ class EmbeddingClient:
     """Wrapper around sentence-transformers style models with lazy loading."""
 
     def __init__(self, config: EmbeddingConfig, api_key: Optional[str] = None):
+        """Capture embedding configuration and defer provider setup until first use."""
         self.config = config
         self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_GENAI_API_KEY")
         self._model = None
@@ -24,6 +25,7 @@ class EmbeddingClient:
         self._device: str = "cpu"
 
     def _ensure_model(self):
+        """Instantiate the configured embedding provider if it has not been loaded yet."""
         if self._model is not None:
             return
         provider = self.config.provider.lower()
@@ -37,6 +39,7 @@ class EmbeddingClient:
             raise ValueError(f"Unsupported embedding provider: {self.config.provider}")
 
     def _load_sentence_transformer(self):
+        """Load a sentence-transformers model onto the most suitable device."""
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
@@ -60,6 +63,7 @@ class EmbeddingClient:
                 raise
 
     def _load_litellm(self):
+        """Import litellm for embedding calls when using API-based providers."""
         if self._litellm is not None:
             return
         try:
@@ -69,6 +73,7 @@ class EmbeddingClient:
         self._litellm = litellm
 
     def _configure_google(self):
+        """Set up the Google Generative AI client when using Gemini embeddings."""
         if self._google_configured:
             return
         if not self.api_key:
@@ -85,6 +90,7 @@ class EmbeddingClient:
 
     @staticmethod
     def _normalize(vector: List[float]) -> List[float]:
+        """L2-normalize a dense vector if possible, protecting against zero norms."""
         array = np.array(vector, dtype=np.float32)
         norm = np.linalg.norm(array)
         if norm == 0:
@@ -92,6 +98,7 @@ class EmbeddingClient:
         return (array / norm).tolist()
 
     def _litellm_kwargs(self, texts: List[str]) -> dict:
+        """Assemble keyword arguments for litellm embedding requests."""
         kwargs = {
             "model": self.config.model,
             "input": texts,
@@ -104,6 +111,7 @@ class EmbeddingClient:
         return kwargs
 
     def _embed_with_litellm(self, texts: List[str]) -> List[List[float]]:
+        """Call litellm's embedding endpoint and normalize the returned vectors."""
         self._load_litellm()
         assert self._litellm is not None
         kwargs = self._litellm_kwargs(texts)
@@ -127,6 +135,7 @@ class EmbeddingClient:
         return embeddings
 
     def _embed_with_google(self, texts: List[str], task_type: str) -> List[List[float]]:
+        """Use the Google Generative AI SDK to embed text for the given task type."""
         self._configure_google()
         assert self._genai is not None
         embeddings: List[List[float]] = []
@@ -152,6 +161,7 @@ class EmbeddingClient:
         return embeddings
 
     def _select_device(self) -> str:
+        """Choose CUDA when available, otherwise fall back to CPU execution."""
         try:
             import torch
         except ImportError:
@@ -168,6 +178,7 @@ class EmbeddingClient:
         return "cuda"
 
     def _move_model_to_cpu(self) -> None:
+        """Relocate the loaded model to the CPU, rebuilding it if necessary."""
         if self._model is None:
             return
         try:
@@ -180,6 +191,7 @@ class EmbeddingClient:
         logger.info("Using CPU for embeddings.")
 
     def _encode_with_sentence_transformer(self, texts: List[str]) -> List[List[float]]:
+        """Encode text with a local sentence-transformers model, retrying on CPU if needed."""
         self._ensure_model()
         assert self._model is not None
         try:
@@ -220,6 +232,13 @@ class EmbeddingClient:
         return normalized
 
     def embed_documents(self, texts: Iterable[str]) -> List[List[float]]:
+        """
+        Embed document chunks according to the configured provider.
+
+        Collects the input iterable, dispatches to one of the provider-specific helpers
+        (`_encode_with_sentence_transformer`, `_embed_with_litellm`, or `_embed_with_google`),
+        and returns the resulting batch of vectors ready for persistence in the vector store.
+        """
         text_list = list(texts)
         if not text_list:
             return []
@@ -233,6 +252,12 @@ class EmbeddingClient:
         raise ValueError(f"Unsupported embedding provider: {self.config.provider}")
 
     def embed_query(self, text: str) -> List[float]:
+        """
+        Embed a learner query so it can be compared against stored document vectors.
+
+        Mirrors `embed_documents` but operates on a single string and chooses the provider-specific
+        helper aligned with the configuration, producing a normalized vector for retrieval.
+        """
         provider = self.config.provider.lower()
         if provider in {"sentence-transformers", "hf", "huggingface"}:
             embeddings = self._encode_with_sentence_transformer([text])

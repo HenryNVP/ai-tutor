@@ -21,6 +21,13 @@ class TutorOpenAIAgent:
         model_name: Optional[str] = None,
         api_key: Optional[str] = None,
     ):
+        """
+        Bridge the core TutorSystem into an OpenAI Agents workflow runner.
+
+        Stores the shared system, resolves a default model name and API key, disables tracing
+        for local runs, and registers callable tools produced by `_build_tools` with a Litellm-
+        backed `Agent` instance.
+        """
         self.tutor_system = tutor_system
         self.model_name = model_name or tutor_system.settings.model.name
         self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY")
@@ -40,10 +47,12 @@ class TutorOpenAIAgent:
         )
 
     def _build_tools(self):
+        """Define the ingestion and Q&A function tools that the agent can call."""
         tutor = self.tutor_system
 
         @function_tool
         def ingest_corpus(directory: str) -> str:
+            """Ingest documents from a directory and return a JSON summary for the agent."""
             path = Path(directory)
             if not path.exists() or not path.is_dir():
                 return json.dumps({"error": f"The provided directory {directory} does not exist."})
@@ -57,6 +66,7 @@ class TutorOpenAIAgent:
 
         @function_tool
         def answer_question(learner_id: str, question: str, mode: str = "learning") -> str:
+            """Answer a learner question by delegating to `TutorSystem.answer_question`."""
             response = tutor.answer_question(learner_id=learner_id, question=question, mode=mode)
             payload = {
                 "answer": response.answer,
@@ -70,10 +80,17 @@ class TutorOpenAIAgent:
         ]
 
     async def arun(self, task: str, learner_id: Optional[str] = None) -> Any:
+        """Run the agent asynchronously, optionally annotating the task with a learner ID."""
         prompt = task
         if learner_id:
             prompt = f"Learner ID: {learner_id}\nTask: {task}"
         return await Runner.run(self.agent, prompt)
 
     def run(self, task: str, learner_id: Optional[str] = None) -> Any:
+        """
+        Execute an agent task synchronously for convenience.
+
+        Wraps the `arun` coroutine in `asyncio.run`, letting scripts and CLI commands invoke
+        the OpenAI Agent without managing an event loop directly.
+        """
         return asyncio.run(self.arun(task, learner_id=learner_id))

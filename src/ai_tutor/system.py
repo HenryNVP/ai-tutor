@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 
 class TutorSystem:
+    """Facade that wires ingestion, retrieval, and generation components for the tutor."""
+
     def __init__(self, settings: Settings, api_key: Optional[str] = None):
+        """Initialize the system with shared infrastructure and lazy clients."""
         self.settings = settings
         configure_logging(settings.logging.level, settings.logging.json)
 
@@ -42,6 +45,7 @@ class TutorSystem:
 
     @classmethod
     def from_config(cls, config_path: str | Path | None = None, api_key: Optional[str] = None) -> "TutorSystem":
+        """Load configuration, ensure project directories exist, and build a ready TutorSystem."""
         settings = load_settings(config_path)
         settings.paths.processed_data_dir.mkdir(parents=True, exist_ok=True)
         settings.paths.raw_data_dir.mkdir(parents=True, exist_ok=True)
@@ -49,6 +53,13 @@ class TutorSystem:
         return cls(settings, api_key=api_key)
 
     def ingest_directory(self, directory: Path):
+        """
+        Ingest every supported document under a directory and persist the resulting chunks.
+
+        Uses `collect_documents` to gather PDFs/Markdown/TXT files, then hands the paths to
+        `IngestionPipeline.ingest_paths`, which parses, chunks, embeds, and stores them via
+        `ChunkJsonlStore` and `SimpleVectorStore`. Logs a summary before returning the pipeline result.
+        """
         documents = collect_documents(directory)
         logger.info("Found %s documents to ingest.", len(documents))
         result = self.ingestion_pipeline.ingest_paths(documents)
@@ -60,5 +71,12 @@ class TutorSystem:
         question: str,
         mode: str = "learning",
     ) -> TutorResponse:
+        """
+        Generate a grounded answer for a learner by delegating to the TutorAgent.
+
+        Delegates retrieval and prompting to `TutorAgent.answer`, which embeds the query, searches
+        the configured `VectorStore`, builds a cited prompt with `build_messages`, and calls the LLM.
+        Returns the structured `TutorResponse` containing the answer, supporting hits, and citations.
+        """
         response = self.tutor_agent.answer(question, mode=mode)
         return response

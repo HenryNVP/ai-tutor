@@ -13,6 +13,7 @@ SYSTEM_PROMPT = (
 
 
 def build_context(hits: List[RetrievalHit]) -> str:
+    """Render retrieval hits into numbered chunks with metadata for the LLM prompt."""
     formatted = []
     for idx, hit in enumerate(hits, start=1):
         metadata = hit.chunk.metadata
@@ -31,6 +32,7 @@ def build_messages(
     mode: str = "learning",
     style: str = "stepwise",
 ) -> list[dict[str, str]]:
+    """Compose the system and user messages that constrain the tutor's response style."""
     context = build_context(hits)
     user_prompt = (
         f"Question: {question}\n\n"

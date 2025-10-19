@@ -18,6 +18,7 @@ SOURCES_PATH = PROJECT_ROOT / "data" / "sources.yaml"
 
 
 def load_openstax_sources() -> Dict[str, Dict[str, Any]]:
+    """Read OpenStax source metadata from disk and filter for OpenStax entries."""
     if not SOURCES_PATH.exists():
         raise FileNotFoundError(f"Metadata file not found: {SOURCES_PATH}")
     with SOURCES_PATH.open("r", encoding="utf-8") as handle:
@@ -34,6 +35,7 @@ def load_openstax_sources() -> Dict[str, Dict[str, Any]]:
 
 
 def download_textbook(entry: Dict[str, Any], destination_dir: Path, overwrite: bool = False) -> Path:
+    """Download a textbook PDF for the provided metadata entry, optionally overwriting."""
     destination_dir.mkdir(parents=True, exist_ok=True)
     download_url = entry.get("download_url")
     if not download_url:
@@ -54,6 +56,7 @@ def download_textbook(entry: Dict[str, Any], destination_dir: Path, overwrite: b
 
 
 def ingest_with_system(document_dir: Path, config: Optional[Path], api_key: Optional[str]) -> Dict[str, Any]:
+    """Run the TutorSystem ingestion pipeline on downloaded documents and report counts."""
     from ai_tutor.system import TutorSystem
 
     system = TutorSystem.from_config(config, api_key=api_key)
@@ -66,6 +69,7 @@ def ingest_with_system(document_dir: Path, config: Optional[Path], api_key: Opti
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments controlling source selection, download path, and ingestion."""
     load_dotenv()
     parser = argparse.ArgumentParser(
         description="Download OpenStax textbooks and ingest them into the AI Tutor corpus."
@@ -107,6 +111,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """
+    Entry point for downloading an OpenStax textbook and optionally ingesting it.
+
+    Parses arguments, pulls metadata via `load_openstax_sources`, downloads the file with
+    `download_textbook`, and when requested calls `ingest_with_system` before printing a JSON
+    summary to stdout.
+    """
     args = parse_args()
 
     sources = load_openstax_sources()

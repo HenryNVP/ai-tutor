@@ -14,6 +14,7 @@ from ai_tutor.system import TutorSystem
 
 
 def main():
+    """Demonstrate programmatic use of TutorSystem and TutorOpenAIAgent via CLI args."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--api-key", type=str, default=os.getenv("GEMINI_API_KEY"))

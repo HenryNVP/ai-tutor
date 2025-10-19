@@ -35,6 +35,7 @@ if load_dotenv:
 
 
 def _load_system(config: Optional[Path], api_key: Optional[str]) -> TutorSystem:
+    """Instantiate `TutorSystem` with optional config overrides and API key."""
     return TutorSystem.from_config(config, api_key=api_key)
 
 
@@ -44,7 +45,13 @@ def ingest(
     config: Optional[Path] = typer.Option(None, help="Path to configuration YAML."),
     api_key: Optional[str] = typer.Option(None, help="Model API key."),
 ):
-    """Ingest documents from a directory into the tutor's vector store."""
+    """
+    Parse, chunk, and embed all supported documents in a directory.
+
+    Loads a `TutorSystem` via `_load_system`, calls `TutorSystem.ingest_directory`
+    (which delegates to `IngestionPipeline.ingest_paths` and the vector store), then reports
+    document and chunk counts along with any skipped files back to the user via Rich.
+    """
     system = _load_system(config, api_key)
     result = system.ingest_directory(directory)
     console.print(f"Ingested {len(result.documents)} documents into {len(result.chunks)} chunks.")
@@ -59,10 +66,16 @@ def ask(
     learner_id: str = typer.Argument(...),
     question: str = typer.Argument(...),
     mode: str = typer.Option("learning", help="Label to pass through to the prompt."),
-    config: Optional[Path] = typer.Option(None),
-    api_key: Optional[str] = typer.Option(None),
+   config: Optional[Path] = typer.Option(None),
+   api_key: Optional[str] = typer.Option(None),
 ):
-    """Ask a grounded question against the ingested corpus."""
+    """
+    Ask the tutor for a grounded answer with citations.
+
+    Instantiates `TutorSystem`, invokes `TutorSystem.answer_question` which orchestrates the
+    `TutorAgent`, `Retriever`, and `LLMClient`, and renders the final answer plus citations
+    to the terminal using Rich formatting.
+    """
     system = _load_system(config, api_key)
     response = system.answer_question(learner_id=learner_id, question=question, mode=mode)
     console.print("[bold]Answer[/bold]")
@@ -81,7 +94,12 @@ def agent(
     api_key: Optional[str] = typer.Option(None, help="API key for both LLM and embeddings."),
     model: Optional[str] = typer.Option(None, help="Override the model used by the agent runner."),
 ):
-    """Run the OpenAI Agents SDK wrapper to orchestrate ingestion + Q&A."""
+    """
+    Run the OpenAI Agents SDK wrapper so an agent can call tutor tools.
+
+    Boots a `TutorSystem`, wraps it in `TutorOpenAIAgent` to expose the ingest and answer tools,
+    forwards the task to `TutorOpenAIAgent.run`, and prints the agent's final output block.
+    """
     system = _load_system(config, api_key)
     agent_runner = TutorOpenAIAgent(tutor_system=system, model_name=model, api_key=api_key)
     result = agent_runner.run(task, learner_id=learner_id)

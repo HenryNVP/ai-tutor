@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class GuardrailResult:
+    """Outcome of guardrail evaluation, including hits and fallback guidance."""
+
     hits: List[RetrievalHit]
     should_search_web: bool
     reason: str | None = None
@@ -19,12 +21,19 @@ class GuardrailResult:
 
 class GuardrailManager:
     def __init__(self, guardrail_config: GuardrailConfig, search_config: SearchToolConfig):
+        """Store guardrail thresholds and companion search configuration."""
         self.guardrail_config = guardrail_config
         self.search_config = search_config
 
     def evaluate_hits(
         self, query: Query, hits: List[RetrievalHit], top_k: int
     ) -> GuardrailResult:
+        """
+        Filter retrieval hits against safety and quality gates, suggesting fallbacks.
+
+        Trims hits below `min_score`, applies `_is_blocked_topic` to reject unsafe prompts,
+        and determines if a web search should be triggered based on configured minimums.
+        """
         filtered = [
             hit for hit in hits if hit.score >= self.guardrail_config.min_score
         ][:top_k]
@@ -50,5 +59,6 @@ class GuardrailManager:
         )
 
     def _is_blocked_topic(self, text: str) -> bool:
+        """Return True when the query text matches a configured unsafe topic."""
         lowered = text.lower()
         return any(topic in lowered for topic in self.guardrail_config.blocked_topics)

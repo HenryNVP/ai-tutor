@@ -6,6 +6,7 @@ from ai_tutor.learning.models import CoursePlan, LessonPlan
 
 
 def create_weekly_schedule(course_plan: CoursePlan, lessons_per_week: int | None = None) -> Dict[int, List[LessonPlan]]:
+    """Group lesson plans into a week-by-week schedule for the course plan."""
     if lessons_per_week is None:
         lessons_per_week = max(len(unit.lessons) for unit in course_plan.units) if course_plan.units else 0
     schedule: Dict[int, List[LessonPlan]] = {}
@@ -20,6 +21,7 @@ def create_weekly_schedule(course_plan: CoursePlan, lessons_per_week: int | None
 
 
 def create_daily_plan(lesson: LessonPlan) -> Dict[str, List[str]]:
+    """Translate a lesson plan into daily teaching components."""
     return {
         "objectives": [obj.description for obj in lesson.objectives],
         "worked_examples": lesson.worked_examples,
