@@ -19,6 +19,11 @@ class EmbeddingConfig(BaseModel):
     provider: str = Field("sentence-transformers", description="Embedding backend.")
     batch_size: int = Field(32, ge=1)
     normalize: bool = True
+    dimension: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional embedding dimensionality override (provider-specific).",
+    )
 
 
 class ChunkingConfig(BaseModel):
@@ -37,33 +42,7 @@ class ChunkingConfig(BaseModel):
 
 
 class RetrievalConfig(BaseModel):
-    initial_k: int = Field(20, ge=1)
     top_k: int = Field(8, ge=1)
-    min_score: float = Field(0.25, ge=0.0, le=1.0)
-    rerank_top_k: int = Field(0, ge=0)
-
-
-class GuardrailConfig(BaseModel):
-    min_hits: int = Field(2, ge=0)
-    min_score: float = Field(0.35, ge=0.0, le=1.0)
-    academic_integrity_mode: str = Field("learning")
-    blocked_topics: List[str] = Field(
-        default_factory=lambda: ["violence", "adult content", "illicit behavior"]
-    )
-
-
-class SearchToolConfig(BaseModel):
-    enabled: bool = True
-    min_hits_before_search: int = Field(1, ge=0)
-    provider: str = Field("tavily", description="Search tool provider identifier.")
-    max_results: int = Field(5, ge=1)
-
-
-class CourseDefaults(BaseModel):
-    weeks: int = Field(12, ge=1)
-    lessons_per_week: int = Field(3, ge=1)
-    assessment_frequency: int = Field(2, ge=1)
-    domains: List[str] = Field(default_factory=lambda: ["math", "physics", "cs"])
 
 
 class PathsConfig(BaseModel):
@@ -85,9 +64,6 @@ class Settings(BaseModel):
     embeddings: EmbeddingConfig
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
-    guardrails: GuardrailConfig = Field(default_factory=GuardrailConfig)
-    search_tool: SearchToolConfig = Field(default_factory=SearchToolConfig)
-    course_defaults: CourseDefaults = Field(default_factory=CourseDefaults)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 

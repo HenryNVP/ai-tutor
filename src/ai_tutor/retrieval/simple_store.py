@@ -69,11 +69,17 @@ class SimpleVectorStore(VectorStore):
                 to_add.append(chunk)
 
         if to_add:
-            embeddings = np.array([chunk.embedding for chunk in to_add])
+            embeddings = np.array([chunk.embedding for chunk in to_add], dtype=np.float32)
             if self._matrix is None:
                 self._matrix = embeddings
             else:
-                self._matrix = np.vstack([self._matrix, embeddings])
+                try:
+                    self._matrix = np.vstack([self._matrix, embeddings])
+                except ValueError as exc:  # dimension mismatch
+                    raise ValueError(
+                        "Vector dimension mismatch detected. Clear the vector store directory "
+                        f"at {self.directory} before reingesting with a new embedding model."
+                    ) from exc
 
         for chunk in new_chunks:
             chunk_id = chunk.metadata.chunk_id

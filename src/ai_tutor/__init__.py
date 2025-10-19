@@ -1,8 +1,8 @@
 """
-Personal STEM Instructor package.
+Personal STEM Instructor (MVP).
 
-This package provides ingestion, retrieval, learning plan generation, assessments,
-and guardrailed tutoring flows for high-school-to-precollege STEM subjects.
+This package bundles a minimal ingestion + retrieval stack with Gemini-powered
+LLM responses and optional OpenAI Agents orchestration.
 """
 
 from importlib import resources

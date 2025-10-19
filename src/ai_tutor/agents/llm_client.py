@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from ai_tutor.config.schema import ModelConfig
@@ -13,7 +14,7 @@ class LLMClient:
 
     def __init__(self, config: ModelConfig, api_key: Optional[str] = None):
         self.config = config
-        self.api_key = api_key
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
         self._client = None
 
     def _ensure_client(self):

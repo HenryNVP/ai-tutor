@@ -73,7 +73,12 @@ class IngestionPipeline:
 
     def _infer_domain(self, path: Path) -> str:
         lowercase = path.name.lower()
-        for domain in self.settings.course_defaults.domains:
+        default_domains = ["math", "physics", "cs"]
+        configured_domains = getattr(
+            getattr(self.settings, "course_defaults", None), "domains", None
+        )
+        candidates = configured_domains or default_domains
+        for domain in candidates:
             if domain in lowercase:
                 return domain
         return "general"
