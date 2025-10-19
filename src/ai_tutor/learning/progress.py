@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 from ai_tutor.learning.models import AttemptRecord, LearnerProfile
 
@@ -36,6 +36,7 @@ class ProgressTracker:
             )
             for record in data.get("attempts", [])
         ]
+        history_payload: List[Dict[str, str]] = data.get("session_history", [])
         profile = LearnerProfile(
             learner_id=data["learner_id"],
             name=data["name"],
@@ -44,6 +45,9 @@ class ProgressTracker:
             concepts_mastered=data.get("concepts_mastered", {}),
             attempts=attempts,
             total_time_minutes=data.get("total_time_minutes", 0.0),
+            session_history=history_payload,
+            next_topics=data.get("next_topics", {}),
+            difficulty_preferences=data.get("difficulty_preferences", {}),
         )
         return profile
 
@@ -57,6 +61,9 @@ class ProgressTracker:
             "domain_struggles": profile.domain_struggles,
             "concepts_mastered": profile.concepts_mastered,
             "total_time_minutes": profile.total_time_minutes,
+            "session_history": profile.session_history,
+            "next_topics": profile.next_topics,
+            "difficulty_preferences": profile.difficulty_preferences,
             "attempts": [
                 {
                     "assessment_title": attempt.assessment_title,

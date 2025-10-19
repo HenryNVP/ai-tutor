@@ -71,6 +71,9 @@ class TutorOpenAIAgent:
             payload = {
                 "answer": response.answer,
                 "citations": response.citations,
+                "style": response.style,
+                "difficulty": response.difficulty,
+                "next_topic": response.next_topic,
             }
             return json.dumps(payload)
 

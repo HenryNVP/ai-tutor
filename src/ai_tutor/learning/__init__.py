@@ -10,6 +10,7 @@ from .models import (
     LearningObjective,
 )
 from .planner import CoursePlanner
+from .personalization import PersonalizationManager
 from .progress import ProgressTracker
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "LearnerProfile",
     "LessonPlan",
     "LearningObjective",
+    "PersonalizationManager",
     "ProgressTracker",
     "generate_feedback",
 ]

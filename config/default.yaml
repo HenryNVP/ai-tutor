@@ -28,7 +28,16 @@ paths:
   vector_store_dir: "data/vector_store"
   chunks_index: "data/processed/chunks.jsonl"
   logs_dir: "logs"
+  profiles_dir: "data/processed/profiles"
 
 logging:
   level: "INFO"
   json: false
+
+course_defaults:
+  weeks: 12
+  lessons_per_week: 3
+  domains:
+    - "math"
+    - "physics"
+    - "cs"

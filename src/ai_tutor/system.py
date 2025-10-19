@@ -9,6 +9,7 @@ from ai_tutor.agents.tutor import TutorAgent, TutorResponse
 from ai_tutor.config import Settings, load_settings
 from ai_tutor.ingestion import IngestionPipeline
 from ai_tutor.ingestion.embeddings import EmbeddingClient
+from ai_tutor.learning import PersonalizationManager, ProgressTracker
 from ai_tutor.retrieval import create_vector_store
 from ai_tutor.storage import ChunkJsonlStore
 from ai_tutor.utils.files import collect_documents
@@ -29,6 +30,8 @@ class TutorSystem:
         self.vector_store = create_vector_store(settings.paths.vector_store_dir)
         self.chunk_store = ChunkJsonlStore(settings.paths.chunks_index)
         self.llm_client = LLMClient(settings.model, api_key=api_key)
+        self.progress_tracker = ProgressTracker(settings.paths.profiles_dir)
+        self.personalizer = PersonalizationManager(self.progress_tracker)
 
         self.ingestion_pipeline = IngestionPipeline(
             settings=settings,
@@ -50,6 +53,7 @@ class TutorSystem:
         settings.paths.processed_data_dir.mkdir(parents=True, exist_ok=True)
         settings.paths.raw_data_dir.mkdir(parents=True, exist_ok=True)
         settings.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+        settings.paths.profiles_dir.mkdir(parents=True, exist_ok=True)
         return cls(settings, api_key=api_key)
 
     def ingest_directory(self, directory: Path):
@@ -74,9 +78,32 @@ class TutorSystem:
         """
         Generate a grounded answer for a learner by delegating to the TutorAgent.
 
-        Delegates retrieval and prompting to `TutorAgent.answer`, which embeds the query, searches
-        the configured `VectorStore`, builds a cited prompt with `build_messages`, and calls the LLM.
-        Returns the structured `TutorResponse` containing the answer, supporting hits, and citations.
+        Loads learner memory, supplies recent context to `TutorAgent.answer`, selects a prompting
+        style via the personalization manager, and persists the updated learner profile so future
+        sessions continue seamlessly. Returns the structured response including personalization hints.
         """
-        response = self.tutor_agent.answer(question, mode=mode)
+        profile = self.personalizer.load_profile(learner_id)
+        history = self.personalizer.get_session_history(profile, limit=3)
+
+        def style_selector(hits):
+            domain = self.personalizer.infer_domain(hits)
+            return self.personalizer.select_style(profile, domain)
+
+        response = self.tutor_agent.answer(
+            question,
+            mode=mode,
+            history=history,
+            style_resolver=style_selector,
+        )
+        domain = self.personalizer.infer_domain(response.hits)
+        personalization = self.personalizer.record_interaction(
+            profile=profile,
+            question=question,
+            answer=response.answer,
+            domain=domain,
+            citations=response.citations,
+        )
+        self.personalizer.save_profile(profile)
+        response.next_topic = personalization.get("next_topic")
+        response.difficulty = personalization.get("difficulty")
         return response

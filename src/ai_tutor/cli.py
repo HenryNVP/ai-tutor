@@ -66,8 +66,8 @@ def ask(
     learner_id: str = typer.Argument(...),
     question: str = typer.Argument(...),
     mode: str = typer.Option("learning", help="Label to pass through to the prompt."),
-   config: Optional[Path] = typer.Option(None),
-   api_key: Optional[str] = typer.Option(None),
+    config: Optional[Path] = typer.Option(None),
+    api_key: Optional[str] = typer.Option(None),
 ):
     """
     Ask the tutor for a grounded answer with citations.
@@ -84,6 +84,12 @@ def ask(
         console.print("\n[bold]Citations[/bold]")
         for citation in response.citations:
             console.print(f"- {citation}")
+    console.print("\n[bold]Personalization[/bold]")
+    console.print(f"Style: {response.style}")
+    if response.difficulty:
+        console.print(f"Difficulty focus: {response.difficulty}")
+    if response.next_topic:
+        console.print(f"Suggested next topic: {response.next_topic}")
 
 
 @app.command()

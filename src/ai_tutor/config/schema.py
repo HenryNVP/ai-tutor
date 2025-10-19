@@ -60,6 +60,7 @@ class PathsConfig(BaseModel):
     vector_store_dir: Path = Field(Path("data/vector_store"))
     chunks_index: Path = Field(Path("data/processed/chunks.jsonl"))
     logs_dir: Path = Field(Path("logs"))
+    profiles_dir: Path = Field(Path("data/processed/profiles"))
 
 
 class LoggingConfig(BaseModel):
@@ -67,6 +68,17 @@ class LoggingConfig(BaseModel):
 
     level: str = Field("INFO")
     json: bool = False
+
+
+class CourseDefaults(BaseModel):
+    """Planning defaults that guide personalization and course scaffolding."""
+
+    weeks: int = Field(12, ge=1, description="Default number of weeks in a course plan.")
+    lessons_per_week: int = Field(3, ge=1, description="Default lessons per week.")
+    domains: list[str] = Field(
+        default_factory=lambda: ["math", "physics", "cs"],
+        description="Preferred domain ordering for ingestion heuristics.",
+    )
 
 
 class Settings(BaseModel):
@@ -79,6 +91,7 @@ class Settings(BaseModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    course_defaults: CourseDefaults = Field(default_factory=CourseDefaults)
 
     @validator("paths")
     def ensure_paths_are_dirs(cls, value: PathsConfig) -> PathsConfig:

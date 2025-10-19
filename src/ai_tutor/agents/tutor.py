@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List
+from typing import Callable, Dict, List, Optional
 
 from ai_tutor.config.schema import RetrievalConfig
 from ai_tutor.data_models import Query, RetrievalHit
@@ -23,6 +23,9 @@ class TutorResponse:
     answer: str
     hits: List[RetrievalHit]
     citations: List[str]
+    style: str
+    next_topic: Optional[str] = None
+    difficulty: Optional[str] = None
 
 
 class TutorAgent:
@@ -43,14 +46,22 @@ class TutorAgent:
             retrieval_config, embedder=self.embedder, vector_store=self.vector_store
         )
 
-    def answer(self, question: str, mode: str = "learning") -> TutorResponse:
+    def answer(
+        self,
+        question: str,
+        mode: str = "learning",
+        history: Optional[List[Dict[str, str]]] = None,
+        style: Optional[str] = None,
+        style_resolver: Optional[Callable[[List[RetrievalHit]], str]] = None,
+    ) -> TutorResponse:
         """
         Retrieve supporting evidence and craft a cited answer for the learner.
 
         Builds a `Query`, gathers hits through the `Retriever`, and shortcuts with a helpful
         fallback if nothing is retrieved. Otherwise it assembles prompt messages via
-        `build_messages`, invokes `LLMClient.generate` for the final response, and attaches
-        human-readable citations derived from the hits.
+        `build_messages`, optionally weaving in recent session history and a style supplied
+        through `style` or lazily computed by `style_resolver`, invokes `LLMClient.generate`,
+        and returns the generated answer alongside citations and the applied style.
         """
         query = Query(text=question)
         hits = self.retriever.retrieve(query)
@@ -58,13 +69,21 @@ class TutorAgent:
         if not hits:
             logger.info("No retrieval hits found for query.")
             message = "I could not find relevant material in the ingested corpus yet."
-            return TutorResponse(answer=message, hits=[], citations=[])
+            selected_style = style or (style_resolver([]) if style_resolver else "scaffolded")
+            return TutorResponse(
+                answer=message,
+                hits=[],
+                citations=[],
+                style=selected_style,
+            )
 
+        selected_style = style or (style_resolver(hits) if style_resolver else "stepwise")
         messages = build_messages(
             question,
             hits,
             mode=mode,
-            style="stepwise",
+            style=selected_style,
+            history=history,
         )
         answer = self.llm.generate(messages)
         citations = [self._format_citation(hit) for hit in hits]
@@ -72,6 +91,7 @@ class TutorAgent:
             answer=answer,
             hits=hits,
             citations=citations,
+            style=selected_style,
         )
 
     @staticmethod

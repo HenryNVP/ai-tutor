@@ -81,3 +81,6 @@ class LearnerProfile:
     concepts_mastered: Dict[str, float] = field(default_factory=dict)
     attempts: List[AttemptRecord] = field(default_factory=list)
     total_time_minutes: float = 0.0
+    session_history: List[Dict[str, str]] = field(default_factory=list)
+    next_topics: Dict[str, str] = field(default_factory=dict)
+    difficulty_preferences: Dict[str, str] = field(default_factory=dict)
