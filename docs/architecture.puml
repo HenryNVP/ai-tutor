@@ -1,0 +1,77 @@
+@startuml
+skinparam componentStyle rectangle
+skinparam wrapWidth 200
+skinparam maxMessageSize 200
+title Personal STEM Instructor – Architecture
+
+actor User
+
+package "Entry Points" {
+  component "CLI (`ai-tutor`)" as CLI
+  component "OpenAI Agent Runner\n(TutorOpenAIAgent)" as AgentRunner
+  component "Python API / Notebooks" as PythonAPI
+}
+
+node "TutorSystem" as TutorSystem {
+  component "Settings Loader\n& Logging" as Settings
+  component "IngestionPipeline" as Ingestion
+  component "TutorAgent" as TutorAgent
+  component "Retriever" as Retriever
+  component "Context Builder" as ContextBuilder
+  component "EmbeddingClient" as EmbeddingClient
+  component "LLMClient" as LLMClient
+  component "VectorStore\n(SimpleVectorStore)" as VectorStore
+  component "ChunkJsonlStore" as ChunkStore
+  component "Parsers" as Parsers
+  component "Chunker" as Chunker
+}
+
+database "Vector Store Files\n(data/vector_store)" as VectorFS
+database "Chunks Index\n(data/processed/chunks.jsonl)" as ChunkFS
+folder "Raw Documents\n(data/raw)" as RawDocs
+cloud "LLM Provider\n(litellm ➝ Gemini/OpenAI)" as LLMProvider
+cloud "Embedding Provider\n(sentence-transformers / Gemini)" as EmbeddingProvider
+
+User --> CLI
+User --> AgentRunner
+User --> PythonAPI
+
+CLI --> Ingestion : `ingest` command
+CLI --> TutorAgent : `ask` command
+AgentRunner --> Ingestion : ingest_corpus tool
+AgentRunner --> TutorAgent : answer_question tool
+PythonAPI --> Ingestion : direct ingestion call
+PythonAPI --> TutorAgent : answer_question
+
+Ingestion --> Parsers : discover & parse files
+Parsers --> RawDocs : read supported documents
+Ingestion --> Chunker : create overlapping chunks
+Chunker --> Ingestion : chunk metadata + text
+Chunker --> EmbeddingClient : request embeddings
+EmbeddingClient --> EmbeddingProvider : fetch vectors
+EmbeddingClient --> Ingestion : chunk embeddings
+Ingestion --> VectorStore : add embeddings
+VectorStore --> VectorFS : persist embeddings.npy + metadata.json
+Ingestion --> ChunkStore : upsert chunk JSONL
+ChunkStore --> ChunkFS : persist chunks.jsonl
+
+TutorAgent --> Retriever : query chunks
+Retriever --> EmbeddingClient : embed query
+Retriever --> VectorStore : cosine search
+TutorAgent --> ContextBuilder : format grounded prompt
+TutorAgent --> LLMClient : generate cited response
+LLMClient --> LLMProvider : invoke configured chat model
+LLMClient --> TutorAgent : grounded answer with citations
+
+note right of Ingestion
+  1. Parse PDFs/Markdown/TXT via Parsers
+  2. Chunk content with Chunker
+  3. Embed and persist to VectorStore + ChunkStore
+end note
+
+note right of TutorAgent
+  Retrieves evidence, assembles prompt context,
+  and enforces citation policy before calling the LLM.
+end note
+
+@enduml

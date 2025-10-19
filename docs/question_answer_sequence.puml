@@ -1,0 +1,47 @@
+@startuml
+title Question Answering Flow
+
+actor User
+participant CLI as "CLI / Agent Runner"
+participant TutorSystem
+participant TutorAgent
+participant Retriever
+participant EmbeddingClient
+participant VectorStore
+participant ContextBuilder
+participant LLMClient
+
+User -> CLI : Run `ai-tutor ask`\n(learner_id, question, mode)
+CLI -> TutorSystem : answer_question(...)
+TutorSystem -> TutorAgent : answer(question, mode)
+
+alt No retrieval hits
+  TutorAgent -> TutorSystem : TutorResponse("No local evidence.", [])
+  TutorSystem -> CLI : Return fallback message
+  CLI -> User : Display apology + suggestion
+else Relevant evidence found
+  TutorAgent -> Retriever : retrieve(Query)
+  Retriever -> EmbeddingClient : embed_query(text)
+  EmbeddingClient --> Retriever : query embedding
+  Retriever -> VectorStore : search(embedding, top_k)
+  VectorStore --> Retriever : ranked hits
+  Retriever --> TutorAgent : RetrievalHit list
+  TutorAgent -> ContextBuilder : build_messages(question, hits, mode, "stepwise")
+  ContextBuilder --> TutorAgent : system + user messages
+  TutorAgent -> LLMClient : generate(messages)
+  LLMClient --> TutorAgent : grounded answer
+  TutorAgent -> TutorSystem : TutorResponse(answer, hits, citations)
+  TutorSystem -> CLI : structured response
+  CLI -> User : Render answer + citations
+end
+
+note right of LLMClient
+  Uses LiteLLM with configured model (e.g., Gemini)
+  and returns a cited explanation aligned with mode.
+end note
+
+note left of VectorStore
+  Cosine similarity search over\nembedded chunks persisted on disk.
+end note
+
+@enduml
