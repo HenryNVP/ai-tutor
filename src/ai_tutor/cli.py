@@ -11,7 +11,6 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     load_dotenv = None
 
-from ai_tutor.agents.openai_sdk import TutorOpenAIAgent
 from ai_tutor.system import TutorSystem
 
 app = typer.Typer(help="Minimal STEM tutor CLI backed by local corpus + LLM.")
@@ -106,6 +105,13 @@ def agent(
     Boots a `TutorSystem`, wraps it in `TutorOpenAIAgent` to expose the ingest and answer tools,
     forwards the task to `TutorOpenAIAgent.run`, and prints the agent's final output block.
     """
+    try:
+        from ai_tutor.agents.openai_sdk import TutorOpenAIAgent
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise typer.BadParameter(
+            "The agent command requires the optional 'openai-agents' and 'litellm' packages. "
+            "Install them with `pip install openai-agents litellm`."
+        ) from exc
     system = _load_system(config, api_key)
     agent_runner = TutorOpenAIAgent(tutor_system=system, model_name=model, api_key=api_key)
     result = agent_runner.run(task, learner_id=learner_id)

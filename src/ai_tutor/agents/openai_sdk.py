@@ -30,7 +30,7 @@ class TutorOpenAIAgent:
         """
         self.tutor_system = tutor_system
         self.model_name = model_name or tutor_system.settings.model.name
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("An API key must be provided via argument or environment variable.")
 
@@ -39,8 +39,13 @@ class TutorOpenAIAgent:
         self.agent = Agent(
             name="STEMTutorMVP",
             instructions=(
-                "You are a grounded STEM tutor. Use the tools to ingest learner materials "
-                "and answer questions with citations from the local corpus."
+                "You are a grounded STEM tutor. "
+                "Use the available tools to ingest learner materials and to answer questions ONLY from the local corpus. "
+                "Ground every factual statement in the provided context chunks. "
+                "Citation policy: When (and only when) a statement is supported by a specific context chunk, add a bracketed index like [1] that matches the numbered Context section. "
+                "Do not invent or guess citations. If you did not use any context chunk, include no bracketed indices. "
+                "If the local corpus does not contain enough evidence to answer, say so briefly and suggest next steps (e.g., rephrase the question, ingest more material, or search the web); do not include any citations in that case. "
+                "Be clear and concise; match the requested style (scaffolded, stepwise, concise) when provided."
             ),
             model=LitellmModel(model=self.model_name, api_key=self.api_key),
             tools=self.tools,

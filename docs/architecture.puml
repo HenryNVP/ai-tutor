@@ -29,8 +29,8 @@ node "TutorSystem" as TutorSystem {
 database "Vector Store Files\n(data/vector_store)" as VectorFS
 database "Chunks Index\n(data/processed/chunks.jsonl)" as ChunkFS
 folder "Raw Documents\n(data/raw)" as RawDocs
-cloud "LLM Provider\n(litellm ➝ Gemini/OpenAI)" as LLMProvider
-cloud "Embedding Provider\n(sentence-transformers / Gemini)" as EmbeddingProvider
+cloud "LLM Provider\n(OpenAI Chat API)" as LLMProvider
+cloud "Embedding Provider\n(sentence-transformers / optional API)" as EmbeddingProvider
 
 User --> CLI
 User --> AgentRunner

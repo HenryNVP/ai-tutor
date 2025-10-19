@@ -1,6 +1,6 @@
 """
 Example script demonstrating how to interact with the Personal STEM Instructor
-using Litellm-compatible models (e.g., Gemini).
+using OpenAI chat models.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ def main():
     """Demonstrate programmatic use of TutorSystem and TutorOpenAIAgent via CLI args."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=None)
-    parser.add_argument("--api-key", type=str, default=os.getenv("GEMINI_API_KEY"))
-    parser.add_argument("--model", type=str, default=os.getenv("GEMINI_MODEL_NAME"))
+    parser.add_argument("--api-key", type=str, default=os.getenv("OPENAI_API_KEY"))
+    parser.add_argument("--model", type=str, default=os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini"))
     parser.add_argument("--learner-id", type=str, default="demo_learner")
     parser.add_argument(
         "--question",
@@ -34,7 +34,7 @@ def main():
     args = parser.parse_args()
 
     if not args.api_key:
-        raise SystemExit("Please provide GEMINI_API_KEY (or OPENAI_API_KEY) or --api-key.")
+        raise SystemExit("Please provide OPENAI_API_KEY or --api-key.")
 
     tutor = TutorSystem.from_config(args.config, api_key=args.api_key)
 

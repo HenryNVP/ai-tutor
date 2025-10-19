@@ -8,7 +8,7 @@ class ModelConfig(BaseModel):
     """Model-level settings for the chat LLM used during tutoring."""
 
     name: str = Field(..., description="LLM identifier.")
-    provider: str = Field("litellm", description="Provider backend to use.")
+    provider: str = Field("openai", description="Provider backend to use.")
     temperature: float = Field(0.2, ge=0, le=2)
     max_output_tokens: int = Field(1024, ge=64)
     mode: str = Field("chat", description="chat or completion style.")

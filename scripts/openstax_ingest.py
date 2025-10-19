@@ -94,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--api-key",
         type=str,
-        default=os.getenv("GEMINI_API_KEY"),
+        default=os.getenv("OPENAI_API_KEY"),
         help="Optional API key for downstream LLM calls.",
     )
     parser.add_argument(

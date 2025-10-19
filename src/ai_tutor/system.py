@@ -11,6 +11,7 @@ from ai_tutor.ingestion import IngestionPipeline
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.learning import PersonalizationManager, ProgressTracker
 from ai_tutor.retrieval import create_vector_store
+from ai_tutor.search.tool import SearchTool
 from ai_tutor.storage import ChunkJsonlStore
 from ai_tutor.utils.files import collect_documents
 from ai_tutor.utils.logging import configure_logging
@@ -32,6 +33,7 @@ class TutorSystem:
         self.llm_client = LLMClient(settings.model, api_key=api_key)
         self.progress_tracker = ProgressTracker(settings.paths.profiles_dir)
         self.personalizer = PersonalizationManager(self.progress_tracker)
+        self.search_tool = SearchTool()
 
         self.ingestion_pipeline = IngestionPipeline(
             settings=settings,
@@ -44,6 +46,7 @@ class TutorSystem:
             embedder=self.embedder,
             vector_store=self.vector_store,
             llm_client=self.llm_client,
+            search_tool=self.search_tool,
         )
 
     @classmethod

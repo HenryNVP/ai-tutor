@@ -1,11 +1,11 @@
 # Personal STEM Instructor (MVP)
 
-This MVP is a local-first tutoring agent that ingests STEM study materials, embeds them with Gemini, and answers questions with grounded citations. The same Gemini API key powers both the generative model and the embedding model, and results are persisted locally for repeatable use.
+This MVP is a local-first tutoring agent that ingests STEM study materials, embeds them with sentence-transformer models, and answers questions with grounded citations using OpenAI's chat completions API. Results are persisted locally for repeatable use.
 
 ## Features
 
 - **Document ingestion & chunking** – parse PDF/Markdown/text notes, produce overlapping chunks, and enrich them with metadata for citations.
-- **Gemini embeddings** – call `gemini-embedding-001` via the Google Generative AI API (768-d vectors) using the same key as the chat model.
+- **Sentence-transformer embeddings** – encode chunks locally (default `BAAI/bge-base-en`) so you retain control of the retrieval index.
 - **Lightweight retrieval + tutoring** – cosine-search a local NumPy store, assemble a context window, and ask the chat model for a cited answer.
 - **OpenAI Agents SDK bridge** – expose ingestion and Q&A as tools so you can orchestrate workflows with the OpenAI Agents runtime.
 
@@ -34,11 +34,10 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-Set environment variables for your model provider (example uses Gemini through `litellm` plus Google Generative AI embeddings):
+Set environment variables for your model provider (example uses OpenAI for chat plus optional Google Generative AI embeddings if you switch providers):
 
 ```bash
-export GEMINI_API_KEY=...
-export GEMINI_MODEL_NAME=gemini-1.5-pro
+export OPENAI_API_KEY=...
 ```
 
 Run ingestion on a directory of PDFs/Markdown/txt files:
@@ -59,14 +58,16 @@ Use the OpenAI Agent wrapper to orchestrate everything:
 ai-tutor agent "Summarize the key equations for projectile motion." --learner-id student123
 ```
 
+> **Note:** The optional `ai-tutor agent` command depends on the `openai-agents` runtime and its `litellm` bridge. Install them separately (`pip install openai-agents litellm`) if you need that workflow; the core CLI (`ingest` / `ask`) only requires the dependencies listed above.
+
 ## Configuration
 
 Tweak `config/default.yaml` to change models, chunk sizes, retrieval depth, and storage paths. Override values at runtime through the `AI_TUTOR_CONFIG_OVERRIDES` env var (JSON) or by pointing `--config` at another YAML file.
 
 Key settings:
 
-- `model` – chat model name/provider (Litellm-compatible; defaults to Gemini `gemini-1.5-pro`).
-- `embeddings` – embedding model, provider (`google-genai`), batch size, and optional dimensionality override.
+- `model` – chat model name/provider (defaults to OpenAI `gpt-4o-mini`).
+- `embeddings` – embedding model, provider (`sentence-transformers` by default), batch size, and optional dimensionality override.
 - `chunking` – character window and overlap for RAG chunks.
 - `retrieval` – number of nearest neighbours (`top_k`) returned from the vector store.
 - `paths` – where raw data, processed chunks, and vector store files live.

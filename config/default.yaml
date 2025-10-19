@@ -1,8 +1,8 @@
 project_name: "Personal STEM Instructor"
 
 model:
-  name: "gemini/gemini-2.0-flash"
-  provider: "litellm"
+  name: "gpt-4o-mini"
+  provider: "openai"
   temperature: 0.15
   max_output_tokens: 2048
   mode: "chat"
