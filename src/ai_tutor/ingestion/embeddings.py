@@ -21,6 +21,7 @@ class EmbeddingClient:
         self._litellm = None
         self._genai = None
         self._google_configured = False
+        self._device: str = "cpu"
 
     def _ensure_model(self):
         if self._model is not None:
@@ -42,8 +43,21 @@ class EmbeddingClient:
             raise RuntimeError(
                 "sentence-transformers package is required for embeddings."
             ) from exc
-        logger.info("Loading embedding model %s", self.config.model)
-        self._model = SentenceTransformer(self.config.model)
+        device = self._select_device()
+        logger.info("Loading embedding model %s on %s", self.config.model, device)
+        try:
+            self._model = SentenceTransformer(self.config.model, device=device)
+            self._device = device
+        except RuntimeError as exc:
+            if device != "cpu":
+                logger.warning(
+                    "Failed to initialize embedding model on CUDA (%s); retrying on CPU.",
+                    exc,
+                )
+                self._model = SentenceTransformer(self.config.model, device="cpu")
+                self._device = "cpu"
+            else:
+                raise
 
     def _load_litellm(self):
         if self._litellm is not None:
@@ -137,21 +151,81 @@ class EmbeddingClient:
             embeddings.append(vector)
         return embeddings
 
+    def _select_device(self) -> str:
+        try:
+            import torch
+        except ImportError:
+            return "cpu"
+
+        if not torch.cuda.is_available():
+            return "cpu"
+
+        try:
+            torch.zeros(1, device="cuda")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CUDA detected but unusable (%s); falling back to CPU.", exc)
+            return "cpu"
+        return "cuda"
+
+    def _move_model_to_cpu(self) -> None:
+        if self._model is None:
+            return
+        try:
+            self._model = self._model.to("cpu")  # type: ignore[assignment]
+        except AttributeError:
+            from sentence_transformers import SentenceTransformer
+
+            self._model = SentenceTransformer(self.config.model, device="cpu")
+        self._device = "cpu"
+        logger.info("Using CPU for embeddings.")
+
+    def _encode_with_sentence_transformer(self, texts: List[str]) -> List[List[float]]:
+        self._ensure_model()
+        assert self._model is not None
+        try:
+            embeddings = self._model.encode(
+                texts,
+                batch_size=self.config.batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=self.config.normalize,
+                device=self._device,
+            )
+        except RuntimeError as exc:
+            if self._device != "cpu" and "cuda" in str(exc).lower():
+                logger.warning(
+                    "CUDA error during embedding (%s); switching to CPU.", exc
+                )
+                self._move_model_to_cpu()
+                embeddings = self._model.encode(  # type: ignore[assignment]
+                    texts,
+                    batch_size=self.config.batch_size,
+                    convert_to_numpy=True,
+                    normalize_embeddings=self.config.normalize,
+                    device=self._device,
+                )
+            else:
+                raise
+        if isinstance(embeddings, np.ndarray):
+            embeddings = embeddings.tolist()
+        if not embeddings:
+            return []
+        first_item = embeddings[0]
+        if isinstance(first_item, (float, np.floating)):
+            embeddings = [embeddings]  # type: ignore[list-item]
+        normalized: List[List[float]] = []
+        for vector in embeddings:
+            if isinstance(vector, np.ndarray):
+                vector = vector.tolist()
+            normalized.append(list(vector))
+        return normalized
+
     def embed_documents(self, texts: Iterable[str]) -> List[List[float]]:
         text_list = list(texts)
         if not text_list:
             return []
         provider = self.config.provider.lower()
         if provider in {"sentence-transformers", "hf", "huggingface"}:
-            self._ensure_model()
-            assert self._model is not None
-            embeddings = self._model.encode(
-                text_list,
-                batch_size=self.config.batch_size,
-                convert_to_numpy=True,
-                normalize_embeddings=self.config.normalize,
-            )
-            return embeddings.tolist()
+            return self._encode_with_sentence_transformer(text_list)
         if provider == "litellm":
             return self._embed_with_litellm(text_list)
         if provider in {"google-genai", "google", "gemini"}:
@@ -161,17 +235,8 @@ class EmbeddingClient:
     def embed_query(self, text: str) -> List[float]:
         provider = self.config.provider.lower()
         if provider in {"sentence-transformers", "hf", "huggingface"}:
-            self._ensure_model()
-            assert self._model is not None
-            embedding = self._model.encode(
-                text,
-                batch_size=self.config.batch_size,
-                convert_to_numpy=True,
-                normalize_embeddings=self.config.normalize,
-            )
-            if isinstance(embedding, np.ndarray):
-                return embedding.tolist()
-            return embedding
+            embeddings = self._encode_with_sentence_transformer([text])
+            return embeddings[0]
         if provider == "litellm":
             embeddings = self._embed_with_litellm([text])
             return embeddings[0]

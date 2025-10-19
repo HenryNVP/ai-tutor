@@ -6,11 +6,32 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency
+    load_dotenv = None
+
 from ai_tutor.agents.openai_sdk import TutorOpenAIAgent
 from ai_tutor.system import TutorSystem
 
 app = typer.Typer(help="Minimal STEM tutor CLI backed by local corpus + LLM.")
 console = Console()
+
+if load_dotenv:
+    candidate_paths = [Path.cwd() / ".env"]
+    module_root = Path(__file__).resolve().parents[2]
+    module_env = module_root / ".env"
+    if module_env not in candidate_paths:
+        candidate_paths.append(module_env)
+    for env_path in candidate_paths:
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path, override=False)
+            break
+    else:  # fallback to default discovery but ignore missing-file assertion
+        try:
+            load_dotenv(override=False)
+        except AssertionError:
+            pass
 
 
 def _load_system(config: Optional[Path], api_key: Optional[str]) -> TutorSystem:

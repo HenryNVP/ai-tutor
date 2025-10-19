@@ -1,18 +1,18 @@
 project_name: "Personal STEM Instructor"
 
 model:
-  name: "gemini-1.5-pro"
+  name: "gemini/gemini-2.0-flash"
   provider: "litellm"
   temperature: 0.15
   max_output_tokens: 2048
   mode: "chat"
 
 embeddings:
-  model: "gemini-embedding-001"
-  provider: "google-genai"
+  model: "BAAI/bge-base-en"
+  provider: "sentence-transformers"
   batch_size: 32
   normalize: true
-  dimension: 768
+  dimension: null
 
 chunking:
   chunk_size: 900

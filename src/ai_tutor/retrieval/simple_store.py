@@ -91,7 +91,15 @@ class SimpleVectorStore(VectorStore):
         if self._matrix is None or not len(self._chunks):
             return []
         query = np.array(embedding).reshape(1, -1)
-        scores = cosine_similarity(query, self._matrix)[0]
+        matrix = self._matrix
+        if matrix.shape[1] != query.shape[1]:
+            raise ValueError(
+                "Vector dimension mismatch between query embedding and stored index. "
+                f"Stored dimension={matrix.shape[1]}, query dimension={query.shape[1]}. "
+                f"Reingest documents after clearing the vector store at {self.directory} "
+                "or ensure both ingestion and querying use the same embedding model."
+            )
+        scores = cosine_similarity(query, matrix)[0]
         chunk_ids = self._chunk_ids
         ranked_indices = np.argsort(scores)[::-1][:top_k]
         hits: List[RetrievalHit] = []
