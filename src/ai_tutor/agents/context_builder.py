@@ -7,7 +7,7 @@ from ai_tutor.data_models import RetrievalHit
 SYSTEM_PROMPT = (
     "You are a personal STEM instructor for high-school to pre-college students. "
     "You must answer using ONLY the provided context chunks. "
-    "Cite each statement with [Title p.X] or [Title §Y]. "
+    "Cite each statement with [X] like IEEE. "
     "If you lack evidence, say so and offer to search the web or suggest study steps."
 )
 

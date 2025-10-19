@@ -86,7 +86,7 @@ class TutorAgent:
             history=history,
         )
         answer = self.llm.generate(messages)
-        citations = [self._format_citation(hit) for hit in hits]
+        citations = self._select_citations(hits)
         return TutorResponse(
             answer=answer,
             hits=hits,
@@ -100,3 +100,25 @@ class TutorAgent:
         metadata = hit.chunk.metadata
         page = metadata.page or "N/A"
         return f"{metadata.title} ({metadata.doc_id}) p.{page}"
+
+    def _select_citations(self, hits: List[RetrievalHit], max_citations: int = 4) -> List[str]:
+        """
+        Filter, deduplicate, and cap citations based on hit score and evidence strength.
+
+        Only keeps hits above a minimum score, merges citations that point to the same document
+        (ignoring page differences), and returns the highest-scoring unique entries.
+        """
+        MIN_SCORE = 0.2
+        seen_docs: set[str] = set()
+        filtered: List[tuple[float, str]] = []
+        for hit in hits:
+            if hit.score < MIN_SCORE:
+                continue
+            metadata = hit.chunk.metadata
+            doc_key = metadata.doc_id.lower()
+            if doc_key in seen_docs:
+                continue
+            seen_docs.add(doc_key)
+            filtered.append((hit.score, self._format_citation(hit)))
+        filtered.sort(key=lambda item: item[0], reverse=True)
+        return [citation for _, citation in filtered[:max_citations]]
