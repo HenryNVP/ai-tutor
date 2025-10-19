@@ -15,8 +15,8 @@ class LLMClient:
     def __init__(self, config: ModelConfig, api_key: Optional[str] = None):
         """Store configuration and defer client construction until the first request."""
         self.config = config
-       self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
-       self._client = None
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self._client = None
 
     def _ensure_client(self):
         """Import and cache the litellm module so subsequent calls can reuse it."""
