@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
+
+from agents import Agent, Runner, WebSearchTool
+from agents.models.openai_responses import OpenAIResponsesModel
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class SearchResult:
-    """Structured result returned by a web search implementation."""
+    """Structured result returned by the OpenAI web search tool."""
 
     title: str
     snippet: str
@@ -18,44 +23,57 @@ class SearchResult:
 
 
 class SearchTool:
-    """Interface for controlled web search."""
+    """Wrapper around the Agents WebSearchTool that returns structured snippets."""
 
-    def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
-        """Perform a web search using DuckDuckGo when available, else return fallback results."""
-        try:
-            from duckduckgo_search import DDGS  # type: ignore[import]
-        except ImportError:
-            logger.warning(
-                "duckduckgo-search not installed; returning fallback search results for query '%s'.",
-                query,
-            )
-            return self._fallback_results(query)
-
-        try:
-            results = []
-            with DDGS() as ddgs:
-                for item in ddgs.text(query, max_results=max_results):
-                    title = item.get("title") or "DuckDuckGo Result"
-                    snippet = item.get("body") or ""
-                    url = item.get("href") or ""
-                    results.append(SearchResult(title=title, snippet=snippet, url=url))
-            if results:
-                return results
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("DuckDuckGo search failed (%s); using fallback content.", exc)
-        return self._fallback_results(query)
-
-    @staticmethod
-    def _fallback_results(query: str) -> List[SearchResult]:
-        """Return a deterministic placeholder result when live search is unavailable."""
-        snippet = (
-            f"No live web search was available. Review authoritative resources about '{query}' "
-            "from academic references or well-sourced encyclopedias."
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        user_location: Optional[str] = None,
+    ) -> None:
+        instructions = (
+            "Use the web_search tool to gather up-to-date information. "
+            "Respond strictly as JSON in the shape {\"results\": [{\"title\": str, \"snippet\": str, \"url\": str, \"published_at\": str|None}]} "
+            "with concise snippets (<= 320 characters)."
         )
-        return [
-            SearchResult(
-                title="External reference guidance",
-                snippet=snippet,
-                url="https://example.com/search-guidance",
+        tool = WebSearchTool(user_location=user_location)
+        self._client = AsyncOpenAI()
+        self.agent = Agent(
+            name="WebSearchAgent",
+            instructions=instructions,
+            model=OpenAIResponsesModel(model=model, openai_client=self._client),
+            tools=[tool],
+        )
+
+    async def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
+        prompt = (
+            f"Collect up to {max_results} high-quality sources about: {query}. "
+            "Ensure results focus on reputable references."
+        )
+        try:
+            result = await Runner.run(self.agent, prompt)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Web search agent failed: %s", exc)
+            return []
+
+        raw_output = (result.final_output or "").strip()
+        if not raw_output:
+            return []
+
+        try:
+            payload = json.loads(raw_output)
+        except json.JSONDecodeError:
+            logger.debug("Unable to parse web search output as JSON: %s", raw_output)
+            return []
+
+        results_data = payload.get("results", [])
+        structured: List[SearchResult] = []
+        for item in results_data[:max_results]:
+            structured.append(
+                SearchResult(
+                    title=str(item.get("title", "")),
+                    snippet=str(item.get("snippet", "")),
+                    url=str(item.get("url", "")),
+                    published_at=item.get("published_at"),
+                )
             )
-        ]
+        return structured

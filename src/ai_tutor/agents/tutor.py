@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
+
+from openai.types.responses import ResponseContentPartDoneEvent, ResponseTextDeltaEvent
+
+from agents import Agent, RawResponsesStreamEvent, Runner, WebSearchTool, function_tool
+from agents import SQLiteSession
+from agents.tracing import trace
 
 from ai_tutor.config.schema import RetrievalConfig
 from ai_tutor.data_models import Query, RetrievalHit
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.retrieval.vector_store import VectorStore
-from ai_tutor.search.tool import SearchResult, SearchTool
-
-from .context_builder import build_messages
-from .llm_client import LLMClient
+from ai_tutor.search.tool import SearchTool
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +37,7 @@ class TutorResponse:
 
 
 class TutorAgent:
-    """Coordinates retrieval-augmented prompting to produce grounded tutoring answers."""
+    """Multi-agent tutoring orchestrator using the OpenAI Agents runtime."""
 
     MIN_CONFIDENCE = 0.2
 
@@ -40,216 +46,223 @@ class TutorAgent:
         retrieval_config: RetrievalConfig,
         embedder: EmbeddingClient,
         vector_store: VectorStore,
-        llm_client: LLMClient,
-        search_tool: Optional[SearchTool] = None,
+        search_tool: SearchTool,
+        ingest_directory: Callable[[Path], object],
     ):
-        """Cache collaborating components and build a Retriever with the shared embedder."""
-        self.embedder = embedder
-        self.vector_store = vector_store
-        self.llm = llm_client
-        self.retriever = Retriever(
-            retrieval_config, embedder=self.embedder, vector_store=self.vector_store
-        )
+        self.retriever = Retriever(retrieval_config, embedder=embedder, vector_store=vector_store)
         self.search_tool = search_tool
+        self.ingest_fn = ingest_directory
+        self.sessions: Dict[str, SQLiteSession] = {}
+
+        self._last_hits: List[RetrievalHit] = []
+        self._last_citations: List[str] = []
+
+        self.ingestion_agent: Agent | None = None
+        self.qa_agent: Agent | None = None
+        self.web_agent: Agent | None = None
+        self.triage_agent: Agent | None = None
+
+        self._build_agents()
+
+    def _build_agents(self) -> None:
+        """Instantiate ingestion, QA, web, and triage agents with shared tools."""
+
+        @function_tool
+        def ingest_corpus(directory: str) -> str:
+            path = Path(directory)
+            if not path.exists() or not path.is_dir():
+                return json.dumps({"error": f"The provided directory {directory} does not exist."})
+            result = self.ingest_fn(path)
+            payload = {
+                "documents_ingested": len(result.documents),
+                "chunks_created": len(result.chunks),
+                "skipped_files": [str(item) for item in result.skipped],
+            }
+            return json.dumps(payload)
+
+        @function_tool
+        def retrieve_local_context(question: str, top_k: int = 8) -> str:
+            hits = self.retriever.retrieve(Query(text=question))
+            filtered = self._filter_hits(hits)[:top_k]
+            self._last_hits = filtered
+            self._last_citations = [self._format_citation(hit) for hit in filtered]
+            context_items = []
+            for idx, hit in enumerate(filtered, start=1):
+                meta = hit.chunk.metadata
+                context_items.append(
+                    {
+                        "index": idx,
+                        "citation": f"[{idx}] {meta.title} (Doc: {meta.doc_id}, Page: {meta.page or 'N/A'})",
+                        "text": hit.chunk.text,
+                        "score": hit.score,
+                    }
+                )
+            return json.dumps({"context": context_items, "citations": self._last_citations})
+
+        @function_tool
+        async def web_search(query: str, max_results: int = 5) -> str:
+            results = await self.search_tool.search(query, max_results=max_results)
+            self._last_hits = []
+            self._last_citations = [
+                f"{item.title} — {item.url}" if item.url else item.title for item in results
+            ]
+            serialized = [
+                {
+                    "index": idx,
+                    "title": item.title,
+                    "snippet": item.snippet,
+                    "url": item.url,
+                    "published_at": item.published_at,
+                }
+                for idx, item in enumerate(results, start=1)
+            ]
+            return json.dumps({"results": serialized, "citations": self._last_citations})
+
+        ingestion_agent = Agent(
+            name="ingestion_agent",
+            instructions=(
+                "You ingest new learner materials. Use the ingest_corpus tool to process directories. "
+                "Always summarize the ingestion result briefly after calling the tool."
+            ),
+            tools=[ingest_corpus],
+        )
+
+        web_agent = Agent(
+            name="web_agent",
+            instructions=(
+                "You answer questions when the local corpus lacks evidence. "
+                "Call web_search to gather reputable sources, synthesize a concise answer, and cite URLs."
+            ),
+            tools=[web_search],
+        )
+
+        qa_agent = Agent(
+            name="qa_agent",
+            instructions=(
+                "Answer learner questions using the local corpus. "
+                "Call retrieve_local_context to gather relevant chunks and cite them with [index] notation. "
+                "If the tool returns no useful context, hand off to web_agent."
+            ),
+            tools=[retrieve_local_context],
+            handoffs=[web_agent],
+        )
+
+        triage_agent = Agent(
+            name="triage_agent",
+            instructions=(
+                "Decide which specialist should handle the request. "
+                "If the user asks you to ingest or index files, hand off to ingestion_agent. "
+                "Otherwise hand off to qa_agent."
+            ),
+            handoffs=[ingestion_agent, qa_agent],
+        )
+
+        self.ingestion_agent = ingestion_agent
+        self.qa_agent = qa_agent
+        self.web_agent = web_agent
+        self.triage_agent = triage_agent
 
     def answer(
         self,
+        learner_id: str,
         question: str,
-        mode: str = "learning",
-        history: Optional[List[Dict[str, str]]] = None,
-        style: Optional[str] = None,
-        style_resolver: Optional[Callable[[List[RetrievalHit]], str]] = None,
-    ) -> TutorResponse:
-        """
-        Retrieve supporting evidence and craft a cited answer for the learner.
-
-        Builds a `Query`, gathers hits through the `Retriever`, filters them for confident matches,
-        and if none survive, falls back to external search. Otherwise it assembles prompt messages via
-        `build_messages`, optionally weaving in recent session history and a style supplied through
-        `style` or lazily computed by `style_resolver`, invokes `LLMClient.generate`, and returns the
-        generated answer alongside citations and the applied style.
-        """
-        query = Query(text=question)
-        hits = self.retriever.retrieve(query)
-        filtered_hits = self._filter_hits(hits)
-
-        if not filtered_hits:
-            search_results = self._run_search(question)
-            selected_style = style or (style_resolver([]) if style_resolver else "scaffolded")
-            if search_results:
-                return self._answer_from_search(
-                    question=question,
-                    search_results=search_results,
-                    mode=mode,
-                    style=selected_style,
-                    history=history,
-                )
-            logger.info("No retrieval hits or search results found for query.")
-            message = "I could not find relevant material in the ingested corpus yet."
-            return TutorResponse(
-                answer=message,
-                hits=[],
-                citations=[],
-                style=selected_style,
-            )
-
-        selected_style = style or (style_resolver(filtered_hits) if style_resolver else "stepwise")
-        messages = build_messages(
-            question,
-            filtered_hits,
-            mode=mode,
-            style=selected_style,
-            history=history,
-        )
-        self._log_prompt(messages)
-        answer = self.llm.generate(messages)
-        citations = self._select_citations(filtered_hits)
-        if not citations:
-            # No high-confidence local evidence, retry with web search path
-            search_results = self._run_search(question)
-            if search_results:
-                return self._answer_from_search(
-                    question=question,
-                    search_results=search_results,
-                    mode=mode,
-                    style=selected_style,
-                    history=history,
-                )
-            answer = self._strip_citation_markers(answer)
-        return TutorResponse(
-            answer=answer,
-            hits=filtered_hits,
-            citations=citations,
-            style=selected_style,
-        )
-
-    @staticmethod
-    def _format_citation(hit: RetrievalHit) -> str:
-        """Convert a retrieval hit into a user-facing citation string with title and page."""
-        metadata = hit.chunk.metadata
-        page = metadata.page or "N/A"
-        return f"{metadata.title} ({metadata.doc_id}) p.{page}"
-
-    def _select_citations(self, hits: List[RetrievalHit], max_citations: int = 4) -> List[str]:
-        """
-        Filter, deduplicate, and cap citations based on hit score and evidence strength.
-
-        Only keeps hits above a minimum score, merges citations that point to the same document
-        (ignoring page differences), and returns the highest-scoring unique entries.
-        """
-        seen_docs: set[str] = set()
-        filtered: List[tuple[float, str]] = []
-        for hit in hits:
-            if hit.score < self.MIN_CONFIDENCE:
-                continue
-            metadata = hit.chunk.metadata
-            doc_key = metadata.doc_id.lower()
-            if doc_key in seen_docs:
-                continue
-            seen_docs.add(doc_key)
-            filtered.append((hit.score, self._format_citation(hit)))
-        filtered.sort(key=lambda item: item[0], reverse=True)
-        top_citations = [citation for _, citation in filtered[:max_citations]]
-        return top_citations
-
-    @staticmethod
-    def _strip_citation_markers(answer: str) -> str:
-        """Remove bracket-style citation markers when no supporting evidence is available."""
-        cleaned = re.sub(r"\[\s*\d+(?:\s*,\s*\d+)*\s*\]", "", answer)
-        return re.sub(r"\s{2,}", " ", cleaned).strip()
-
-    @staticmethod
-    def _log_prompt(messages: List[Dict[str, str]]) -> None:
-        """Emit a trimmed view of the messages being sent to the LLM."""
-        preview = []
-        for message in messages:
-            content = message.get("content", "")
-            if len(content) > 500:
-                content = content[:500] + "…"
-            preview.append({"role": message.get("role"), "content": content})
-        logger.debug("LLM prompt payload: %s", preview)
-
-    def _run_search(self, question: str, max_results: int = 5) -> List[SearchResult]:
-        """Invoke the configured search tool when local retrieval comes up empty."""
-        if not self.search_tool:
-            return []
-        try:
-            results = self.search_tool.search(question, max_results=max_results)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Search tool failed: %s", exc)
-            return []
-        return results or []
-
-    def _answer_from_search(
-        self,
-        question: str,
-        search_results: List[SearchResult],
         mode: str,
-        style: str,
-        history: Optional[List[Dict[str, str]]],
+        style_hint: str,
+        on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
-        """Generate an answer grounded in external search snippets."""
-        extra_context = self._format_search_context(search_results)
-        messages = build_messages(
-            question,
-            hits=[],
-            mode=mode,
-            style=style,
-            history=history,
-            extra_context=extra_context,
+        """Synchronously orchestrate the multi-agent run and produce a TutorResponse."""
+        return asyncio.run(
+            self._answer_async(
+                learner_id=learner_id,
+                question=question,
+                mode=mode,
+                style_hint=style_hint,
+                on_delta=on_delta,
+            )
         )
-        self._log_prompt(messages)
-        answer = self.llm.generate(messages)
-        citations = self._search_citations(search_results)
-        if not citations:
-            answer = self._strip_citation_markers(answer)
+
+    async def _answer_async(
+        self,
+        learner_id: str,
+        question: str,
+        mode: str,
+        style_hint: str,
+        on_delta: Optional[Callable[[str], None]],
+    ) -> TutorResponse:
+        if self.triage_agent is None:
+            raise RuntimeError("Agents are not initialized.")
+
+        session = self._get_session(learner_id)
+        self._reset_state()
+
+        system_preamble = (
+            f"Learner mode: {mode}. Preferred explanation style: {style_hint}. "
+            "Cite supporting evidence using bracketed indices or URLs when available."
+        )
+        prompt = f"{system_preamble}\n\nQuestion:\n{question}"
+
+        stream = Runner.run_streamed(
+            self.triage_agent,
+            input=prompt,
+            session=session,
+        )
+
+        final_tokens: List[str] = []
+
+        with trace("Tutor session", metadata={"learner_id": learner_id, "mode": mode}):
+            async for event in stream.stream_events():
+                if not isinstance(event, RawResponsesStreamEvent):
+                    continue
+                data = event.data
+                if isinstance(data, ResponseTextDeltaEvent):
+                    final_tokens.append(data.delta)
+                    if on_delta:
+                        on_delta(data.delta)
+                elif isinstance(data, ResponseContentPartDoneEvent):
+                    if on_delta:
+                        on_delta("\n")
+
+        answer_text = "".join(final_tokens).strip()
+        answer_text = self._strip_citation_markers(answer_text) if not self._last_citations else answer_text
+
         return TutorResponse(
-            answer=answer,
-            hits=[],
-            citations=citations,
-            style=style,
+            answer=answer_text,
+            hits=self._last_hits,
+            citations=self._last_citations,
+            style=style_hint,
         )
 
-    @staticmethod
-    def _format_search_context(results: List[SearchResult]) -> str:
-        """Format search results into a numbered context block for the LLM."""
-        lines: List[str] = []
-        for idx, result in enumerate(results, start=1):
-            snippet = (result.snippet or "").strip()
-            if len(snippet) > 400:
-                snippet = snippet[:400] + "…"
-            source = f"{result.title} ({result.url})"
-            lines.append(f"[{idx}] {source}\n{snippet}")
-        return "External search findings:\n" + "\n\n".join(lines)
+    def _get_session(self, learner_id: str) -> SQLiteSession:
+        session = self.sessions.get(learner_id)
+        if session is None:
+            session = SQLiteSession(f"ai_tutor_{learner_id}")
+            self.sessions[learner_id] = session
+        return session
 
-    @staticmethod
-    def _search_citations(results: List[SearchResult], max_citations: int = 4) -> List[str]:
-        """Turn search results into compact citation strings, deduplicated by URL."""
-        citations: List[str] = []
-        seen_urls: set[str] = set()
-        for result in results:
-            url = (result.url or "").strip()
-            normalized = url.lower()
-            if normalized and normalized in seen_urls:
-                continue
-            if normalized:
-                seen_urls.add(normalized)
-            title = result.title or "External source"
-            citation = f"{title} — {url}" if url else title
-            citations.append(citation)
-            if len(citations) >= max_citations:
-                break
-        return citations
+    def _reset_state(self) -> None:
+        self._last_hits = []
+        self._last_citations = []
+
     def _filter_hits(self, hits: List[RetrievalHit]) -> List[RetrievalHit]:
-        """Keep only high-confidence hits with distinct documents for prompting."""
         filtered: List[RetrievalHit] = []
         seen_docs: set[str] = set()
         for hit in hits:
             if hit.score < self.MIN_CONFIDENCE:
                 continue
-            doc_key = hit.chunk.metadata.doc_id.lower()
-            if doc_key in seen_docs:
+            doc_id = hit.chunk.metadata.doc_id.lower()
+            if doc_id in seen_docs:
                 continue
-            seen_docs.add(doc_key)
+            seen_docs.add(doc_id)
             filtered.append(hit)
         return filtered
+
+    @staticmethod
+    def _format_citation(hit: RetrievalHit) -> str:
+        metadata = hit.chunk.metadata
+        page = metadata.page or "N/A"
+        return f"{metadata.title} ({metadata.doc_id}) p.{page}"
+
+    @staticmethod
+    def _strip_citation_markers(answer: str) -> str:
+        cleaned = re.sub(r"\[\s*\d+(?:\s*,\s*\d+)*\s*\]", "", answer)
+        return re.sub(r"\s{2,}", " ", cleaned).strip()

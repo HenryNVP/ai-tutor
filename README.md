@@ -7,7 +7,7 @@ This MVP is a local-first tutoring agent that ingests STEM study materials, embe
 - **Document ingestion & chunking** – parse PDF/Markdown/text notes, produce overlapping chunks, and enrich them with metadata for citations.
 - **Sentence-transformer embeddings** – encode chunks locally (default `BAAI/bge-base-en`) so you retain control of the retrieval index.
 - **Lightweight retrieval + tutoring** – cosine-search a local NumPy store, assemble a context window, and ask the chat model for a cited answer.
-- **OpenAI Agents SDK bridge** – expose ingestion and Q&A as tools so you can orchestrate workflows with the OpenAI Agents runtime.
+- **OpenAI Agents SDK bridge** – create ingestion and tutoring agents directly with the OpenAI Agents runtime (no custom wrapper required).
 
 ## Project layout
 
@@ -52,13 +52,16 @@ Ask a grounded question:
 ai-tutor ask student123 "Explain the steps to solve projectile motion problems."
 ```
 
-Use the OpenAI Agent wrapper to orchestrate everything:
+Use the OpenAI Agents runtime to orchestrate everything:
 
 ```bash
-ai-tutor agent "Summarize the key equations for projectile motion." --learner-id student123
+ai-tutor agent --agent-role tutor "Summarize the key equations for projectile motion." --learner-id student123
+
+# Ingestion agent example
+ai-tutor agent --agent-role ingest "Ingest the files under ./data/raw/openstax" --learner-id student123
 ```
 
-> **Note:** The optional `ai-tutor agent` command depends on the `openai-agents` runtime and its `litellm` bridge. Install them separately (`pip install openai-agents litellm`) if you need that workflow; the core CLI (`ingest` / `ask`) only requires the dependencies listed above.
+> **Note:** The optional `ai-tutor agent` command depends on the `openai-agents` runtime. Install it separately (`pip install openai-agents`) if you need that workflow; the core CLI (`ingest` / `ask`) only requires the dependencies listed above.
 
 ## Configuration
 

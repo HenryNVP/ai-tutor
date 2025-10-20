@@ -1,47 +1,54 @@
 @startuml
-title Question Answering Flow
+title Question Answering Flow (Multi-Agent Streaming)
 
 actor User
 participant CLI as "CLI / Agent Runner"
 participant TutorSystem
 participant TutorAgent
 participant Retriever
-participant EmbeddingClient
 participant VectorStore
-participant ContextBuilder
-participant LLMClient
+participant EmbeddingClient
+participant SearchTool
+participant OpenAI as "OpenAI Agents Runtime"
 
 User -> CLI : Run `ai-tutor ask`\n(learner_id, question, mode)
-CLI -> TutorSystem : answer_question(...)
-TutorSystem -> TutorAgent : answer(question, mode)
+CLI -> TutorSystem : answer_question(..., stream=True)
+TutorSystem -> TutorAgent : stream_answer(learner_id, question, style)
 
-alt No retrieval hits
-  TutorAgent -> TutorSystem : TutorResponse("No local evidence.", [])
-  TutorSystem -> CLI : Return fallback message
-  CLI -> User : Display apology + suggestion
-else Relevant evidence found
-  TutorAgent -> Retriever : retrieve(Query)
-  Retriever -> EmbeddingClient : embed_query(text)
-  EmbeddingClient --> Retriever : query embedding
-  Retriever -> VectorStore : search(embedding, top_k)
-  VectorStore --> Retriever : ranked hits
-  Retriever --> TutorAgent : RetrievalHit list
-  TutorAgent -> ContextBuilder : build_messages(question, hits, mode, "stepwise")
-  ContextBuilder --> TutorAgent : system + user messages
-  TutorAgent -> LLMClient : generate(messages)
-  LLMClient --> TutorAgent : grounded answer
-  TutorAgent -> TutorSystem : TutorResponse(answer, hits, citations)
-  TutorSystem -> CLI : structured response
-  CLI -> User : Render answer + citations
+loop Runner.run_streamed
+  TutorAgent -> OpenAI : triage_agent receives turn
+  alt Ingestion request
+    OpenAI -> TutorAgent : handoff to ingestion_agent
+    TutorAgent -> TutorSystem : ingest_corpus(directory)
+    TutorSystem --> TutorAgent : ingestion summary
+  else Local corpus sufficient
+    TutorAgent -> Retriever : retrieve(Query)
+    Retriever -> EmbeddingClient : embed query
+    EmbeddingClient --> Retriever : query embedding
+    Retriever -> VectorStore : search top_k
+    VectorStore --> Retriever : ranked hits
+    Retriever --> TutorAgent : RetrievalHit list
+    TutorAgent --> OpenAI : provide context + citations
+  else Needs external evidence
+    TutorAgent -> SearchTool : web_search(query)
+    SearchTool --> TutorAgent : ranked web snippets
+    TutorAgent --> OpenAI : supply URLs + snippets
+  end
+  OpenAI --> TutorAgent : streamed deltas
+  TutorAgent --> TutorSystem : delta text
+  TutorSystem --> CLI : print delta
 end
 
-note right of LLMClient
-  Uses LiteLLM with configured model (e.g., Gemini)
-  and returns a cited explanation aligned with mode.
-end note
+TutorAgent -> TutorSystem : TutorResponse(answer, hits, citations)
+TutorSystem -> CLI : finalize + update personalization
+CLI -> User : Render answer + citations
 
 note left of VectorStore
   Cosine similarity search over\nembedded chunks persisted on disk.
+end note
+
+note right of TutorAgent
+  Maintains learner session memory, routes between\nspecialist agents, and enforces local-first citations.
 end note
 
 @enduml

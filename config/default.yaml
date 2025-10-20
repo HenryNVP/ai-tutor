@@ -32,7 +32,7 @@ paths:
 
 logging:
   level: "INFO"
-  json: false
+  use_json: false
 
 course_defaults:
   weeks: 12

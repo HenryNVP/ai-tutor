@@ -8,7 +8,7 @@ actor User
 
 package "Entry Points" {
   component "CLI (`ai-tutor`)" as CLI
-  component "OpenAI Agent Runner\n(TutorOpenAIAgent)" as AgentRunner
+  component "OpenAI Agents (ingest/tutor)" as AgentRunner
   component "Python API / Notebooks" as PythonAPI
 }
 
@@ -17,9 +17,8 @@ node "TutorSystem" as TutorSystem {
   component "IngestionPipeline" as Ingestion
   component "TutorAgent" as TutorAgent
   component "Retriever" as Retriever
-  component "Context Builder" as ContextBuilder
   component "EmbeddingClient" as EmbeddingClient
-  component "LLMClient" as LLMClient
+  component "SearchTool" as SearchTool
   component "VectorStore\n(SimpleVectorStore)" as VectorStore
   component "ChunkJsonlStore" as ChunkStore
   component "Parsers" as Parsers
@@ -29,7 +28,7 @@ node "TutorSystem" as TutorSystem {
 database "Vector Store Files\n(data/vector_store)" as VectorFS
 database "Chunks Index\n(data/processed/chunks.jsonl)" as ChunkFS
 folder "Raw Documents\n(data/raw)" as RawDocs
-cloud "LLM Provider\n(OpenAI Chat API)" as LLMProvider
+cloud "OpenAI Agents Runtime" as OpenAIAgents
 cloud "Embedding Provider\n(sentence-transformers / optional API)" as EmbeddingProvider
 
 User --> CLI
@@ -55,13 +54,11 @@ VectorStore --> VectorFS : persist embeddings.npy + metadata.json
 Ingestion --> ChunkStore : upsert chunk JSONL
 ChunkStore --> ChunkFS : persist chunks.jsonl
 
-TutorAgent --> Retriever : query chunks
+TutorAgent --> Retriever : retrieve local evidence
 Retriever --> EmbeddingClient : embed query
 Retriever --> VectorStore : cosine search
-TutorAgent --> ContextBuilder : format grounded prompt
-TutorAgent --> LLMClient : generate cited response
-LLMClient --> LLMProvider : invoke configured chat model
-LLMClient --> TutorAgent : grounded answer with citations
+TutorAgent --> SearchTool : web fallback
+TutorAgent --> OpenAIAgents : orchestrate multi-agent workflow
 
 note right of Ingestion
   1. Parse PDFs/Markdown/TXT via Parsers
@@ -70,8 +67,8 @@ note right of Ingestion
 end note
 
 note right of TutorAgent
-  Retrieves evidence, assembles prompt context,
-  and enforces citation policy before calling the LLM.
+  Routes between ingestion, local QA, and web-search agents,
+  streaming answers while enforcing citation policy.
 end note
 
 @enduml

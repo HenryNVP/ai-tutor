@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -71,14 +74,22 @@ def ask(
     """
     Ask the tutor for a grounded answer with citations.
 
-    Instantiates `TutorSystem`, invokes `TutorSystem.answer_question` which orchestrates the
-    `TutorAgent`, `Retriever`, and `LLMClient`, and renders the final answer plus citations
-    to the terminal using Rich formatting.
+    Instantiates `TutorSystem`, streams the response from the multi-agent tutor workflows,
+    and renders the final answer plus citations to the terminal using Rich formatting.
     """
     system = _load_system(config, api_key)
-    response = system.answer_question(learner_id=learner_id, question=question, mode=mode)
     console.print("[bold]Answer[/bold]")
-    console.print(response.answer)
+
+    def stream_printer(text: str) -> None:
+        console.print(text, end="", soft_wrap=True, highlight=False)
+
+    response = system.answer_question(
+        learner_id=learner_id,
+        question=question,
+        mode=mode,
+        on_delta=stream_printer,
+    )
+    console.print()  # newline after streaming output
     if response.citations:
         console.print("\n[bold]Citations[/bold]")
         for citation in response.citations:
@@ -98,23 +109,97 @@ def agent(
     config: Optional[Path] = typer.Option(None, help="Path to configuration YAML."),
     api_key: Optional[str] = typer.Option(None, help="API key for both LLM and embeddings."),
     model: Optional[str] = typer.Option(None, help="Override the model used by the agent runner."),
+    agent_role: str = typer.Option(
+        "tutor",
+        help="Which agent to run. Options: 'tutor' (default) for Q&A, 'ingest' for ingestion.",
+    ),
 ):
     """
-    Run the OpenAI Agents SDK wrapper so an agent can call tutor tools.
+    Run OpenAI Agents directly to invoke TutorSystem tools.
 
-    Boots a `TutorSystem`, wraps it in `TutorOpenAIAgent` to expose the ingest and answer tools,
-    forwards the task to `TutorOpenAIAgent.run`, and prints the agent's final output block.
+    Builds dedicated ingestion and tutoring agents backed by OpenAI's Responses API, each with
+    their own tool stack. Select the desired role to orchestrate ingestion or answer questions.
     """
     try:
-        from ai_tutor.agents.openai_sdk import TutorOpenAIAgent
+        from agents import Agent, Runner, WebSearchTool, function_tool, set_trace_processors, set_tracing_disabled
+        from agents.models.openai_responses import OpenAIResponsesModel
+        from agents.tracing.processors import default_processor
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise typer.BadParameter(
-            "The agent command requires the optional 'openai-agents' and 'litellm' packages. "
-            "Install them with `pip install openai-agents litellm`."
+            "The agent command requires the optional 'openai-agents' package. "
+            "Install it with `pip install openai-agents`."
         ) from exc
+
     system = _load_system(config, api_key)
-    agent_runner = TutorOpenAIAgent(tutor_system=system, model_name=model, api_key=api_key)
-    result = agent_runner.run(task, learner_id=learner_id)
+
+    resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
+    if not resolved_api_key:
+        raise typer.BadParameter("OPENAI_API_KEY must be provided via environment or --api-key.")
+
+    resolved_model = model or system.settings.model.name
+
+    set_tracing_disabled(disabled=False)
+    set_trace_processors([default_processor()])
+
+    @function_tool
+    def ingest_corpus(directory: str) -> str:
+        path = Path(directory)
+        if not path.exists() or not path.is_dir():
+            return json.dumps({"error": f"The provided directory {directory} does not exist."})
+        result = system.ingest_directory(path)
+        payload = {
+            "documents_ingested": len(result.documents),
+            "chunks_created": len(result.chunks),
+            "skipped_files": [str(item) for item in result.skipped],
+        }
+        return json.dumps(payload)
+
+    @function_tool
+    def answer_question(learner_id: str, question: str, mode: str = "learning") -> str:
+        response = system.answer_question(learner_id=learner_id, question=question, mode=mode)
+        payload = {
+            "answer": response.answer,
+            "citations": response.citations,
+            "style": response.style,
+            "difficulty": response.difficulty,
+            "next_topic": response.next_topic,
+        }
+        return json.dumps(payload)
+
+    ingest_agent = Agent(
+        name="TutorIngestionAgent",
+        instructions=(
+            "You ingest new study materials into the learner's local knowledge base. "
+            "Use the ingest_corpus tool when asked to add content. Respond concisely after each action."
+        ),
+        model=OpenAIResponsesModel(model=resolved_model, api_key=resolved_api_key),
+        tools=[ingest_corpus],
+    )
+
+    tutor_agent = Agent(
+        name="TutorAnswerAgent",
+        instructions=(
+            "You answer learner questions using the available tools. "
+            "Prefer the local corpus and cite supporting chunks with bracketed indices like [1]. "
+            "If local evidence is insufficient, call the web_search tool to gather reputable sources "
+            "and cite the returned URLs. If no evidence is found, state that and suggest next steps."
+        ),
+        model=OpenAIResponsesModel(model=resolved_model, api_key=resolved_api_key),
+        tools=[answer_question, WebSearchTool()],
+    )
+
+    agents = {
+        "ingest": ingest_agent,
+        "tutor": tutor_agent,
+    }
+
+    if agent_role not in agents:
+        raise typer.BadParameter("agent-role must be one of: " + ", ".join(agents))
+
+    selected_agent = agents[agent_role]
+    prompt = task if agent_role == "ingest" else f"Learner ID: {learner_id}\nTask: {task}"
+
+    result = asyncio.run(Runner.run(selected_agent, prompt))
     console.print("[bold]Agent Output[/bold]")
     console.print(result.final_output)
 

@@ -67,7 +67,7 @@ class LoggingConfig(BaseModel):
     """Controls for tutor logging output and format."""
 
     level: str = Field("INFO")
-    json: bool = False
+    use_json: bool = Field(False, description="Emit logs as structured JSON when true.")
 
 
 class CourseDefaults(BaseModel):

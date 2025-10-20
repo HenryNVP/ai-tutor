@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from ai_tutor.agents.llm_client import LLMClient
 from ai_tutor.agents.tutor import TutorAgent, TutorResponse
 from ai_tutor.config import Settings, load_settings
 from ai_tutor.ingestion import IngestionPipeline
@@ -25,15 +24,14 @@ class TutorSystem:
     def __init__(self, settings: Settings, api_key: Optional[str] = None):
         """Initialize the system with shared infrastructure and lazy clients."""
         self.settings = settings
-        configure_logging(settings.logging.level, settings.logging.json)
+        configure_logging(settings.logging.level, settings.logging.use_json)
 
         self.embedder = EmbeddingClient(settings.embeddings, api_key=api_key)
         self.vector_store = create_vector_store(settings.paths.vector_store_dir)
         self.chunk_store = ChunkJsonlStore(settings.paths.chunks_index)
-        self.llm_client = LLMClient(settings.model, api_key=api_key)
         self.progress_tracker = ProgressTracker(settings.paths.profiles_dir)
         self.personalizer = PersonalizationManager(self.progress_tracker)
-        self.search_tool = SearchTool()
+        self.search_tool = SearchTool(model=settings.model.name)
 
         self.ingestion_pipeline = IngestionPipeline(
             settings=settings,
@@ -45,8 +43,8 @@ class TutorSystem:
             retrieval_config=settings.retrieval,
             embedder=self.embedder,
             vector_store=self.vector_store,
-            llm_client=self.llm_client,
             search_tool=self.search_tool,
+            ingest_directory=self.ingest_directory,
         )
 
     @classmethod
@@ -77,26 +75,24 @@ class TutorSystem:
         learner_id: str,
         question: str,
         mode: str = "learning",
+        on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
         """
         Generate a grounded answer for a learner by delegating to the TutorAgent.
 
-        Loads learner memory, supplies recent context to `TutorAgent.answer`, selects a prompting
-        style via the personalization manager, and persists the updated learner profile so future
-        sessions continue seamlessly. Returns the structured response including personalization hints.
+        Loads learner memory, selects a prompting style via the personalization manager, streams
+        the response if requested, and persists the updated learner profile so future sessions
+        continue seamlessly. Returns the structured response including personalization hints.
         """
         profile = self.personalizer.load_profile(learner_id)
-        history = self.personalizer.get_session_history(profile, limit=3)
-
-        def style_selector(hits):
-            domain = self.personalizer.infer_domain(hits)
-            return self.personalizer.select_style(profile, domain)
+        style_hint = self.personalizer.select_style(profile, None)
 
         response = self.tutor_agent.answer(
-            question,
+            learner_id=learner_id,
+            question=question,
             mode=mode,
-            history=history,
-            style_resolver=style_selector,
+            style_hint=style_hint,
+            on_delta=on_delta,
         )
         domain = self.personalizer.infer_domain(response.hits)
         personalization = self.personalizer.record_interaction(
