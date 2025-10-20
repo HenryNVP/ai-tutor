@@ -4,15 +4,21 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from openai.types.responses import ResponseContentPartDoneEvent, ResponseTextDeltaEvent
 
-from agents import Agent, RawResponsesStreamEvent, Runner, WebSearchTool, function_tool
+from agents import Agent, InputGuardrailTripwireTriggered, RawResponsesStreamEvent, Runner
 from agents import SQLiteSession
 from agents.tracing import trace
+
+from .guardrails import build_request_guardrail
+from .ingestion import build_ingestion_agent
+from .qa import build_qa_agent
+from .triage import build_triage_agent
+from .web import build_web_agent
 
 from ai_tutor.config.schema import RetrievalConfig
 from ai_tutor.data_models import Query, RetrievalHit
@@ -36,6 +42,18 @@ class TutorResponse:
     difficulty: Optional[str] = None
 
 
+@dataclass
+class AgentState:
+    last_hits: List[RetrievalHit] = field(default_factory=list)
+    last_citations: List[str] = field(default_factory=list)
+    last_source: Optional[str] = None
+
+    def reset(self) -> None:
+        self.last_hits.clear()
+        self.last_citations.clear()
+        self.last_source = None
+
+
 class TutorAgent:
     """Multi-agent tutoring orchestrator using the OpenAI Agents runtime."""
 
@@ -53,109 +71,26 @@ class TutorAgent:
         self.search_tool = search_tool
         self.ingest_fn = ingest_directory
         self.sessions: Dict[str, SQLiteSession] = {}
-
-        self._last_hits: List[RetrievalHit] = []
-        self._last_citations: List[str] = []
+        self.state = AgentState()
 
         self.ingestion_agent: Agent | None = None
         self.qa_agent: Agent | None = None
         self.web_agent: Agent | None = None
         self.triage_agent: Agent | None = None
+        self.guardrail_agent: Agent | None = None
 
         self._build_agents()
 
     def _build_agents(self) -> None:
         """Instantiate ingestion, QA, web, and triage agents with shared tools."""
 
-        @function_tool
-        def ingest_corpus(directory: str) -> str:
-            path = Path(directory)
-            if not path.exists() or not path.is_dir():
-                return json.dumps({"error": f"The provided directory {directory} does not exist."})
-            result = self.ingest_fn(path)
-            payload = {
-                "documents_ingested": len(result.documents),
-                "chunks_created": len(result.chunks),
-                "skipped_files": [str(item) for item in result.skipped],
-            }
-            return json.dumps(payload)
+        guardrail_agent, request_guardrail = build_request_guardrail()
+        self.guardrail_agent = guardrail_agent
 
-        @function_tool
-        def retrieve_local_context(question: str, top_k: int = 8) -> str:
-            hits = self.retriever.retrieve(Query(text=question))
-            filtered = self._filter_hits(hits)[:top_k]
-            self._last_hits = filtered
-            self._last_citations = [self._format_citation(hit) for hit in filtered]
-            context_items = []
-            for idx, hit in enumerate(filtered, start=1):
-                meta = hit.chunk.metadata
-                context_items.append(
-                    {
-                        "index": idx,
-                        "citation": f"[{idx}] {meta.title} (Doc: {meta.doc_id}, Page: {meta.page or 'N/A'})",
-                        "text": hit.chunk.text,
-                        "score": hit.score,
-                    }
-                )
-            return json.dumps({"context": context_items, "citations": self._last_citations})
-
-        @function_tool
-        async def web_search(query: str, max_results: int = 5) -> str:
-            results = await self.search_tool.search(query, max_results=max_results)
-            self._last_hits = []
-            self._last_citations = [
-                f"{item.title} — {item.url}" if item.url else item.title for item in results
-            ]
-            serialized = [
-                {
-                    "index": idx,
-                    "title": item.title,
-                    "snippet": item.snippet,
-                    "url": item.url,
-                    "published_at": item.published_at,
-                }
-                for idx, item in enumerate(results, start=1)
-            ]
-            return json.dumps({"results": serialized, "citations": self._last_citations})
-
-        ingestion_agent = Agent(
-            name="ingestion_agent",
-            instructions=(
-                "You ingest new learner materials. Use the ingest_corpus tool to process directories. "
-                "Always summarize the ingestion result briefly after calling the tool."
-            ),
-            tools=[ingest_corpus],
-        )
-
-        web_agent = Agent(
-            name="web_agent",
-            instructions=(
-                "You answer questions when the local corpus lacks evidence. "
-                "Call web_search to gather reputable sources, synthesize a concise answer, and cite URLs."
-            ),
-            tools=[web_search],
-        )
-
-        qa_agent = Agent(
-            name="qa_agent",
-            instructions=(
-                "Answer learner questions using the local corpus. "
-                "Call retrieve_local_context to gather relevant chunks and cite them with [index] notation. "
-                "If the tool returns no useful context, hand off to web_agent."
-            ),
-            tools=[retrieve_local_context],
-            handoffs=[web_agent],
-        )
-
-        triage_agent = Agent(
-            name="triage_agent",
-            instructions=(
-                "Decide which specialist should handle the request. "
-                "If the user asks you to ingest or index files, hand off to ingestion_agent. "
-                "Otherwise hand off to qa_agent."
-            ),
-            handoffs=[ingestion_agent, qa_agent],
-        )
+        ingestion_agent = build_ingestion_agent(self.ingest_fn)
+        web_agent = build_web_agent(self.search_tool, self.state)
+        qa_agent = build_qa_agent(self.retriever, self.state, self.MIN_CONFIDENCE, handoffs=[web_agent])
+        triage_agent = build_triage_agent(ingestion_agent, qa_agent, request_guardrail)
 
         self.ingestion_agent = ingestion_agent
         self.qa_agent = qa_agent
@@ -193,7 +128,7 @@ class TutorAgent:
             raise RuntimeError("Agents are not initialized.")
 
         session = self._get_session(learner_id)
-        self._reset_state()
+        self.state.reset()
 
         system_preamble = (
             f"Learner mode: {mode}. Preferred explanation style: {style_hint}. "
@@ -201,34 +136,40 @@ class TutorAgent:
         )
         prompt = f"{system_preamble}\n\nQuestion:\n{question}"
 
-        stream = Runner.run_streamed(
-            self.triage_agent,
-            input=prompt,
-            session=session,
-        )
-
         final_tokens: List[str] = []
 
-        with trace("Tutor session", metadata={"learner_id": learner_id, "mode": mode}):
-            async for event in stream.stream_events():
-                if not isinstance(event, RawResponsesStreamEvent):
-                    continue
-                data = event.data
-                if isinstance(data, ResponseTextDeltaEvent):
-                    final_tokens.append(data.delta)
-                    if on_delta:
-                        on_delta(data.delta)
-                elif isinstance(data, ResponseContentPartDoneEvent):
-                    if on_delta:
-                        on_delta("\n")
+        try:
+            stream = Runner.run_streamed(
+                self.triage_agent,
+                input=prompt,
+                session=session,
+            )
+
+            with trace("Tutor session", metadata={"learner_id": learner_id, "mode": mode}):
+                async for event in stream.stream_events():
+                    if not isinstance(event, RawResponsesStreamEvent):
+                        continue
+                    data = event.data
+                    if isinstance(data, ResponseTextDeltaEvent):
+                        final_tokens.append(data.delta)
+                        if on_delta:
+                            on_delta(data.delta)
+                    elif isinstance(data, ResponseContentPartDoneEvent):
+                        if on_delta:
+                            on_delta("\n")
+        except InputGuardrailTripwireTriggered:
+            refusal = "Sorry, I can’t help with that request."
+            if on_delta:
+                on_delta(refusal + "\n")
+            return TutorResponse(answer=refusal, hits=[], citations=[], style=style_hint)
 
         answer_text = "".join(final_tokens).strip()
-        answer_text = self._strip_citation_markers(answer_text) if not self._last_citations else answer_text
+        answer_text = self._strip_citation_markers(answer_text) if not self.state.last_citations else answer_text
 
         return TutorResponse(
             answer=answer_text,
-            hits=self._last_hits,
-            citations=self._last_citations,
+            hits=self.state.last_hits,
+            citations=self.state.last_citations,
             style=style_hint,
         )
 
@@ -242,25 +183,6 @@ class TutorAgent:
     def _reset_state(self) -> None:
         self._last_hits = []
         self._last_citations = []
-
-    def _filter_hits(self, hits: List[RetrievalHit]) -> List[RetrievalHit]:
-        filtered: List[RetrievalHit] = []
-        seen_docs: set[str] = set()
-        for hit in hits:
-            if hit.score < self.MIN_CONFIDENCE:
-                continue
-            doc_id = hit.chunk.metadata.doc_id.lower()
-            if doc_id in seen_docs:
-                continue
-            seen_docs.add(doc_id)
-            filtered.append(hit)
-        return filtered
-
-    @staticmethod
-    def _format_citation(hit: RetrievalHit) -> str:
-        metadata = hit.chunk.metadata
-        page = metadata.page or "N/A"
-        return f"{metadata.title} ({metadata.doc_id}) p.{page}"
 
     @staticmethod
     def _strip_citation_markers(answer: str) -> str:
