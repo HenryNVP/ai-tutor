@@ -29,6 +29,7 @@ class SearchTool:
         self,
         model: str = "gpt-4o-mini",
         user_location: Optional[str] = None,
+        api_key: Optional[str] = None,
     ) -> None:
         instructions = (
             "Use the web_search tool to gather up-to-date information. "
@@ -36,7 +37,7 @@ class SearchTool:
             "with concise snippets (<= 320 characters)."
         )
         tool = WebSearchTool(user_location=user_location)
-        self._client = AsyncOpenAI()
+        self._client = AsyncOpenAI(api_key=api_key)
         self.agent = Agent(
             name="WebSearchAgent",
             instructions=instructions,

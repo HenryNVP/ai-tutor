@@ -24,6 +24,15 @@ config/default.yaml  # Editable runtime configuration
 scripts/openstax_ingest.py  # Example ingestion helper
 ```
 
+## Architecture overview
+
+- **TutorSystem** wires ingestion, retrieval, personalization, and the multi-agent tutor workflow. Its `ingest_directory` and `answer_question` methods are shared by the CLI, demo REPL, and Agents examples.
+- **IngestionPipeline** normalizes raw documents: parsers load files, `Chunker` slices text, `EmbeddingClient` encodes slices, and `VectorStore` plus `ChunkJsonlStore` persist embeddings and citation metadata.
+- **TutorAgent** orchestrates local QA and web-search fallback agents, streaming responses back to callers while the CLI/demo interfaces handle ingestion commands separately.
+- **SearchTool** encapsulates the OpenAI web search tool, ensuring fallback answers cite URL sources when the local corpus lacks evidence.
+
+The diagrams in `docs/architecture.puml` and `docs/components.puml` illustrate component relationships and data flow in more detail.
+
 ## Quick start
 
 Install dependencies (Python 3.10+):

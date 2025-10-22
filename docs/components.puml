@@ -1,0 +1,68 @@
+@startuml
+skinparam componentStyle rectangle
+skinparam wrapWidth 220
+title Multi-Agent Tutoring Flow
+
+package "Tutoring Specialists" {
+  component "IngestionAgent\n(ingest_corpus tool)" as IngestionAgent
+  component "QAAgent\n(retrieve_local_context tool)" as QAAgent
+  component "WebAgent\n(web_search tool)" as WebAgent
+}
+
+component "TutorAgent" as TutorAgent
+component "Runner.run_streamed" as Runner
+component "TutorSystem.answer_question" as AnswerQuestion
+
+AnswerQuestion --> TutorAgent : build prompt
+TutorAgent --> QAAgent : attempt local evidence
+QAAgent --> WebAgent : fallback when needed
+QAAgent --> Runner : stream local answer
+WebAgent --> Runner : stream web answer
+Runner --> AnswerQuestion : final TutorResponse
+
+note right of QAAgent
+  Uses Retriever + VectorStore for
+  high-confidence chunk selection.
+end note
+
+note right of WebAgent
+  Calls SearchTool (OpenAI web search)
+  and returns URL-based citations.
+end note
+
+@enduml
+
+@startuml
+skinparam componentStyle rectangle
+skinparam wrapWidth 220
+title Ingestion & Retrieval Components
+
+actor User
+component "CLI `ai-tutor ingest`" as CLI
+component "IngestionPipeline" as Ingestion
+component "Parsers" as Parsers
+component "Chunker" as Chunker
+component "EmbeddingClient" as EmbeddingClient
+component "VectorStore" as VectorStore
+component "ChunkJsonlStore" as ChunkStore
+database "embeddings.npy" as EmbeddingsFile
+database "metadata.json" as MetadataFile
+database "chunks.jsonl" as ChunksFile
+
+User --> CLI : choose corpus directory
+CLI --> Ingestion : ingest_directory(Path)
+Ingestion --> Parsers : normalize raw files
+Parsers --> Chunker : plain text
+Chunker --> EmbeddingClient : chunk batches
+EmbeddingClient --> VectorStore : store vectors
+VectorStore --> EmbeddingsFile
+VectorStore --> MetadataFile
+Ingestion --> ChunkStore : upsert chunks
+ChunkStore --> ChunksFile
+
+note right of EmbeddingClient
+  Prefers sentence-transformers locally;
+  falls back to CPU when GPU unsupported.
+end note
+
+@enduml

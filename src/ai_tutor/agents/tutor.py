@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -10,18 +9,15 @@ from typing import Callable, Dict, List, Optional
 
 from openai.types.responses import ResponseContentPartDoneEvent, ResponseTextDeltaEvent
 
-from agents import Agent, InputGuardrailTripwireTriggered, RawResponsesStreamEvent, Runner
+from agents import Agent, RawResponsesStreamEvent, Runner
 from agents import SQLiteSession
-from agents.tracing import trace
 
-from .guardrails import build_request_guardrail
 from .ingestion import build_ingestion_agent
 from .qa import build_qa_agent
-from .triage import build_triage_agent
 from .web import build_web_agent
 
 from ai_tutor.config.schema import RetrievalConfig
-from ai_tutor.data_models import Query, RetrievalHit
+from ai_tutor.data_models import RetrievalHit
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.retrieval.vector_store import VectorStore
@@ -40,6 +36,7 @@ class TutorResponse:
     style: str
     next_topic: Optional[str] = None
     difficulty: Optional[str] = None
+    source: Optional[str] = None
 
 
 @dataclass
@@ -76,26 +73,28 @@ class TutorAgent:
         self.ingestion_agent: Agent | None = None
         self.qa_agent: Agent | None = None
         self.web_agent: Agent | None = None
-        self.triage_agent: Agent | None = None
-        self.guardrail_agent: Agent | None = None
+        self.orchestrator_agent: Agent | None = None
 
         self._build_agents()
 
     def _build_agents(self) -> None:
-        """Instantiate ingestion, QA, web, and triage agents with shared tools."""
+        """Instantiate guardrail, QA, and web agents."""
 
-        guardrail_agent, request_guardrail = build_request_guardrail()
-        self.guardrail_agent = guardrail_agent
-
-        ingestion_agent = build_ingestion_agent(self.ingest_fn)
-        web_agent = build_web_agent(self.search_tool, self.state)
-        qa_agent = build_qa_agent(self.retriever, self.state, self.MIN_CONFIDENCE, handoffs=[web_agent])
-        triage_agent = build_triage_agent(ingestion_agent, qa_agent, request_guardrail)
-
-        self.ingestion_agent = ingestion_agent
-        self.qa_agent = qa_agent
-        self.web_agent = web_agent
-        self.triage_agent = triage_agent
+        self.ingestion_agent = build_ingestion_agent(self.ingest_fn)
+        self.web_agent = build_web_agent(self.search_tool, self.state)
+        self.qa_agent = build_qa_agent(self.retriever, self.state, self.MIN_CONFIDENCE, handoffs=[self.web_agent])
+        handoffs = [agent for agent in (self.ingestion_agent, self.qa_agent, self.web_agent) if agent is not None]
+        self.orchestrator_agent = Agent(
+            name="tutor_orchestrator",
+            instructions=(
+                "You orchestrate specialist agents for a tutoring system.\n"
+                "- For STEM questions, hand off to qa_agent so it can cite local materials.\n"
+                "- For non-STEM questions, hand off to web_agent for a web-sourced answer.\n"
+                "- If the user explicitly requests ingestion or indexing of files, hand off to ingestion_agent.\n"
+                "Never answer questions yourself—always hand off to the best specialist."
+            ),
+            handoffs=handoffs,
+        )
 
     def answer(
         self,
@@ -124,9 +123,6 @@ class TutorAgent:
         style_hint: str,
         on_delta: Optional[Callable[[str], None]],
     ) -> TutorResponse:
-        if self.triage_agent is None:
-            raise RuntimeError("Agents are not initialized.")
-
         session = self._get_session(learner_id)
         self.state.reset()
 
@@ -135,35 +131,11 @@ class TutorAgent:
             "Cite supporting evidence using bracketed indices or URLs when available."
         )
         prompt = f"{system_preamble}\n\nQuestion:\n{question}"
-
-        final_tokens: List[str] = []
-
-        try:
-            stream = Runner.run_streamed(
-                self.triage_agent,
-                input=prompt,
-                session=session,
-            )
-
-            with trace("Tutor session", metadata={"learner_id": learner_id, "mode": mode}):
-                async for event in stream.stream_events():
-                    if not isinstance(event, RawResponsesStreamEvent):
-                        continue
-                    data = event.data
-                    if isinstance(data, ResponseTextDeltaEvent):
-                        final_tokens.append(data.delta)
-                        if on_delta:
-                            on_delta(data.delta)
-                    elif isinstance(data, ResponseContentPartDoneEvent):
-                        if on_delta:
-                            on_delta("\n")
-        except InputGuardrailTripwireTriggered:
-            refusal = "Sorry, I can’t help with that request."
-            if on_delta:
-                on_delta(refusal + "\n")
-            return TutorResponse(answer=refusal, hits=[], citations=[], style=style_hint)
-
-        answer_text = "".join(final_tokens).strip()
+        answer_text = await self._run_specialist(
+            prompt,
+            session,
+            on_delta,
+        )
         answer_text = self._strip_citation_markers(answer_text) if not self.state.last_citations else answer_text
 
         return TutorResponse(
@@ -171,6 +143,7 @@ class TutorAgent:
             hits=self.state.last_hits,
             citations=self.state.last_citations,
             style=style_hint,
+            source=self.state.last_source,
         )
 
     def _get_session(self, learner_id: str) -> SQLiteSession:
@@ -180,11 +153,47 @@ class TutorAgent:
             self.sessions[learner_id] = session
         return session
 
-    def _reset_state(self) -> None:
-        self._last_hits = []
-        self._last_citations = []
-
     @staticmethod
     def _strip_citation_markers(answer: str) -> str:
         cleaned = re.sub(r"\[\s*\d+(?:\s*,\s*\d+)*\s*\]", "", answer)
         return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+    async def _run_specialist(
+        self,
+        prompt: str,
+        session: SQLiteSession,
+        on_delta: Optional[Callable[[str], None]],
+    ) -> str:
+        final_tokens: List[str] = []
+
+        agent_to_run = self.orchestrator_agent or self.qa_agent
+        stream = Runner.run_streamed(agent_to_run, input=prompt, session=session)
+        async for event in stream.stream_events():
+            if not isinstance(event, RawResponsesStreamEvent):
+                continue
+            data = event.data
+            if isinstance(data, ResponseTextDeltaEvent):
+                final_tokens.append(data.delta)
+                if on_delta:
+                    on_delta(data.delta)
+            elif isinstance(data, ResponseContentPartDoneEvent) and on_delta:
+                on_delta("\n")
+
+        if self.orchestrator_agent is None and not self.state.last_source and self.web_agent is not None:
+            if on_delta:
+                on_delta("[info] No local evidence, searching the web...\n")
+            self.state.reset()
+            final_tokens.clear()
+            stream = Runner.run_streamed(self.web_agent, input=prompt, session=session)
+            async for event in stream.stream_events():
+                if not isinstance(event, RawResponsesStreamEvent):
+                    continue
+                data = event.data
+                if isinstance(data, ResponseTextDeltaEvent):
+                    final_tokens.append(data.delta)
+                    if on_delta:
+                        on_delta(data.delta)
+                elif isinstance(data, ResponseContentPartDoneEvent) and on_delta:
+                    on_delta("\n")
+
+        return "".join(final_tokens).strip()

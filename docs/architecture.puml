@@ -8,7 +8,7 @@ actor User
 
 package "Entry Points" {
   component "CLI (`ai-tutor`)" as CLI
-  component "OpenAI Agents (ingest/tutor)" as AgentRunner
+  component "OpenAI Agents (demo / custom)" as AgentRunner
   component "Python API / Notebooks" as PythonAPI
 }
 
@@ -23,6 +23,8 @@ node "TutorSystem" as TutorSystem {
   component "ChunkJsonlStore" as ChunkStore
   component "Parsers" as Parsers
   component "Chunker" as Chunker
+  component "QA Agent" as QA
+  component "Web Agent" as Web
 }
 
 database "Vector Store Files\n(data/vector_store)" as VectorFS
@@ -54,11 +56,13 @@ VectorStore --> VectorFS : persist embeddings.npy + metadata.json
 Ingestion --> ChunkStore : upsert chunk JSONL
 ChunkStore --> ChunkFS : persist chunks.jsonl
 
-TutorAgent --> Retriever : retrieve local evidence
+TutorAgent --> QA : local evidence (if available)
+QA --> Retriever : retrieve local evidence
 Retriever --> EmbeddingClient : embed query
 Retriever --> VectorStore : cosine search
-TutorAgent --> SearchTool : web fallback
-TutorAgent --> OpenAIAgents : orchestrate multi-agent workflow
+TutorAgent --> Web : fallback when corpus empty
+Web --> SearchTool : hosted web search
+TutorAgent --> OpenAIAgents : stream responses
 
 note right of Ingestion
   1. Parse PDFs/Markdown/TXT via Parsers
@@ -67,8 +71,10 @@ note right of Ingestion
 end note
 
 note right of TutorAgent
-  Routes between ingestion, local QA, and web-search agents,
-  streaming answers while enforcing citation policy.
+  1. Attempt local retrieval (Retriever + VectorStore).
+  2. If confident hits exist, QA agent generates cited answer.
+  3. Otherwise Web agent queries hosted search for reputable snippets.
+  4. TutorAgent streams the result and personalization metadata back to callers.
 end note
 
 @enduml

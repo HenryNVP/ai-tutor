@@ -31,7 +31,7 @@ class TutorSystem:
         self.chunk_store = ChunkJsonlStore(settings.paths.chunks_index)
         self.progress_tracker = ProgressTracker(settings.paths.profiles_dir)
         self.personalizer = PersonalizationManager(self.progress_tracker)
-        self.search_tool = SearchTool(model=settings.model.name)
+        self.search_tool = SearchTool(model=settings.model.name, api_key=api_key)
 
         self.ingestion_pipeline = IngestionPipeline(
             settings=settings,
@@ -94,6 +94,8 @@ class TutorSystem:
             style_hint=style_hint,
             on_delta=on_delta,
         )
+        if response.source != "local":
+            return response
         domain = self.personalizer.infer_domain(response.hits)
         personalization = self.personalizer.record_interaction(
             profile=profile,
