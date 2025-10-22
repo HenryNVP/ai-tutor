@@ -113,6 +113,7 @@ class TutorAgent:
         mode: str,
         style_hint: str,
         profile: Optional[LearnerProfile] = None,
+        extra_context: Optional[str] = None,
         on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
         """Synchronously orchestrate the multi-agent run and produce a TutorResponse."""
@@ -123,6 +124,7 @@ class TutorAgent:
                 mode=mode,
                 style_hint=style_hint,
                 profile=profile,
+                extra_context=extra_context,
                 on_delta=on_delta,
             )
         )
@@ -134,6 +136,7 @@ class TutorAgent:
         mode: str,
         style_hint: str,
         profile: Optional[LearnerProfile],
+        extra_context: Optional[str],
         on_delta: Optional[Callable[[str], None]],
     ) -> TutorResponse:
         session = self._get_session(learner_id)
@@ -143,11 +146,22 @@ class TutorAgent:
             f"Learner mode: {mode}. Preferred explanation style: {style_hint}. "
             "Cite supporting evidence using bracketed indices or URLs when available."
         )
-        profile_block = ""
-        if profile:
-            profile_block = f"Learner profile summary:\n{self._render_profile_summary(profile)}\n\n"
+        prompt_sections: List[str] = [system_preamble, ""]
 
-        prompt = f"{system_preamble}\n\n{profile_block}Question:\n{question}"
+        if profile:
+            prompt_sections.append("Learner profile summary:")
+            prompt_sections.append(self._render_profile_summary(profile))
+            prompt_sections.append("")
+
+        if extra_context:
+            prompt_sections.append("Session documents:")
+            prompt_sections.append(extra_context)
+            prompt_sections.append("")
+
+        prompt_sections.append("Question:")
+        prompt_sections.append(question)
+        prompt = "\n".join(prompt_sections)
+
         answer_text = await self._run_specialist(
             prompt,
             session,

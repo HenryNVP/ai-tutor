@@ -76,6 +76,7 @@ class TutorSystem:
         learner_id: str,
         question: str,
         mode: str = "learning",
+        extra_context: Optional[str] = None,
         on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
         """
@@ -94,6 +95,7 @@ class TutorSystem:
             mode=mode,
             style_hint=style_hint,
             profile=profile,
+            extra_context=extra_context,
             on_delta=on_delta,
         )
         if response.source != "local":
