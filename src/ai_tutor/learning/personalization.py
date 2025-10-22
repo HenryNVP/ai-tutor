@@ -1,6 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, Optional, Sequence
 
 from ai_tutor.learning.models import LearnerProfile
 from ai_tutor.learning.planner import UNIT_LIBRARY
@@ -10,19 +9,9 @@ from ai_tutor.learning.progress import ProgressTracker
 class PersonalizationManager:
     """Coordinate learner memory, mastery tracking, and adaptive preferences."""
 
-    def __init__(self, tracker: ProgressTracker, max_history: int = 10):
-        """
-        Store the shared progress tracker and configure session history limits.
-
-        Parameters
-        ----------
-        tracker:
-            Persistence layer for learner profiles.
-        max_history:
-            Maximum number of past interactions retained per learner.
-        """
+    def __init__(self, tracker: ProgressTracker):
+        """Store the shared progress tracker used for learner profiles."""
         self.tracker = tracker
-        self.max_history = max_history
 
     def load_profile(self, learner_id: str, name: Optional[str] = None) -> LearnerProfile:
         """Fetch an existing profile or initialize a new one for the learner."""
@@ -31,12 +20,6 @@ class PersonalizationManager:
     def save_profile(self, profile: LearnerProfile) -> None:
         """Persist the learner profile to disk."""
         self.tracker.save_profile(profile)
-
-    def get_session_history(self, profile: LearnerProfile, limit: int = 3) -> List[Dict[str, str]]:
-        """Return the most recent question/answer pairs for prompt grounding."""
-        if not profile.session_history:
-            return []
-        return profile.session_history[-limit:]
 
     def infer_domain(self, hits: Sequence, fallback: Optional[str] = None) -> Optional[str]:
         """Derive a domain label from retrieval hits or fall back to a provided default."""
@@ -76,7 +59,6 @@ class PersonalizationManager:
 
         Returns a small payload describing the suggested next topic and difficulty label.
         """
-        self._append_history(profile, question, answer, citations)
         if not domain:
             return {"next_topic": None, "difficulty": None}
 
@@ -95,26 +77,6 @@ class PersonalizationManager:
             )
 
         return {"next_topic": next_topic, "difficulty": difficulty}
-
-    def _append_history(
-        self,
-        profile: LearnerProfile,
-        question: str,
-        answer: str,
-        citations: Sequence[str],
-    ) -> None:
-        """Add an interaction snapshot to the learner's session history."""
-        profile.session_history.append(
-            {
-                "timestamp": datetime.utcnow().isoformat(),
-                "question": question,
-                "answer": answer,
-                "citations": list(citations),
-            }
-        )
-        overflow = len(profile.session_history) - self.max_history
-        if overflow > 0:
-            profile.session_history = profile.session_history[overflow:]
 
     def _choose_next_topic(self, profile: LearnerProfile, domain: str) -> Optional[str]:
         """Suggest the next topic within the domain based on the learner's mastery gaps."""

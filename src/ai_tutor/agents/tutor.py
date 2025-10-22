@@ -208,14 +208,6 @@ class TutorAgent:
         if profile.next_topics:
             next_topics = ", ".join(f"{domain}: {topic}" for domain, topic in list(profile.next_topics.items())[:3])
             lines.append(f"Upcoming topics: {next_topics}")
-        if profile.session_history:
-            recent = profile.session_history[-3:]
-            summaries = []
-            for item in recent:
-                question = item.get("question", "").strip()
-                answer = item.get("answer", "").strip()
-                summaries.append(f"Q: {question[:120]} | A: {answer[:120]}")
-            lines.append("Recent interactions: " + " ; ".join(summaries))
         return "\n".join(lines)
 
     async def _run_specialist(
