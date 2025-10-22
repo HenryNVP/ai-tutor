@@ -94,8 +94,8 @@ def ask(
         console.print("\n[bold]Citations[/bold]")
         for citation in response.citations:
             console.print(f"- {citation}")
-    console.print("\n[bold]Personalization[/bold]")
-    console.print(f"Style: {response.style}")
+    # console.print("\n[bold]Personalization[/bold]")
+    # console.print(f"Style: {response.style}")
     if response.difficulty:
         console.print(f"Difficulty focus: {response.difficulty}")
     if response.next_topic:

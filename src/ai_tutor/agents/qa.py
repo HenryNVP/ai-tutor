@@ -56,7 +56,7 @@ def build_qa_agent(
         name="qa_agent",
         instructions=(
             "Answer learner questions using the local corpus. "
-            "Call retrieve_local_context to gather relevant chunks and cite them with [index] notation. "
+            "Call retrieve_local_context to gather relevant chunks and cite them at the end. "
             "If the tool returns no useful context, hand off to web_agent."
         ),
         tools=[retrieve_local_context],
