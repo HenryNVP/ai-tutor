@@ -19,6 +19,7 @@ from .web import build_web_agent
 from ai_tutor.config.schema import RetrievalConfig
 from ai_tutor.data_models import RetrievalHit
 from ai_tutor.ingestion.embeddings import EmbeddingClient
+from ai_tutor.learning.models import LearnerProfile
 from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.retrieval.vector_store import VectorStore
 from ai_tutor.search.tool import SearchTool
@@ -63,12 +64,14 @@ class TutorAgent:
         vector_store: VectorStore,
         search_tool: SearchTool,
         ingest_directory: Callable[[Path], object],
+        session_db_path: Path,
     ):
         self.retriever = Retriever(retrieval_config, embedder=embedder, vector_store=vector_store)
         self.search_tool = search_tool
         self.ingest_fn = ingest_directory
         self.sessions: Dict[str, SQLiteSession] = {}
         self.state = AgentState()
+        self.session_db_path = session_db_path
 
         self.ingestion_agent: Agent | None = None
         self.qa_agent: Agent | None = None
@@ -89,6 +92,8 @@ class TutorAgent:
             instructions=(
                 "You are the orchestrator agent in a multi-agent tutoring system. Your job is to decide whether to answer a query yourself or delegate it to a specialist agent.\n\n"
 
+                "You are given a learner profile summary and the current learner question. Use the profile to tailor your decision and, when answering directly, personalize the response.\n\n"
+
                 "Follow these rules:\n"
                 "- If the question is about the tutoring system itself, the student profile, learning progress, progress history, or general/common knowledge, you should answer directly.\n"
                 "- If the question involves STEM content (math, science, coding, etc.) and may benefit from local course materials or citations, hand it off to the `qa_agent`.\n"
@@ -107,6 +112,7 @@ class TutorAgent:
         question: str,
         mode: str,
         style_hint: str,
+        profile: Optional[LearnerProfile] = None,
         on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
         """Synchronously orchestrate the multi-agent run and produce a TutorResponse."""
@@ -116,6 +122,7 @@ class TutorAgent:
                 question=question,
                 mode=mode,
                 style_hint=style_hint,
+                profile=profile,
                 on_delta=on_delta,
             )
         )
@@ -126,6 +133,7 @@ class TutorAgent:
         question: str,
         mode: str,
         style_hint: str,
+        profile: Optional[LearnerProfile],
         on_delta: Optional[Callable[[str], None]],
     ) -> TutorResponse:
         session = self._get_session(learner_id)
@@ -135,7 +143,11 @@ class TutorAgent:
             f"Learner mode: {mode}. Preferred explanation style: {style_hint}. "
             "Cite supporting evidence using bracketed indices or URLs when available."
         )
-        prompt = f"{system_preamble}\n\nQuestion:\n{question}"
+        profile_block = ""
+        if profile:
+            profile_block = f"Learner profile summary:\n{self._render_profile_summary(profile)}\n\n"
+
+        prompt = f"{system_preamble}\n\n{profile_block}Question:\n{question}"
         answer_text = await self._run_specialist(
             prompt,
             session,
@@ -154,7 +166,10 @@ class TutorAgent:
     def _get_session(self, learner_id: str) -> SQLiteSession:
         session = self.sessions.get(learner_id)
         if session is None:
-            session = SQLiteSession(f"ai_tutor_{learner_id}")
+            session = SQLiteSession(
+                f"ai_tutor_{learner_id}",
+                db_path=str(self.session_db_path),
+            )
             self.sessions[learner_id] = session
         return session
 
@@ -162,6 +177,32 @@ class TutorAgent:
     def _strip_citation_markers(answer: str) -> str:
         cleaned = re.sub(r"\[\s*\d+(?:\s*,\s*\d+)*\s*\]", "", answer)
         return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+    @staticmethod
+    def _render_profile_summary(profile: LearnerProfile) -> str:
+        lines = [
+            f"Name: {profile.name or profile.learner_id}",
+            f"Total study time (minutes): {profile.total_time_minutes:.1f}",
+        ]
+        if profile.domain_strengths:
+            strengths = sorted(profile.domain_strengths.items(), key=lambda item: item[1], reverse=True)[:3]
+            strength_lines = ", ".join(f"{domain}: {score:.2f}" for domain, score in strengths)
+            lines.append(f"Domain strengths: {strength_lines}")
+        if profile.difficulty_preferences:
+            prefs = ", ".join(f"{domain}: {pref}" for domain, pref in list(profile.difficulty_preferences.items())[:3])
+            lines.append(f"Difficulty preferences: {prefs}")
+        if profile.next_topics:
+            next_topics = ", ".join(f"{domain}: {topic}" for domain, topic in list(profile.next_topics.items())[:3])
+            lines.append(f"Upcoming topics: {next_topics}")
+        if profile.session_history:
+            recent = profile.session_history[-3:]
+            summaries = []
+            for item in recent:
+                question = item.get("question", "").strip()
+                answer = item.get("answer", "").strip()
+                summaries.append(f"Q: {question[:120]} | A: {answer[:120]}")
+            lines.append("Recent interactions: " + " ; ".join(summaries))
+        return "\n".join(lines)
 
     async def _run_specialist(
         self,

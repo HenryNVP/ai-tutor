@@ -45,6 +45,7 @@ class TutorSystem:
             vector_store=self.vector_store,
             search_tool=self.search_tool,
             ingest_directory=self.ingest_directory,
+            session_db_path=settings.paths.processed_data_dir / "sessions.sqlite",
         )
 
     @classmethod
@@ -92,6 +93,7 @@ class TutorSystem:
             question=question,
             mode=mode,
             style_hint=style_hint,
+            profile=profile,
             on_delta=on_delta,
         )
         if response.source != "local":
