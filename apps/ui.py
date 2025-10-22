@@ -191,3 +191,7 @@ __all__ = [
     "format_answer",
     "render",
 ]
+
+
+if __name__ == "__main__":
+    render()

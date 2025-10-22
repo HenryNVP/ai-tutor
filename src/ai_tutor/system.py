@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
+from ai_tutor.agents.llm_client import LLMClient
 from ai_tutor.agents.tutor import TutorAgent, TutorResponse
 from ai_tutor.config import Settings, load_settings
 from ai_tutor.ingestion import IngestionPipeline
 from ai_tutor.ingestion.embeddings import EmbeddingClient
-from ai_tutor.learning import PersonalizationManager, ProgressTracker
+from ai_tutor.learning import PersonalizationManager, ProgressTracker, QuizService
+from ai_tutor.learning.quiz import Quiz, QuizEvaluation
 from ai_tutor.retrieval import create_vector_store
+from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.search.tool import SearchTool
 from ai_tutor.storage import ChunkJsonlStore
 from ai_tutor.utils.files import collect_documents
@@ -31,7 +34,14 @@ class TutorSystem:
         self.chunk_store = ChunkJsonlStore(settings.paths.chunks_index)
         self.progress_tracker = ProgressTracker(settings.paths.profiles_dir)
         self.personalizer = PersonalizationManager(self.progress_tracker)
+        self.llm_client = LLMClient(settings.model, api_key=api_key)
         self.search_tool = SearchTool(model=settings.model.name, api_key=api_key)
+        quiz_retriever = Retriever(settings.retrieval, embedder=self.embedder, vector_store=self.vector_store)
+        self.quiz_service = QuizService(
+            retriever=quiz_retriever,
+            llm_client=self.llm_client,
+            progress_tracker=self.progress_tracker,
+        )
 
         self.ingestion_pipeline = IngestionPipeline(
             settings=settings,
@@ -46,6 +56,7 @@ class TutorSystem:
             search_tool=self.search_tool,
             ingest_directory=self.ingest_directory,
             session_db_path=settings.paths.processed_data_dir / "sessions.sqlite",
+            quiz_service=self.quiz_service,
         )
 
     @classmethod
@@ -112,3 +123,50 @@ class TutorSystem:
         response.next_topic = personalization.get("next_topic")
         response.difficulty = personalization.get("difficulty")
         return response
+
+    def generate_quiz(
+        self,
+        learner_id: str,
+        topic: str,
+        num_questions: int = 4,
+        extra_context: Optional[str] = None,
+    ) -> Quiz:
+        """Produce a multiple-choice quiz tailored to the learner and topic."""
+        profile = self.personalizer.load_profile(learner_id)
+        style = self.personalizer.select_style(profile, None)
+        difficulty = self._style_to_difficulty(style)
+        quiz = self.tutor_agent.create_quiz(
+            topic=topic,
+            profile=profile,
+            num_questions=num_questions,
+            difficulty=difficulty,
+            extra_context=extra_context,
+        )
+        self.personalizer.save_profile(profile)
+        return quiz
+
+    def evaluate_quiz(
+        self,
+        learner_id: str,
+        quiz_payload: Quiz | dict,
+        answers: List[int],
+    ) -> QuizEvaluation:
+        """Evaluate a learner's quiz submission, returning detailed feedback."""
+        profile = self.personalizer.load_profile(learner_id)
+        quiz = quiz_payload if isinstance(quiz_payload, Quiz) else Quiz.model_validate(quiz_payload)
+        evaluation = self.tutor_agent.evaluate_quiz(
+            quiz=quiz,
+            answers=answers,
+            profile=profile,
+        )
+        self.personalizer.save_profile(profile)
+        return evaluation
+
+    @staticmethod
+    def _style_to_difficulty(style: str) -> str:
+        mapping = {
+            "scaffolded": "foundational",
+            "stepwise": "guided",
+            "concise": "advanced",
+        }
+        return mapping.get(style, "balanced")

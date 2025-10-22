@@ -20,6 +20,7 @@ from ai_tutor.config.schema import RetrievalConfig
 from ai_tutor.data_models import RetrievalHit
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.learning.models import LearnerProfile
+from ai_tutor.learning.quiz import Quiz, QuizEvaluation, QuizService
 from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.retrieval.vector_store import VectorStore
 from ai_tutor.search.tool import SearchTool
@@ -65,6 +66,7 @@ class TutorAgent:
         search_tool: SearchTool,
         ingest_directory: Callable[[Path], object],
         session_db_path: Path,
+        quiz_service: QuizService,
     ):
         self.retriever = Retriever(retrieval_config, embedder=embedder, vector_store=vector_store)
         self.search_tool = search_tool
@@ -72,6 +74,7 @@ class TutorAgent:
         self.sessions: Dict[str, SQLiteSession] = {}
         self.state = AgentState()
         self.session_db_path = session_db_path
+        self.quiz_service = quiz_service
 
         self.ingestion_agent: Agent | None = None
         self.qa_agent: Agent | None = None
@@ -104,6 +107,38 @@ class TutorAgent:
                 "When unsure, favor delegation over direct response unless the query clearly falls within your scope."
             ),
             handoffs=handoffs,
+        )
+
+    def create_quiz(
+        self,
+        *,
+        topic: str,
+        profile: Optional[LearnerProfile],
+        num_questions: int = 4,
+        difficulty: Optional[str] = None,
+        extra_context: Optional[str] = None,
+    ) -> Quiz:
+        """Generate a multiple-choice quiz tailored to the learner."""
+        return self.quiz_service.generate_quiz(
+            topic=topic,
+            profile=profile,
+            num_questions=num_questions,
+            difficulty=difficulty,
+            extra_context=extra_context,
+        )
+
+    def evaluate_quiz(
+        self,
+        *,
+        quiz: Quiz,
+        answers: List[int],
+        profile: Optional[LearnerProfile],
+    ) -> QuizEvaluation:
+        """Score a learner's quiz submission and return detailed feedback."""
+        return self.quiz_service.evaluate_quiz(
+            quiz=quiz,
+            answers=answers,
+            profile=profile,
         )
 
     def answer(
