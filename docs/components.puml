@@ -32,7 +32,8 @@ note right of Orchestrator
   • Upload → ingestion_agent
   • "Generate quiz" → QuizService tool
   
-  Only answers directly:
+  Answers directly:
+  • "General knowledge"
   • "What can you do?"
   • "What's my progress?"
   • Greetings
