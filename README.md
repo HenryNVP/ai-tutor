@@ -194,13 +194,6 @@ DEBUG logs show:
 - Session creation and rotation  
 - Profile updates after quizzes
 
-## Command-Line Interface
-
-```bash
-ai-tutor --help
-ai-tutor ingest ./data/raw
-ai-tutor ask student123 "your question here"
-```
 
 ## Technical Notes
 

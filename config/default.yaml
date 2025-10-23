@@ -31,7 +31,7 @@ paths:
   profiles_dir: "data/processed/profiles"
 
 logging:
-  level: "INFO"
+  level: DEBUG  # See agent handoffs, tool calls, profile updates
   use_json: false
 
 course_defaults:
