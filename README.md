@@ -20,17 +20,12 @@ export OPENAI_API_KEY=your_key_here
 ### Basic Usage
 
 ```bash
-# Ingest documents
-ai-tutor ingest ./data/raw
-
-# Ask questions (with citations!)
-ai-tutor ask student123 "What is the Bernoulli equation?"
-
-# Run quiz app (Streamlit interface)
-streamlit run apps/quiz.py
-
-# Run web interface
+# Start the web UI (includes Q&A, quiz, and file upload)
 python scripts/tutor_web.py
+
+# Or use CLI
+ai-tutor ingest ./data/raw
+ai-tutor ask student123 "What is the Bernoulli equation?"
 ```
 
 ### Python API
@@ -105,55 +100,27 @@ src/ai_tutor/
 └── system.py         # Main TutorSystem facade
 ```
 
-## Quiz System
+## Web UI Features
 
-### Generate Personalized Quizzes
+The web interface (`python scripts/tutor_web.py`) includes:
 
-The system creates quizzes adapted to learner level:
+### Q&A with Citations
+- Ask STEM questions and get cited answers
+- Upload documents for temporary context
+- Conversation history with session management
 
-```python
-quiz = system.generate_quiz(
-    learner_id="student123",
-    topic="Newton's laws of motion",
-    num_questions=4
-)
-
-# Quiz includes:
-# - 4 multiple choice questions
-# - Correct answer indices
-# - Explanations for each answer
-# - References to course materials
-```
-
-### Automatic Profile Updates
-
-Quiz results automatically update learner profiles:
-
-| Score | Strength Δ | Struggle Δ | Difficulty Level |
-|-------|-----------|-----------|------------------|
-| ≥70%  | +0.12     | -0.08     | Independent challenge |
-| 40-69%| +0.06     | 0.00      | Guided practice |
-| <40%  | +0.02     | +0.10     | Foundational guidance |
-
-Profiles track:
-- Domain strengths and struggles (0.0-1.0 scale)
-- Questions answered correctly per domain
-- Total study time
-- Preferred difficulty level
-
-### Quiz App UI
-
-Run the Streamlit interface:
-
-```bash
-streamlit run apps/quiz.py
-```
-
-Features:
+### Interactive Quizzes
 - Generate quizzes on any topic
-- Real-time profile display in sidebar
-- Detailed feedback with explanations
-- Automatic profile updates based on quiz performance
+- Multiple choice questions with explanations
+- Automatic profile updates based on score:
+  - ≥70%: Independent challenge level
+  - 40-69%: Guided practice level
+  - <40%: Foundational guidance level
+
+### Learner Profiles
+- Tracks strengths and struggles per domain
+- Records study time and questions mastered
+- Adapts difficulty based on performance
 
 ## Session Management
 
@@ -212,7 +179,6 @@ data/
 ```
 
 ## Test handoff behavior with DEBUG logging
-### Logging
 
 Set log level in `config/default.yaml`:
 
@@ -228,7 +194,9 @@ DEBUG logs show:
 - Session creation and rotation  
 - Profile updates after quizzes
 
+## Command-Line Interface
 
+```bash
 ai-tutor --help
 ai-tutor ingest ./data/raw
 ai-tutor ask student123 "your question here"
@@ -238,9 +206,7 @@ ai-tutor ask student123 "your question here"
 
 ### Models
 
-
 All agents use **gpt-4o-mini**:
-
 
 ### Agent Behavior
 
@@ -255,36 +221,7 @@ All agents use **gpt-4o-mini**:
 - Prevents unbounded context growth
 - SQLite persistence across restarts
 
-## Requirements
-
-- Python 3.10+
-- OpenAI API key
-- Dependencies in `requirements.txt`
 
 ## License
 
 MIT
-
-## Project Structure
-
-```
-ai-tutor/
-├── apps/
-│   ├── quiz.py              # Streamlit quiz interface
-│   └── ui.py                # Additional UI components
-├── scripts/
-│   ├── clear_sessions.py    # Session management CLI
-│   └── tutor_web.py         # Web interface
-├── src/ai_tutor/
-│   ├── agents/              # Multi-agent system
-│   ├── learning/            # Quiz & personalization
-│   ├── retrieval/           # Vector store & search
-│   ├── ingestion/           # Document processing
-│   └── system.py            # Main TutorSystem
-├── config/
-│   └── default.yaml         # Configuration
-└── data/
-    ├── raw/                 # Original documents
-    ├── processed/           # Chunks, profiles, sessions
-    └── vector_store/        # Embeddings
-```
