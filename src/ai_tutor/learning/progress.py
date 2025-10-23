@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
-from typing import Dict
 
-from ai_tutor.learning.models import AttemptRecord, LearnerProfile
+from ai_tutor.learning.models import LearnerProfile
 
 
 class ProgressTracker:
@@ -27,22 +25,12 @@ class ProgressTracker:
             return LearnerProfile(learner_id=learner_id, name=name or learner_id)
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
-        attempts = [
-            AttemptRecord(
-                assessment_title=record["assessment_title"],
-                timestamp=datetime.fromisoformat(record["timestamp"]),
-                score=record["score"],
-                responses=record.get("responses", {}),
-            )
-            for record in data.get("attempts", [])
-        ]
         profile = LearnerProfile(
             learner_id=data["learner_id"],
             name=data["name"],
             domain_strengths=data.get("domain_strengths", {}),
             domain_struggles=data.get("domain_struggles", {}),
             concepts_mastered=data.get("concepts_mastered", {}),
-            attempts=attempts,
             total_time_minutes=data.get("total_time_minutes", 0.0),
             next_topics=data.get("next_topics", {}),
             difficulty_preferences=data.get("difficulty_preferences", {}),
@@ -50,7 +38,7 @@ class ProgressTracker:
         return profile
 
     def save_profile(self, profile: LearnerProfile) -> None:
-        """Serialize the learner profile (including attempts) back to disk."""
+        """Serialize the learner profile back to disk."""
         path = self.profile_path(profile.learner_id)
         serialized = {
             "learner_id": profile.learner_id,
@@ -61,45 +49,9 @@ class ProgressTracker:
             "total_time_minutes": profile.total_time_minutes,
             "next_topics": profile.next_topics,
             "difficulty_preferences": profile.difficulty_preferences,
-            "attempts": [
-                {
-                    "assessment_title": attempt.assessment_title,
-                    "timestamp": attempt.timestamp.isoformat(),
-                    "score": attempt.score,
-                    "responses": attempt.responses,
-                }
-                for attempt in profile.attempts
-            ],
         }
         with path.open("w", encoding="utf-8") as handle:
             json.dump(serialized, handle, indent=2)
-
-    def record_attempt(
-        self,
-        profile: LearnerProfile,
-        assessment_title: str,
-        score: float,
-        responses: Dict[str, str] | None = None,
-        concepts: Dict[str, float] | None = None,
-    ) -> LearnerProfile:
-        """
-        Append an assessment attempt and adjust mastery deltas on the profile.
-
-        Creates a timestamped `AttemptRecord`, extends the profile's attempt list, and
-        optionally updates concept mastery scores with bounded deltas.
-        """
-        record = AttemptRecord(
-            assessment_title=assessment_title,
-            timestamp=datetime.utcnow(),
-            score=score,
-            responses=responses or {},
-        )
-        profile.attempts.append(record)
-        if concepts:
-            for concept, delta in concepts.items():
-                current = profile.concepts_mastered.get(concept, 0.0)
-                profile.concepts_mastered[concept] = max(0.0, min(1.0, current + delta))
-        return profile
 
     def update_time_on_task(self, profile: LearnerProfile, minutes: float) -> LearnerProfile:
         """Accumulate minutes spent learning onto the profile's time counter."""

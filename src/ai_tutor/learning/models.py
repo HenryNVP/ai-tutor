@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Dict, List, Optional
 
 
@@ -61,16 +60,6 @@ class Assessment:
 
 
 @dataclass
-class AttemptRecord:
-    """Learner's recorded attempt at an assessment with score and responses."""
-
-    assessment_title: str
-    timestamp: datetime
-    score: float
-    responses: Dict[str, str]
-
-
-@dataclass
 class LearnerProfile:
     """Aggregated learner state capturing skills, history, and time on task."""
 
@@ -79,7 +68,6 @@ class LearnerProfile:
     domain_strengths: Dict[str, float] = field(default_factory=dict)
     domain_struggles: Dict[str, float] = field(default_factory=dict)
     concepts_mastered: Dict[str, float] = field(default_factory=dict)
-    attempts: List[AttemptRecord] = field(default_factory=list)
     total_time_minutes: float = 0.0
     next_topics: Dict[str, str] = field(default_factory=dict)
     difficulty_preferences: Dict[str, str] = field(default_factory=dict)

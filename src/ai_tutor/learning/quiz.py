@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from pydantic import BaseModel, Field, ValidationError, validator
 
@@ -257,27 +257,6 @@ class QuizService:
 
         total = len(quiz.questions)
         score = correct / total if total else 0.0
-
-        if profile is not None:
-            attempt_responses: Dict[str, str] = {}
-            for idx, question in enumerate(quiz.questions):
-                selected_idx = (
-                    submitted[idx] if 0 <= submitted[idx] < len(question.choices) else None
-                )
-                selected_label = (
-                    question.choices[selected_idx] if selected_idx is not None else "unanswered"
-                )
-                correct_label = question.choices[question.correct_index]
-                attempt_responses[f"Q{idx + 1}"] = (
-                    f"selected={selected_label} | correct={correct_label}"
-                )
-            # Record aggregate attempt for future personalization.
-            self.progress_tracker.record_attempt(
-                profile=profile,
-                assessment_title=f"{quiz.topic} Quiz",
-                score=score,
-                responses=attempt_responses,
-            )
 
         return QuizEvaluation(
             topic=topic or quiz.topic,
