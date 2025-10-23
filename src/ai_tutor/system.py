@@ -162,6 +162,11 @@ class TutorSystem:
         self.personalizer.save_profile(profile)
         return evaluation
 
+    def clear_conversation_history(self, learner_id: str) -> None:
+        """Clear the conversation session history for a learner to prevent token overflow."""
+        self.tutor_agent.clear_session(learner_id)
+        logger.info(f"Cleared conversation history for learner: {learner_id}")
+
     @staticmethod
     def _style_to_difficulty(style: str) -> str:
         mapping = {

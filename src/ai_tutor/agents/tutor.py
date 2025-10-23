@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 import json
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -122,24 +123,47 @@ class TutorAgent:
         handoffs = [agent for agent in (self.ingestion_agent, self.qa_agent, self.web_agent) if agent is not None]
         self.orchestrator_agent = Agent(
             name="tutor_orchestrator",
+            model="gpt-4o-mini",
             instructions=(
                 "You are the orchestrator agent in a multi-agent tutoring system. Your job is to decide whether to answer a query yourself or delegate it to a specialist agent.\n\n"
+                "ROUTING RULES:\n\n"
 
-                "You are given a learner profile summary and the current learner question. Use the profile to tailor your decision and, when answering directly, personalize the response.\n\n"
+                "STEM Questions → qa_agent\n"
+                "If the question is about:\n"
+                "- Math (equations, formulas, calculations, proofs)\n"
+                "- Physics (laws, forces, energy, motion, thermodynamics, etc.)\n"
+                "- Chemistry (reactions, molecules, elements, bonds)\n"
+                "- Biology (cells, genetics, organisms, photosynthesis)\n"
+                "- Engineering (circuits, structures, systems)\n"
+                "- Computer Science (algorithms, data structures, programming)\n"
+                "- Any technical or scientific concept, definition, or explanation\n"
+                "→ IMMEDIATELY hand off to qa_agent\n\n"
 
-                "You have access to these resources:\n"
-                "- Tool `generate_quiz(topic: str, count: int = 4, difficulty: str | None)` which prepares an interactive quiz for the learner.\n"
-                "- Specialist agents: ingestion_agent, qa_agent, web_agent.\n\n"
+                "Current Events / Non-STEM → web_agent\n"
+                "- Recent news, current events, politics\n"
+                "- History, literature, arts\n"
+                "- Anything requiring up-to-date information\n"
+                "→ Hand off to web_agent\n\n"
 
-                "Follow these rules:\n"
-                "- If the question is about the tutoring system itself, the student profile, learning progress, progress history, or general/common knowledge, you should answer directly.\n"
-                "- If the question involves STEM content (math, science, coding, etc.) and may benefit from local course materials or citations, hand it off to the `qa_agent`.\n"
-                "- If the question is non-STEM (e.g., literature, history, current events), or clearly requires external information, hand it off to the `web_agent` for a web-based answer.\n"
-                "- If the user explicitly asks to upload, ingest, or index files, hand it off to the `ingestion_agent`.\n"
-                "- If a learner explicitly asks for a quiz, practice exam, or a set of questions, you must call the `generate_quiz` tool. Extract the subject/topic and desired number of questions from the request when possible (default to 4 questions if unspecified). Never fabricate quiz questions yourself. After the tool succeeds, reply with a concise summary letting the learner know the quiz is ready in the companion interface.\n"
-                "- Always prioritize delegating to the most relevant specialist agent.\n\n"
+                "File Upload → ingestion_agent\n"
+                "- User wants to upload, ingest, or add documents\n"
+                "→ Hand off to ingestion_agent\n\n"
 
-                "When unsure, favor delegation over direct response unless the query clearly falls within your scope."
+                "Quiz Request → Use generate_quiz tool\n"
+                "- User asks for quiz, test, practice questions\n"
+                "→ Call generate_quiz(topic, count)\n\n"
+
+                "ONLY Answer Directly:\n"
+                "- 'What can you help with?' or system capability questions\n"
+                "- 'What's my progress?' or profile questions\n"
+                "- 'Hello' or greetings\n\n"
+
+                "CRITICAL RULES:\n"
+                "- DO NOT try to answer STEM questions yourself\n"
+                "- DO NOT explain concepts directly\n"
+                "- Your job is ROUTING, not answering\n"
+                "- If unsure, hand off to qa_agent\n"
+                "- Example: 'What is the Bernoulli equation?' → Hand off to qa_agent immediately"
             ),
             tools=[generate_quiz],
             handoffs=handoffs,
@@ -213,25 +237,38 @@ class TutorAgent:
         session = self._get_session(learner_id)
         self.state.reset()
 
-        system_preamble = (
-            f"Learner mode: {mode}. Preferred explanation style: {style_hint}. "
-            "Cite supporting evidence using bracketed indices or URLs when available."
-        )
-        prompt_sections: List[str] = [system_preamble, ""]
+        # For orchestrator: minimal prompt with just the question
+        # The specialist agents will get the full context with style hints
+        if self.orchestrator_agent:
+            prompt_sections: List[str] = []
+            if profile:
+                prompt_sections.append("Learner profile summary:")
+                prompt_sections.append(self._render_profile_summary(profile))
+                prompt_sections.append("")
+            prompt_sections.append("Question:")
+            prompt_sections.append(question)
+            prompt = "\n".join(prompt_sections)
+        else:
+            # Fallback for when orchestrator is not used
+            system_preamble = (
+                f"Learner mode: {mode}. Preferred explanation style: {style_hint}. "
+                "Cite supporting evidence using bracketed indices or URLs when available."
+            )
+            prompt_sections: List[str] = [system_preamble, ""]
 
-        if profile:
-            prompt_sections.append("Learner profile summary:")
-            prompt_sections.append(self._render_profile_summary(profile))
-            prompt_sections.append("")
+            if profile:
+                prompt_sections.append("Learner profile summary:")
+                prompt_sections.append(self._render_profile_summary(profile))
+                prompt_sections.append("")
 
-        if extra_context:
-            prompt_sections.append("Session documents:")
-            prompt_sections.append(extra_context)
-            prompt_sections.append("")
+            if extra_context:
+                prompt_sections.append("Session documents:")
+                prompt_sections.append(extra_context)
+                prompt_sections.append("")
 
-        prompt_sections.append("Question:")
-        prompt_sections.append(question)
-        prompt = "\n".join(prompt_sections)
+            prompt_sections.append("Question:")
+            prompt_sections.append(question)
+            prompt = "\n".join(prompt_sections)
 
         self._active_profile = profile
         self._active_extra_context = extra_context
@@ -296,14 +333,33 @@ class TutorAgent:
         )
 
     def _get_session(self, learner_id: str) -> SQLiteSession:
+        """Get or create a session for the learner with automatic rotation to prevent token overflow."""
+        # Use date-based session IDs to auto-rotate daily (prevents token accumulation)
+        # This limits context to same-day conversations
+        today = datetime.now().strftime("%Y%m%d")
+        session_key = f"ai_tutor_{learner_id}_{today}"
+        
         session = self.sessions.get(learner_id)
-        if session is None:
+        
+        # Create new session if none exists or if session key changed (new day)
+        if session is None or getattr(session, '_session_key', None) != session_key:
             session = SQLiteSession(
-                f"ai_tutor_{learner_id}",
+                session_key,
                 db_path=str(self.session_db_path),
             )
+            # Store session key for comparison
+            session._session_key = session_key  # type: ignore
             self.sessions[learner_id] = session
+            logger.debug(f"Created new session for {learner_id}: {session_key}")
+        
         return session
+    
+    def clear_session(self, learner_id: str) -> None:
+        """Clear the conversation history for a learner."""
+        if learner_id in self.sessions:
+            del self.sessions[learner_id]
+        # Note: This doesn't delete from SQLite, just removes from memory
+        # The session will start fresh on next question
 
     @staticmethod
     def _strip_citation_markers(answer: str) -> str:

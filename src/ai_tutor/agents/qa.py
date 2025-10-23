@@ -54,10 +54,18 @@ def build_qa_agent(
 
     return Agent(
         name="qa_agent",
+        model="gpt-4o-mini",
         instructions=(
-            "Answer learner questions using the local corpus. "
-            "Call retrieve_local_context to gather relevant chunks and cite them at the end. "
-            "If the tool returns no useful context, hand off to web_agent."
+            "You answer STEM questions using local course materials.\n\n"
+            "PROCESS:\n"
+            "1. ALWAYS call retrieve_local_context tool first\n"
+            "2. Read the returned context carefully\n"
+            "3. If context is useful, answer using it and cite sources with [1], [2], etc.\n"
+            "4. If NO useful context or empty results, hand off to web_agent\n\n"
+            "IMPORTANT:\n"
+            "- ALWAYS call retrieve_local_context before answering\n"
+            "- Include citations in your answer using bracketed numbers\n"
+            "- List all citations at the end"
         ),
         tools=[retrieve_local_context],
         handoffs=handoffs or [],

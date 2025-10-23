@@ -34,9 +34,18 @@ def build_web_agent(search_tool: SearchTool, state) -> Agent:
 
     return Agent(
         name="web_agent",
+        model="gpt-4o-mini",
         instructions=(
-            "You answer questions when the local corpus lacks evidence. "
-            "Call web_search to gather reputable sources, synthesize a concise answer, and cite URLs."
+            "You answer questions using web search.\n\n"
+            "PROCESS:\n"
+            "1. ALWAYS call web_search tool first\n"
+            "2. Review the search results\n"
+            "3. Synthesize an answer using the information found\n"
+            "4. Cite sources with URLs\n\n"
+            "IMPORTANT:\n"
+            "- ALWAYS call web_search before answering\n"
+            "- Include URL citations in your answer\n"
+            "- List all sources at the end"
         ),
         tools=[web_search],
     )

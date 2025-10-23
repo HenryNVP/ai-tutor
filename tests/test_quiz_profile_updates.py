@@ -136,14 +136,14 @@ def test_excellent_performance_updates_profile(
         assert evaluation.score == 1.0
         assert evaluation.correct_count == 4
         
-        # Check profile updates
+        # Check profile updates (simplified to 3 levels: >=0.7)
         final_strength = learner_profile.domain_strengths.get("physics basics", 0.0)
         assert final_strength > initial_strength, "Strength should increase"
-        assert final_strength >= 0.15, "Excellent performance should give +0.15 strength"
+        assert final_strength == 0.12, "Excellent performance should give +0.12 strength"
         
         # Check struggle decreased
         final_struggle = learner_profile.domain_struggles.get("physics basics", 0.0)
-        assert final_struggle == 0.0, "Struggle should be minimal or negative"
+        assert final_struggle == 0.0, "Struggle should be 0 (started at 0, -0.08 clamped)"
         
         # Check time updated
         assert learner_profile.total_time_minutes > initial_time
@@ -152,8 +152,9 @@ def test_excellent_performance_updates_profile(
         # Check difficulty preference
         assert learner_profile.difficulty_preferences.get("physics basics") == "independent challenge"
         
-        # Check concepts mastered
-        assert len(learner_profile.concepts_mastered) > 0
+        # Check concepts mastered (now tracks count per domain)
+        assert "physics basics" in learner_profile.concepts_mastered
+        assert learner_profile.concepts_mastered["physics basics"] == 4
 
 
 def test_poor_performance_updates_profile(
@@ -195,21 +196,24 @@ def test_poor_performance_updates_profile(
         assert evaluation.score == 0.25
         assert evaluation.correct_count == 1
         
-        # Check profile updates
+        # Check profile updates (simplified: <0.4 threshold)
         final_strength = learner_profile.domain_strengths.get("physics basics", 0.0)
         assert final_strength > initial_strength, "Strength should increase slightly"
-        assert final_strength <= 0.05, "Poor performance should give small strength increase"
+        assert final_strength == 0.02, "Poor performance should give +0.02 strength"
         
         # Check struggle increased
         final_struggle = learner_profile.domain_struggles.get("physics basics", 0.0)
         assert final_struggle > initial_struggle, "Struggle should increase"
-        assert final_struggle >= 0.12, "Poor performance should give +0.12 struggle"
+        assert final_struggle == 0.10, "Poor performance should give +0.10 struggle"
         
         # Check difficulty preference
         assert learner_profile.difficulty_preferences.get("physics basics") == "foundational guidance"
         
         # Check review topics
         assert len(evaluation.review_topics) == 3, "Should have 3 incorrect answers to review"
+        
+        # Check concepts mastered count
+        assert learner_profile.concepts_mastered["physics basics"] == 1
 
 
 def test_moderate_performance_balanced_updates(
@@ -244,22 +248,25 @@ def test_moderate_performance_balanced_updates(
         assert evaluation.score == 0.5
         assert evaluation.correct_count == 2
         
-        # Check profile updates
+        # Check profile updates (simplified: 0.4-0.7 range)
         final_strength = learner_profile.domain_strengths.get("physics basics", 0.0)
-        assert final_strength == 0.05, "Moderate performance should give +0.05 strength"
+        assert final_strength == 0.06, "Moderate performance should give +0.06 strength"
         
         # Check struggle
         final_struggle = learner_profile.domain_struggles.get("physics basics", 0.0)
-        assert final_struggle == 0.05, "Moderate performance should give +0.05 struggle"
+        assert final_struggle == 0.0, "Moderate performance should give 0 struggle change"
         
         # Check difficulty preference
         assert learner_profile.difficulty_preferences.get("physics basics") == "guided practice"
+        
+        # Check concepts mastered count
+        assert learner_profile.concepts_mastered["physics basics"] == 2
 
 
-def test_concepts_mastered_only_for_correct_answers(
+def test_concepts_mastered_tracks_count_per_domain(
     progress_tracker, learner_profile, sample_quiz
 ):
-    """Test that only correctly answered questions update concepts_mastered."""
+    """Test that concepts_mastered tracks correct answer count per domain."""
     with tempfile.TemporaryDirectory() as tmpdir:
         vector_store = SimpleVectorStore(Path(tmpdir) / "vectors")
         retriever = Retriever(
@@ -284,14 +291,9 @@ def test_concepts_mastered_only_for_correct_answers(
             profile=learner_profile,
         )
         
-        # Only 2 concepts should be mastered (questions 0 and 1)
-        assert len(learner_profile.concepts_mastered) == 2
-        
-        # Check that the first two questions are tracked
-        for idx in [0, 1]:
-            concept_key = sample_quiz.questions[idx].question[:50].lower().strip()
-            assert concept_key in learner_profile.concepts_mastered
-            assert learner_profile.concepts_mastered[concept_key] == 0.15
+        # Should track 2 correct answers for "physics basics" domain
+        assert "physics basics" in learner_profile.concepts_mastered
+        assert learner_profile.concepts_mastered["physics basics"] == 2
 
 
 def test_profile_persistence(
@@ -328,11 +330,11 @@ def test_profile_persistence(
         # Load profile again
         loaded_profile = progress_tracker.load_profile("test_learner")
         
-        # Verify all updates are persisted
-        assert loaded_profile.domain_strengths.get("physics basics") == 0.15
+        # Verify all updates are persisted (simplified values)
+        assert loaded_profile.domain_strengths.get("physics basics") == 0.12
         assert loaded_profile.total_time_minutes == 6.0
         assert loaded_profile.difficulty_preferences.get("physics basics") == "independent challenge"
-        assert len(loaded_profile.concepts_mastered) == 4
+        assert loaded_profile.concepts_mastered.get("physics basics") == 4
 
 
 if __name__ == "__main__":
