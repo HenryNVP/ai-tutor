@@ -12,6 +12,7 @@ import streamlit as st
 from streamlit.runtime.secrets import StreamlitSecretNotFoundError
 
 from ai_tutor.system import TutorSystem
+from ai_tutor.learning.quiz import Quiz, QuizEvaluation
 
 try:  # pragma: no cover - optional dependency
     from pypdf import PdfReader
@@ -82,6 +83,19 @@ def format_answer(text: str) -> str:
     return "\n".join(formatted)
 
 
+def format_quiz_context(result: QuizEvaluation) -> str:
+    lines = [
+        f"Recent quiz: {result.topic}",
+        f"Score: {result.correct_count}/{result.total_questions} ({result.score * 100:.0f}%)",
+    ]
+    for answer in result.answers:
+        status = "correct" if answer.is_correct else "incorrect"
+        lines.append(f"- Q{answer.index + 1}: {status}")
+    if result.review_topics:
+        lines.append("Focus areas: " + "; ".join(result.review_topics))
+    return "\n".join(lines)
+
+
 def render() -> None:
     st.set_page_config(page_title="AI Tutor", page_icon="🎓", layout="wide")
     st.title("🎓 AI Tutor Demo")
@@ -105,6 +119,12 @@ def render() -> None:
         st.session_state.messages = []
     if "documents" not in st.session_state:
         st.session_state.documents = []
+    if "quiz" not in st.session_state:
+        st.session_state.quiz = None
+    if "quiz_answers" not in st.session_state:
+        st.session_state.quiz_answers = {}
+    if "quiz_result" not in st.session_state:
+        st.session_state.quiz_result = None
 
     with st.sidebar:
         st.header("Session Settings")
@@ -136,6 +156,30 @@ def render() -> None:
             for doc in st.session_state.documents:
                 st.write(f"• {doc['name']}")
 
+        st.subheader("Quiz tools")
+        quiz_topic = st.text_input("Quiz topic", key="quiz_topic_input")
+        quiz_questions = st.slider("Questions", min_value=3, max_value=8, value=4, key="quiz_question_count")
+        if st.button("Generate quiz", use_container_width=True):
+            if not quiz_topic.strip():
+                st.warning("Enter a quiz topic before generating.")
+            else:
+                quiz = system.generate_quiz(
+                    learner_id=learner_id,
+                    topic=quiz_topic.strip(),
+                    num_questions=quiz_questions,
+                    extra_context=summarize_documents(st.session_state.documents) or None,
+                )
+                st.session_state.quiz = quiz.model_dump(mode="json")
+                st.session_state.quiz_answers = {}
+                st.session_state.quiz_result = None
+                st.success(f"Created quiz for {quiz.topic}.")
+                st.rerun()
+        if st.button("Clear quiz state", use_container_width=True):
+            st.session_state.quiz = None
+            st.session_state.quiz_answers = {}
+            st.session_state.quiz_result = None
+            st.rerun()
+
     for message in st.session_state.messages:
         role = message["role"]
         with st.chat_message(role):
@@ -158,6 +202,16 @@ def render() -> None:
 
         extra_context = summarize_documents(st.session_state.documents)
 
+        if st.session_state.quiz_result:
+            quiz_result = QuizEvaluation.model_validate(st.session_state.quiz_result)
+            quiz_context = format_quiz_context(quiz_result)
+        else:
+            quiz_context = ""
+        combined_context_parts = [
+            part for part in (extra_context, quiz_context) if part and part.strip()
+        ]
+        combined_context = "\n\n".join(combined_context_parts) if combined_context_parts else None
+
         with st.chat_message("assistant"):
             placeholder = st.empty()
             citations_container = st.empty()
@@ -165,13 +219,18 @@ def render() -> None:
                 response = system.answer_question(
                     learner_id=learner_id,
                     question=prompt,
-                    extra_context=extra_context if extra_context else None,
+                    extra_context=combined_context,
                 )
             placeholder.markdown(format_answer(response.answer))
             if response.citations:
                 citations_container.markdown("**Citations:**\n" + "\n".join(f"- {c}" for c in response.citations))
             else:
                 citations_container.caption("No citations provided.")
+
+        if response.quiz:
+            st.session_state.quiz = response.quiz.model_dump(mode="json")
+            st.session_state.quiz_answers = {}
+            st.session_state.quiz_result = None
 
         st.session_state.messages.append(
             {
@@ -182,6 +241,69 @@ def render() -> None:
         )
 
         st.rerun()
+
+    if st.session_state.quiz:
+        quiz = Quiz.model_validate(st.session_state.quiz)
+        st.divider()
+        st.subheader(f"📝 Quiz: {quiz.topic} ({quiz.difficulty.title()})")
+        st.caption("Select answers for each question and submit when ready.")
+
+        for idx, question in enumerate(quiz.questions):
+            st.markdown(f"**Q{idx + 1}. {question.question}**")
+            answer_choices = [f"{chr(65 + opt)}. {text}" for opt, text in enumerate(question.choices)]
+            display_options = ["Not answered"] + answer_choices
+            current = st.session_state.quiz_answers.get(idx, -1)
+            selection = st.radio(
+                "Choose one",
+                options=display_options,
+                index=current + 1 if current >= 0 else 0,
+                key=f"quiz_q_{idx}",
+                horizontal=True,
+            )
+            st.session_state.quiz_answers[idx] = display_options.index(selection) - 1
+            st.markdown("---")
+
+        if st.button("Submit quiz", type="primary"):
+            answers = [st.session_state.quiz_answers.get(idx, -1) for idx in range(len(quiz.questions))]
+            if any(choice < 0 or choice > 3 for choice in answers):
+                st.warning("Answer every question before submitting.")
+            else:
+                evaluation = system.evaluate_quiz(
+                    learner_id=learner_id,
+                    quiz_payload=quiz,
+                    answers=answers,
+                )
+                st.session_state.quiz_result = evaluation.model_dump(mode="json")
+                st.session_state.quiz = None
+                st.session_state.quiz_answers = {}
+                st.success(
+                    f"Quiz scored {evaluation.correct_count}/{evaluation.total_questions} "
+                    f"({evaluation.score * 100:.0f}%)."
+                )
+                st.rerun()
+
+    if st.session_state.quiz_result:
+        result = QuizEvaluation.model_validate(st.session_state.quiz_result)
+        st.subheader("Quiz feedback")
+        st.write(
+            f"Score: **{result.correct_count}/{result.total_questions}** "
+            f"({result.score * 100:.0f}%)."
+        )
+        if result.review_topics:
+            st.info("Suggested practice:")
+            for topic in result.review_topics:
+                st.write(f"- {topic}")
+        with st.expander("Question breakdown", expanded=False):
+            for answer in result.answers:
+                label = "✅ Correct" if answer.is_correct else "❌ Incorrect"
+                st.markdown(f"**Q{answer.index + 1}: {label}**")
+                if answer.explanation:
+                    st.caption(answer.explanation)
+                if answer.references:
+                    st.caption("References: " + "; ".join(answer.references))
+        if st.button("Dismiss quiz feedback"):
+            st.session_state.quiz_result = None
+            st.rerun()
 
 
 __all__ = [

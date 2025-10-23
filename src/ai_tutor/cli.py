@@ -90,6 +90,13 @@ def ask(
         on_delta=stream_printer,
     )
     console.print()  # newline after streaming output
+    if response.quiz:
+        quiz = response.quiz
+        console.print("\n[bold]Quiz Ready[/bold]")
+        console.print(f"Topic: {quiz.topic} — {len(quiz.questions)} questions")
+        for idx, question in enumerate(quiz.questions, start=1):
+            console.print(f"{idx}. {question.question}")
+        return
     if response.citations:
         console.print("\n[bold]Citations[/bold]")
         for citation in response.citations:

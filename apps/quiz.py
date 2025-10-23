@@ -61,7 +61,7 @@ def render() -> None:
             st.session_state.quiz = None
             st.session_state.answers = {}
             st.session_state.result = None
-            st.experimental_rerun()
+            st.rerun()
 
     topic = st.text_input("Quiz topic", placeholder="e.g., Newton's laws of motion")
     extra_context = st.text_area(

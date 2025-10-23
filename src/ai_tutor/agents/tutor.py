@@ -4,12 +4,13 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from openai.types.responses import ResponseContentPartDoneEvent, ResponseTextDeltaEvent
 
-from agents import Agent, RawResponsesStreamEvent, Runner
+from agents import Agent, RawResponsesStreamEvent, Runner, function_tool
 from agents import SQLiteSession
 
 from .ingestion import build_ingestion_agent
@@ -20,6 +21,7 @@ from ai_tutor.config.schema import RetrievalConfig
 from ai_tutor.data_models import RetrievalHit
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.learning.models import LearnerProfile
+from ai_tutor.learning.quiz import Quiz, QuizService
 from ai_tutor.learning.quiz import Quiz, QuizEvaluation, QuizService
 from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.retrieval.vector_store import VectorStore
@@ -39,6 +41,7 @@ class TutorResponse:
     next_topic: Optional[str] = None
     difficulty: Optional[str] = None
     source: Optional[str] = None
+    quiz: Optional[Quiz] = None
 
 
 @dataclass
@@ -46,11 +49,13 @@ class AgentState:
     last_hits: List[RetrievalHit] = field(default_factory=list)
     last_citations: List[str] = field(default_factory=list)
     last_source: Optional[str] = None
+    last_quiz: Optional[Quiz] = None
 
     def reset(self) -> None:
         self.last_hits.clear()
         self.last_citations.clear()
         self.last_source = None
+        self.last_quiz = None
 
 
 class TutorAgent:
@@ -75,6 +80,8 @@ class TutorAgent:
         self.state = AgentState()
         self.session_db_path = session_db_path
         self.quiz_service = quiz_service
+        self._active_profile: Optional[LearnerProfile] = None
+        self._active_extra_context: Optional[str] = None
 
         self.ingestion_agent: Agent | None = None
         self.qa_agent: Agent | None = None
@@ -89,6 +96,29 @@ class TutorAgent:
         self.ingestion_agent = build_ingestion_agent(self.ingest_fn)
         self.web_agent = build_web_agent(self.search_tool, self.state)
         self.qa_agent = build_qa_agent(self.retriever, self.state, self.MIN_CONFIDENCE, handoffs=[self.web_agent])
+
+        @function_tool
+        def generate_quiz(topic: str, count: int = 4, difficulty: str | None = None) -> str:
+            try:
+                question_count = int(count)
+            except (TypeError, ValueError):
+                question_count = 4
+            question_count = max(3, min(question_count, 8))
+            profile = self._active_profile
+            quiz = self.quiz_service.generate_quiz(
+                topic=topic,
+                profile=profile,
+                num_questions=question_count,
+                difficulty=difficulty,
+                extra_context=self._active_extra_context,
+            )
+            self.state.last_quiz = quiz
+            self.state.last_source = "quiz"
+            return (
+                f"Prepared a {len(quiz.questions)}-question quiz on {quiz.topic}. "
+                "Let the learner know the quiz is ready for them to take."
+            )
+
         handoffs = [agent for agent in (self.ingestion_agent, self.qa_agent, self.web_agent) if agent is not None]
         self.orchestrator_agent = Agent(
             name="tutor_orchestrator",
@@ -97,15 +127,21 @@ class TutorAgent:
 
                 "You are given a learner profile summary and the current learner question. Use the profile to tailor your decision and, when answering directly, personalize the response.\n\n"
 
+                "You have access to these resources:\n"
+                "- Tool `generate_quiz(topic: str, count: int = 4, difficulty: str | None)` which prepares an interactive quiz for the learner.\n"
+                "- Specialist agents: ingestion_agent, qa_agent, web_agent.\n\n"
+
                 "Follow these rules:\n"
                 "- If the question is about the tutoring system itself, the student profile, learning progress, progress history, or general/common knowledge, you should answer directly.\n"
                 "- If the question involves STEM content (math, science, coding, etc.) and may benefit from local course materials or citations, hand it off to the `qa_agent`.\n"
                 "- If the question is non-STEM (e.g., literature, history, current events), or clearly requires external information, hand it off to the `web_agent` for a web-based answer.\n"
                 "- If the user explicitly asks to upload, ingest, or index files, hand it off to the `ingestion_agent`.\n"
+                "- If a learner explicitly asks for a quiz, practice exam, or a set of questions, you must call the `generate_quiz` tool. Extract the subject/topic and desired number of questions from the request when possible (default to 4 questions if unspecified). Never fabricate quiz questions yourself. After the tool succeeds, reply with a concise summary letting the learner know the quiz is ready in the companion interface.\n"
                 "- Always prioritize delegating to the most relevant specialist agent.\n\n"
 
                 "When unsure, favor delegation over direct response unless the query clearly falls within your scope."
             ),
+            tools=[generate_quiz],
             handoffs=handoffs,
         )
 
@@ -197,19 +233,66 @@ class TutorAgent:
         prompt_sections.append(question)
         prompt = "\n".join(prompt_sections)
 
-        answer_text = await self._run_specialist(
-            prompt,
-            session,
-            on_delta,
-        )
-        answer_text = self._strip_citation_markers(answer_text) if not self.state.last_citations else answer_text
+        self._active_profile = profile
+        self._active_extra_context = extra_context
+        self.state.last_quiz = None
+        try:
+            raw_answer = await self._run_specialist(
+                prompt,
+                session,
+                on_delta,
+            )
+        finally:
+            self._active_profile = None
+            self._active_extra_context = None
+        quiz_payload: Optional[Quiz] = None
+        answer_text = raw_answer
+        if raw_answer.strip().startswith("{"):
+            processed, computed_quiz = self._process_quiz_directive(
+                raw_answer,
+                profile=profile,
+                extra_context=extra_context,
+            )
+            if computed_quiz is not None:
+                quiz_payload = computed_quiz
+                answer_text = processed
+        if quiz_payload is None and self.state.last_quiz is not None:
+            quiz_payload = self.state.last_quiz
+        if quiz_payload is None and self._should_force_quiz(question):
+            quiz_payload = self.quiz_service.generate_quiz(
+                topic=self._infer_topic_from_request(question),
+                profile=profile,
+                num_questions=self._infer_count_from_request(question),
+                difficulty=None,
+                extra_context=extra_context,
+            )
+            self.state.last_quiz = quiz_payload
+            answer_text = (
+                f"I've prepared a {len(quiz_payload.questions)}-question quiz on {quiz_payload.topic}. "
+                "Scroll down to take it when you're ready."
+            )
+        if not quiz_payload and not self.state.last_citations:
+            answer_text = self._strip_citation_markers(answer_text)
+        if quiz_payload is None:
+            processed, computed_quiz = self._process_quiz_directive(
+                answer_text,
+                profile=profile,
+                extra_context=extra_context,
+            )
+            if computed_quiz is not None:
+                quiz_payload = computed_quiz
+                answer_text = processed
+        hits = self.state.last_hits if not quiz_payload else []
+        citations = self.state.last_citations if not quiz_payload else []
+        source = "quiz" if quiz_payload else self.state.last_source
 
         return TutorResponse(
             answer=answer_text,
-            hits=self.state.last_hits,
-            citations=self.state.last_citations,
+            hits=hits,
+            citations=citations,
             style=style_hint,
-            source=self.state.last_source,
+            source=source,
+            quiz=quiz_payload,
         )
 
     def _get_session(self, learner_id: str) -> SQLiteSession:
@@ -244,6 +327,80 @@ class TutorAgent:
             next_topics = ", ".join(f"{domain}: {topic}" for domain, topic in list(profile.next_topics.items())[:3])
             lines.append(f"Upcoming topics: {next_topics}")
         return "\n".join(lines)
+
+    def _process_quiz_directive(
+        self,
+        answer_text: str,
+        profile: Optional[LearnerProfile],
+        extra_context: Optional[str],
+    ) -> tuple[str, Optional[Quiz]]:
+        text = answer_text.strip()
+        if not text.startswith("{"):
+            return answer_text, None
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return answer_text, None
+        if not isinstance(payload, dict):
+            return answer_text, None
+        if payload.get("action") != "generate_quiz":
+            return answer_text, None
+
+        topic_raw = payload.get("topic") or payload.get("subject") or "general review"
+        topic = str(topic_raw).strip() or "general review"
+        count_raw = payload.get("count") or payload.get("num_questions") or 4
+        try:
+            count = int(count_raw)
+        except (TypeError, ValueError):
+            count = 4
+        count = max(3, min(count, 8))
+        message = str(payload.get("message") or "").strip()
+
+        quiz = self.quiz_service.generate_quiz(
+            topic=topic,
+            profile=profile,
+            num_questions=count,
+            difficulty=None,
+            extra_context=extra_context,
+        )
+        if not message:
+            message = f"I've prepared a {count}-question quiz on {quiz.topic}. Scroll down to take it."
+        return message, quiz
+
+    @staticmethod
+    def _should_force_quiz(question: str) -> bool:
+        lowered = question.lower()
+        keywords = [
+            "quiz",
+            "quizzes",
+            "practice questions",
+            "practice quiz",
+            "give me questions",
+            "mcq",
+            "multiple choice",
+            "test me",
+        ]
+        return any(keyword in lowered for keyword in keywords)
+
+    @staticmethod
+    def _infer_topic_from_request(question: str) -> str:
+        match = re.search(r"(?:about|on|regarding)\s+(.+)", question, flags=re.IGNORECASE)
+        topic = match.group(1).strip() if match else question.strip()
+        topic = re.sub(r"[\.\?!]+$", "", topic)
+        return topic or "general review"
+
+    @staticmethod
+    def _infer_count_from_request(question: str) -> int:
+        match = re.search(r"(\d+)\s*(?:question|questions|quiz|quizzes|mcq)", question, flags=re.IGNORECASE)
+        if not match:
+            match = re.search(r"(\d+)", question)
+        if match:
+            try:
+                value = int(match.group(1))
+                return max(3, min(value, 8))
+            except ValueError:
+                pass
+        return 4
 
     async def _run_specialist(
         self,
