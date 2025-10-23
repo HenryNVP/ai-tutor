@@ -62,6 +62,32 @@ def render() -> None:
             st.session_state.answers = {}
             st.session_state.result = None
             st.rerun()
+        
+        # Display learner profile summary
+        st.markdown("---")
+        st.subheader("Profile Summary")
+        if learner_id.strip():
+            try:
+                profile = system.personalizer.load_profile(learner_id.strip())
+                st.caption(f"**Name:** {profile.name}")
+                st.caption(f"**Study time:** {profile.total_time_minutes:.1f} min")
+                
+                if profile.domain_strengths:
+                    st.caption("**Top strengths:**")
+                    for domain, score in sorted(profile.domain_strengths.items(), key=lambda x: x[1], reverse=True)[:3]:
+                        st.caption(f"  • {domain}: {score:.2f}")
+                
+                if profile.domain_struggles:
+                    st.caption("**Needs support:**")
+                    for domain, score in sorted(profile.domain_struggles.items(), key=lambda x: x[1], reverse=True)[:3]:
+                        st.caption(f"  • {domain}: {score:.2f}")
+                
+                if profile.difficulty_preferences:
+                    st.caption("**Preferences:**")
+                    for domain, pref in list(profile.difficulty_preferences.items())[:3]:
+                        st.caption(f"  • {domain}: {pref}")
+            except Exception as e:
+                st.caption(f"Could not load profile: {e}")
 
     topic = st.text_input("Quiz topic", placeholder="e.g., Newton's laws of motion")
     extra_context = st.text_area(
@@ -123,6 +149,10 @@ def render() -> None:
             f"Score: {result.correct_count}/{result.total_questions} "
             f"({result.score * 100:.0f}%)"
         )
+        
+        # Show profile update notification
+        st.info("✨ Your learner profile has been updated based on this quiz performance!")
+        
         if result.review_topics:
             st.warning("Topics to review:")
             for item in result.review_topics:

@@ -8,6 +8,8 @@ This MVP is a local-first tutoring agent that ingests STEM study materials, embe
 - **Sentence-transformer embeddings** – encode chunks locally (default `BAAI/bge-base-en`) so you retain control of the retrieval index.
 - **Lightweight retrieval + tutoring** – cosine-search a local NumPy store, assemble a context window, and ask the chat model for a cited answer.
 - **OpenAI Agents SDK bridge** – create ingestion and tutoring agents directly with the OpenAI Agents runtime (no custom wrapper required).
+- **Interactive quiz generation** – generate personalized multiple-choice quizzes on any topic based on learner profiles and course materials.
+- **Adaptive learner profiles** – track learner strengths, struggles, concepts mastered, and study time with automatic updates based on quiz performance.
 
 ## Project layout
 
@@ -71,6 +73,34 @@ ai-tutor agent --agent-role ingest "Ingest the files under ./data/raw/openstax" 
 ```
 
 > **Note:** The optional `ai-tutor agent` command depends on the `openai-agents` runtime. Install it separately (`pip install openai-agents`) if you need that workflow; the core CLI (`ingest` / `ask`) only requires the dependencies listed above.
+
+## Quiz Application
+
+The project includes an interactive quiz interface built with Streamlit that generates personalized quizzes and automatically updates learner profiles based on performance.
+
+### Running the Quiz App
+
+```bash
+streamlit run scripts/quiz_app.py
+```
+
+The quiz app provides:
+- **Topic-based quiz generation** – Enter any topic to generate 3-8 multiple-choice questions
+- **Real-time profile tracking** – View learner strengths, struggles, and preferences in the sidebar
+- **Automatic profile updates** – Quiz results update domain strengths, concepts mastered, and study time
+- **Detailed feedback** – See explanations and references for each answer
+
+### Demo Script
+
+See profile updates in action with the demo script:
+
+```bash
+python scripts/demo_profile_update.py
+```
+
+This demonstrates how quiz performance affects learner profiles, including strength/struggle scores, difficulty preferences, and concepts mastered.
+
+For more details, see the [Quiz Profile Updates Documentation](docs/quiz_profile_updates.md).
 
 ## Configuration
 
