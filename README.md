@@ -28,37 +28,6 @@ ai-tutor ingest ./data/raw
 ai-tutor ask student123 "What is the Bernoulli equation?"
 ```
 
-### Python API
-
-```python
-from ai_tutor.system import TutorSystem
-
-system = TutorSystem.from_config()
-
-# Answer questions
-response = system.answer_question(
-    learner_id="student123",
-    question="Explain Newton's first law",
-    mode="learning"
-)
-print(response.answer)
-print(response.citations)
-
-# Generate quiz
-quiz = system.generate_quiz(
-    learner_id="student123",
-    topic="Thermodynamics",
-    num_questions=5
-)
-
-# Evaluate quiz (auto-updates profile)
-evaluation = system.evaluate_quiz(
-    learner_id="student123",
-    quiz_payload=quiz,
-    answers=[0, 2, 1, 3, 1]  # Answer indices
-)
-```
-
 ## Architecture
 
 ### Multi-Agent System
@@ -68,7 +37,7 @@ Questions are routed to specialized agents based on content:
 ```
 User Question
     ↓
-Orchestrator Agent (routing only)
+Orchestrator Agent (answering general questions and routing)
     ↓
     ├─→ QA Agent → retrieve_local_context → Answer with citations
     ├─→ Web Agent → web_search → Answer with URLs
@@ -81,7 +50,7 @@ Orchestrator Agent (routing only)
 - Falls back to web if needed
 - Always includes citations
 
-**Current Events / General Knowledge**
+**Current Events / Web Search**
 - Route to Web Agent
 - Searches the web
 - Returns URLs as sources
@@ -89,16 +58,6 @@ Orchestrator Agent (routing only)
 **System Questions** (help, progress, etc.)
 - Answered directly by orchestrator
 
-### Components
-
-```
-src/ai_tutor/
-├── agents/           # Multi-agent system (orchestrator, QA, web, ingestion)
-├── learning/         # Quiz generation, evaluation, profiles, personalization
-├── retrieval/        # Vector store and semantic search
-├── ingestion/        # Document parsing and chunking
-└── system.py         # Main TutorSystem facade
-```
 
 ## Web UI Features
 
@@ -142,27 +101,6 @@ python scripts/clear_sessions.py student123
 python scripts/clear_sessions.py all
 ```
 
-## Configuration
-
-Edit `config/default.yaml`:
-
-```yaml
-model:
-  name: gpt-4o-mini        # All agents use this model
-  temperature: 0.7
-  max_output_tokens: 2048
-
-embeddings:
-  provider: sentence-transformers
-  model_name: BAAI/bge-base-en
-
-retrieval:
-  top_k: 8                 # Number of chunks to retrieve
-
-chunking:
-  chunk_size: 800          # Characters per chunk
-  overlap: 200             # Overlap between chunks
-```
 
 ## Data Storage
 
@@ -193,26 +131,6 @@ DEBUG logs show:
 - Tool calls (`retrieve_local_context`, `web_search`)
 - Session creation and rotation  
 - Profile updates after quizzes
-
-
-## Technical Notes
-
-### Models
-
-All agents use **gpt-4o-mini**:
-
-### Agent Behavior
-
-- **Orchestrator**: Routes only, never answers directly
-- **QA Agent**: Must call `retrieve_local_context` before answering
-- **Web Agent**: Must call `web_search` before answering
-- All specialist agents provide citations
-
-### Session Limits
-
-- Daily rotation: `ai_tutor_student123_20251023`
-- Prevents unbounded context growth
-- SQLite persistence across restarts
 
 
 ## License
