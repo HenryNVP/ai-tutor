@@ -116,22 +116,6 @@ data/
     └── metadata.json        # Chunk metadata
 ```
 
-## Test handoff behavior with DEBUG logging
-
-Set log level in `config/default.yaml`:
-
-```yaml
-logging:
-  level: DEBUG  # See agent handoffs, tool calls, profile updates
-  use_json: false
-```
-
-DEBUG logs show:
-- Agent handoff events
-- Tool calls (`retrieve_local_context`, `web_search`)
-- Session creation and rotation  
-- Profile updates after quizzes
-
 
 ## License
 
