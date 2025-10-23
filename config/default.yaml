@@ -10,17 +10,17 @@ model:
 embeddings:
   model: "BAAI/bge-base-en"
   provider: "sentence-transformers"
-  batch_size: 32
+  batch_size: 256
   normalize: true
   dimension: null
 
 chunking:
-  chunk_size: 900
-  chunk_overlap: 120
+  chunk_size: 500
+  chunk_overlap: 80
   tokenizer: null
 
 retrieval:
-  top_k: 8
+  top_k: 5
 
 paths:
   raw_data_dir: "data/raw"
