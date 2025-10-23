@@ -2,79 +2,109 @@
 skinparam componentStyle rectangle
 skinparam wrapWidth 200
 skinparam maxMessageSize 200
-title Personal STEM Instructor – Architecture
+title AI Tutor – Multi-Agent Architecture
 
 actor User
 
 package "Entry Points" {
   component "CLI (`ai-tutor`)" as CLI
-  component "OpenAI Agents (demo / custom)" as AgentRunner
-  component "Python API / Notebooks" as PythonAPI
+  component "Web UI\n(tutor_web.py)" as WebUI
+  component "Quiz UI\n(apps/ui.py)" as QuizUI
+  component "Python API" as PythonAPI
 }
 
 node "TutorSystem" as TutorSystem {
   component "Settings Loader\n& Logging" as Settings
   component "IngestionPipeline" as Ingestion
-  component "TutorAgent" as TutorAgent
+  component "Orchestrator Agent\n(tutor_orchestrator)" as Orchestrator
+  component "QA Agent\n(qa_agent)" as QA
+  component "Web Agent\n(web_agent)" as Web
+  component "Ingestion Agent\n(ingestion_agent)" as IngestionAgent
   component "Retriever" as Retriever
   component "EmbeddingClient" as EmbeddingClient
   component "SearchTool" as SearchTool
   component "VectorStore\n(SimpleVectorStore)" as VectorStore
   component "ChunkJsonlStore" as ChunkStore
+  component "QuizService" as QuizService
+  component "ProgressTracker" as ProgressTracker
+  component "PersonalizationManager" as Personalizer
   component "Parsers" as Parsers
   component "Chunker" as Chunker
-  component "QA Agent" as QA
-  component "Web Agent" as Web
 }
 
-database "Vector Store Files\n(data/vector_store)" as VectorFS
+database "Vector Store\n(data/vector_store)" as VectorFS
 database "Chunks Index\n(data/processed/chunks.jsonl)" as ChunkFS
+database "Learner Profiles\n(data/processed/profiles/*.json)" as ProfileFS
+database "Session History\n(data/processed/sessions.sqlite)" as SessionFS
 folder "Raw Documents\n(data/raw)" as RawDocs
-cloud "OpenAI Agents Runtime" as OpenAIAgents
-cloud "Embedding Provider\n(sentence-transformers / optional API)" as EmbeddingProvider
+cloud "OpenAI API\n(gpt-4o-mini)" as OpenAI
+cloud "Embedding Provider\n(sentence-transformers)" as EmbeddingProvider
 
 User --> CLI
-User --> AgentRunner
+User --> WebUI
+User --> QuizUI
 User --> PythonAPI
 
 CLI --> Ingestion : `ingest` command
-CLI --> TutorAgent : `ask` command
-AgentRunner --> Ingestion : ingest_corpus tool
-AgentRunner --> TutorAgent : answer_question tool
-PythonAPI --> Ingestion : direct ingestion call
-PythonAPI --> TutorAgent : answer_question
+CLI --> Orchestrator : `ask` command
+WebUI --> Orchestrator : answer_question
+QuizUI --> QuizService : generate & evaluate
+PythonAPI --> TutorSystem : all operations
 
-Ingestion --> Parsers : discover & parse files
-Parsers --> RawDocs : read supported documents
-Ingestion --> Chunker : create overlapping chunks
-Chunker --> Ingestion : chunk metadata + text
-Chunker --> EmbeddingClient : request embeddings
-EmbeddingClient --> EmbeddingProvider : fetch vectors
-EmbeddingClient --> Ingestion : chunk embeddings
-Ingestion --> VectorStore : add embeddings
-VectorStore --> VectorFS : persist embeddings.npy + metadata.json
-Ingestion --> ChunkStore : upsert chunk JSONL
-ChunkStore --> ChunkFS : persist chunks.jsonl
+Ingestion --> Parsers : parse PDFs/Markdown
+Parsers --> RawDocs : read documents
+Ingestion --> Chunker : create chunks
+Chunker --> EmbeddingClient : embed chunks
+EmbeddingClient --> EmbeddingProvider : generate vectors
+Ingestion --> VectorStore : store embeddings
+VectorStore --> VectorFS : persist .npy + metadata
+Ingestion --> ChunkStore : save chunks
+ChunkStore --> ChunkFS : persist .jsonl
 
-TutorAgent --> QA : local evidence (if available)
-QA --> Retriever : retrieve local evidence
+Orchestrator --> QA : STEM questions
+Orchestrator --> Web : current events/non-STEM
+Orchestrator --> IngestionAgent : file uploads
+Orchestrator --> QuizService : quiz requests
+Orchestrator --> SessionFS : maintain context
+
+QA --> Retriever : retrieve_local_context
 Retriever --> EmbeddingClient : embed query
 Retriever --> VectorStore : cosine search
-TutorAgent --> Web : fallback when corpus empty
-Web --> SearchTool : hosted web search
-TutorAgent --> OpenAIAgents : stream responses
+Web --> SearchTool : web_search
 
-note right of Ingestion
-  1. Parse PDFs/Markdown/TXT via Parsers
-  2. Chunk content with Chunker
-  3. Embed and persist to VectorStore + ChunkStore
+QuizService --> Retriever : find relevant content
+QuizService --> OpenAI : generate questions
+QuizService --> ProgressTracker : update profiles
+ProgressTracker --> ProfileFS : save learner data
+ProgressTracker --> Personalizer : track mastery
+
+Orchestrator --> OpenAI : stream responses
+QA --> OpenAI : generate cited answers
+Web --> OpenAI : synthesize web results
+
+note right of Orchestrator
+  Pure Router - delegates to specialists:
+  • STEM → qa_agent (with citations)
+  • News/Current → web_agent
+  • Uploads → ingestion_agent
+  • Quizzes → QuizService
+  Daily session rotation prevents token overflow
 end note
 
-note right of TutorAgent
-  1. Attempt local retrieval (Retriever + VectorStore).
-  2. If confident hits exist, QA agent generates cited answer.
-  3. Otherwise Web agent queries hosted search for reputable snippets.
-  4. TutorAgent streams the result and personalization metadata back to callers.
+note right of QuizService
+  1. Generate adaptive quizzes
+  2. Evaluate learner answers
+  3. Update profiles based on score:
+     - Domain strengths/struggles
+     - Concepts mastered count
+     - Difficulty preferences
+     - Total study time
+end note
+
+note left of VectorStore
+  Semantic search over
+  local course materials
+  with cosine similarity
 end note
 
 @enduml

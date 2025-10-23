@@ -1,33 +1,113 @@
 @startuml
 skinparam componentStyle rectangle
-skinparam wrapWidth 220
-title Multi-Agent Tutoring Flow
+skinparam wrapWidth 240
+title Multi-Agent Orchestration & Routing
 
-package "Tutoring Specialists" {
-  component "IngestionAgent\n(ingest_corpus tool)" as IngestionAgent
-  component "QAAgent\n(retrieve_local_context tool)" as QAAgent
-  component "WebAgent\n(web_search tool)" as WebAgent
+package "Specialist Agents (gpt-4o-mini)" {
+  component "QA Agent\nretrieve_local_context" as QAAgent #lightgreen
+  component "Web Agent\nweb_search" as WebAgent #lightblue
+  component "Ingestion Agent\ningest_corpus" as IngestionAgent #lightyellow
 }
 
-component "TutorAgent" as TutorAgent
-component "Runner.run_streamed" as Runner
-component "TutorSystem.answer_question" as AnswerQuestion
+component "Orchestrator Agent\n(Pure Router)" as Orchestrator #orange
+component "QuizService\ngenerate_quiz tool" as QuizService #pink
 
-AnswerQuestion --> TutorAgent : build prompt
-TutorAgent --> QAAgent : attempt local evidence
-QAAgent --> WebAgent : fallback when needed
-QAAgent --> Runner : stream local answer
-WebAgent --> Runner : stream web answer
-Runner --> AnswerQuestion : final TutorResponse
+actor User
+User --> Orchestrator : Ask question
 
-note right of QAAgent
-  Uses Retriever + VectorStore for
-  high-confidence chunk selection.
+Orchestrator --> QAAgent : STEM questions\n(math, physics, CS, etc.)
+Orchestrator --> WebAgent : Current events\nhistory, arts
+Orchestrator --> IngestionAgent : File uploads
+Orchestrator --> QuizService : Quiz requests
+
+QAAgent --> User : Answer with\nlocal citations [1][2]
+WebAgent --> User : Answer with\nURL citations
+IngestionAgent --> User : Ingestion summary
+QuizService --> User : Quiz questions
+
+note right of Orchestrator
+  Routing Rules:
+  • Math/Science/Tech → qa_agent
+  • News/Current → web_agent
+  • Upload → ingestion_agent
+  • "Generate quiz" → QuizService tool
+  
+  Only answers directly:
+  • "What can you do?"
+  • "What's my progress?"
+  • Greetings
+end note
+
+note left of QAAgent
+  1. ALWAYS call retrieve_local_context
+  2. Read returned context
+  3. Generate cited answer [1][2]
+  4. If no context → hand off to web_agent
 end note
 
 note right of WebAgent
-  Calls SearchTool (OpenAI web search)
-  and returns URL-based citations.
+  1. ALWAYS call web_search
+  2. Review results
+  3. Synthesize answer with URLs
+  4. List sources at end
+end note
+
+@enduml
+
+@startuml
+skinparam componentStyle rectangle
+skinparam wrapWidth 240
+title Quiz Generation & Profile Updates
+
+actor Learner
+component "QuizService" as QuizService
+component "Retriever" as Retriever
+component "VectorStore" as VectorStore
+component "OpenAI API\n(gpt-4o-mini)" as OpenAI
+component "ProgressTracker" as ProgressTracker
+component "PersonalizationManager" as Personalizer
+database "LearnerProfile\n*.json" as Profile
+
+Learner -> QuizService : Request quiz\n(topic, num_questions)
+QuizService -> Retriever : Find relevant content
+Retriever -> VectorStore : Search chunks by topic
+VectorStore --> Retriever : Top chunks
+QuizService -> OpenAI : Generate questions\n+ distractors
+OpenAI --> QuizService : Quiz with 4 choices each
+QuizService --> Learner : Display quiz
+
+Learner -> QuizService : Submit answers\n[0,2,1,3]
+QuizService -> QuizService : Grade answers
+QuizService -> ProgressTracker : Update profile\n(score, topic)
+
+ProgressTracker -> Profile : Load profile
+ProgressTracker -> ProgressTracker : Calculate deltas:\n• score ≥70% → +strength\n• score <40% → +struggle\n• Update mastery count\n• Adjust difficulty
+ProgressTracker -> Profile : Save updated profile
+ProgressTracker -> Personalizer : Track progress
+
+QuizService --> Learner : Results + feedback
+
+note right of ProgressTracker
+  Profile Updates Based on Score:
+  
+  ≥70% (Strong):
+    +0.12 domain strength
+    -0.08 domain struggle
+    difficulty = "independent challenge"
+  
+  40-70% (Medium):
+    +0.06 domain strength
+    no struggle change
+    difficulty = "guided practice"
+  
+  <40% (Weak):
+    +0.02 domain strength
+    +0.10 domain struggle
+    difficulty = "foundational guidance"
+  
+  Also updates:
+  • concepts_mastered[domain] += correct_count
+  • total_time_minutes += (questions × 1.5)
 end note
 
 @enduml
@@ -35,34 +115,49 @@ end note
 @startuml
 skinparam componentStyle rectangle
 skinparam wrapWidth 220
-title Ingestion & Retrieval Components
+title Ingestion Pipeline
 
 actor User
-component "CLI `ai-tutor ingest`" as CLI
+component "CLI\n`ai-tutor ingest`" as CLI
 component "IngestionPipeline" as Ingestion
-component "Parsers" as Parsers
+component "Parsers\n(PDF, Markdown, TXT)" as Parsers
 component "Chunker" as Chunker
-component "EmbeddingClient" as EmbeddingClient
-component "VectorStore" as VectorStore
+component "EmbeddingClient\n(sentence-transformers)" as EmbeddingClient
+component "VectorStore\n(SimpleVectorStore)" as VectorStore
 component "ChunkJsonlStore" as ChunkStore
+folder "data/raw/*.pdf" as RawDocs
 database "embeddings.npy" as EmbeddingsFile
 database "metadata.json" as MetadataFile
 database "chunks.jsonl" as ChunksFile
 
-User --> CLI : choose corpus directory
+User --> CLI : Select directory
 CLI --> Ingestion : ingest_directory(Path)
-Ingestion --> Parsers : normalize raw files
-Parsers --> Chunker : plain text
-Chunker --> EmbeddingClient : chunk batches
-EmbeddingClient --> VectorStore : store vectors
-VectorStore --> EmbeddingsFile
-VectorStore --> MetadataFile
-Ingestion --> ChunkStore : upsert chunks
-ChunkStore --> ChunksFile
+Ingestion --> RawDocs : Scan for PDFs
+Ingestion --> Parsers : Parse documents
+Parsers --> Chunker : Extract text
+Chunker --> Chunker : Create 900-char chunks\n120-char overlap
+Chunker --> EmbeddingClient : Batch encode
+EmbeddingClient --> VectorStore : Store vectors
+VectorStore --> EmbeddingsFile : Save numpy array
+VectorStore --> MetadataFile : Save chunk IDs
+Ingestion --> ChunkStore : Save full chunks
+ChunkStore --> ChunksFile : Append JSONL
+
+Ingestion --> User : Summary:\n• N documents\n• M chunks\n• Vector store updated
 
 note right of EmbeddingClient
-  Prefers sentence-transformers locally;
-  falls back to CPU when GPU unsupported.
+  Uses sentence-transformers locally
+  Model: BAAI/bge-base-en
+  384-dimensional vectors
+  Runs on CPU (no GPU required)
+end note
+
+note left of Chunker
+  Smart chunking:
+  • Preserves paragraphs
+  • Maintains context
+  • Tracks doc metadata
+  • Page numbers for citations
 end note
 
 @enduml
