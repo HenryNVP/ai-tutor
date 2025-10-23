@@ -138,26 +138,6 @@ The system employs a modular, layered architecture:
 #### Configuration System
 
 All system parameters are defined in `config/default.yaml`:
-
-```yaml
-model:
-  name: "gpt-4o-mini"
-  temperature: 0.15
-  max_output_tokens: 2048
-
-embeddings:
-  model: "BAAI/bge-base-en"
-  batch_size: 256
-  normalize: true
-
-chunking:
-  chunk_size: 500
-  chunk_overlap: 80
-
-retrieval:
-  top_k: 5
-```
-
 This configuration-driven approach enables rapid experimentation with different models and parameters without code changes.
 
 ### 2.2 Multi-Agent System Design
@@ -225,25 +205,7 @@ The RAG implementation ensures all answers are grounded in authoritative sources
    - Concatenate chunk texts with separator tokens
    - Add to LLM prompt as grounding context
 
-4. **Response Generation**:
-   - Prompt structure:
-     ```
-     System: You are a STEM tutor. Answer using the provided context.
-             Cite sources with bracketed indices [1], [2], etc.
-     
-     Retrieved Context:
-     [1] Title: Calculus Volume 1 (Doc: calc_v1, Page: 42, Score: 0.87)
-     The derivative of a function f(x) represents...
-     
-     [2] Title: Physics Textbook (Doc: phys_101, Page: 15, Score: 0.82)
-     Newton's laws of motion describe...
-     
-     Question: What is the derivative of x^2?
-     ```
-   - LLM generates answer with citations
-   - System extracts citation indices and maps to full references
-
-5. **Citation Formatting**:
+1. **Citation Formatting**:
    - Parse bracketed indices from response
    - Map to original chunk metadata
    - Format as: `[1] Calculus Volume 1 (Doc: calc_v1, Page: 42)`
