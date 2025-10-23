@@ -1,267 +1,290 @@
-# Personal STEM Instructor (MVP)
+# AI Tutor
 
-This MVP is a local-first tutoring agent that ingests STEM study materials, embeds them with sentence-transformer models, and answers questions with grounded citations using OpenAI's chat completions API. Results are persisted locally for repeatable use.
+A local-first AI tutoring system that ingests STEM course materials, answers questions with cited references, and adapts to learner progress through interactive quizzes.
 
 ## Features
 
-### Core Capabilities
-- **Document ingestion & chunking** – parse PDF/Markdown/text notes, produce overlapping chunks, and enrich them with metadata for citations.
-- **Sentence-transformer embeddings** – encode chunks locally (default `BAAI/bge-base-en`) so you retain control of the retrieval index.
-- **Multi-agent architecture** – orchestrator routes questions to specialist agents (QA, web search, ingestion) for optimal answers with citations.
-- **Hybrid retrieval** – searches local course materials first, falls back to web search when needed, always with proper source attribution.
+- **📚 Document Ingestion** – Parse PDFs, Markdown, and text files into searchable chunks
+- **🔍 Smart Retrieval** – Semantic search using local sentence-transformer embeddings
+- **🤖 Multi-Agent Q&A** – Orchestrator routes questions to specialized agents (QA, web search, ingestion)
+- **📝 Interactive Quizzes** – Generate personalized multiple-choice quizzes that adapt to learner performance
+- **📊 Learner Profiles** – Track strengths, struggles, and progress with automatic updates from quiz results
+- **💬 Conversation Memory** – Maintains context within sessions with automatic daily rotation
 
-### Learning Features
-- **Interactive quiz generation** – generate personalized multiple-choice quizzes on any topic based on learner profiles and course materials.
-- **Adaptive learner profiles** – track learner strengths, struggles, concepts mastered, and study time with automatic updates based on quiz performance.
-- **Personalized difficulty** – system adapts question difficulty based on performance (foundational guidance → guided practice → independent challenge).
+## Quick Start
 
-### Technical Features
-- **OpenAI Agents SDK** – leverages the official OpenAI Agents runtime for sophisticated multi-agent workflows.
-- **Session management** – automatic daily rotation prevents token overflow while maintaining conversation context.
-- **Smart routing** – STEM questions automatically get cited answers from course materials or web sources.
+# Set API key
+export OPENAI_API_KEY=your_key_here
+```
 
-## Project layout
+### Basic Usage
+
+```bash
+# Ingest documents
+ai-tutor ingest ./data/raw
+
+# Ask questions (with citations!)
+ai-tutor ask student123 "What is the Bernoulli equation?"
+
+# Run quiz app (Streamlit interface)
+streamlit run apps/quiz.py
+
+# Run web interface
+python scripts/tutor_web.py
+```
+
+### Python API
+
+```python
+from ai_tutor.system import TutorSystem
+
+system = TutorSystem.from_config()
+
+# Answer questions
+response = system.answer_question(
+    learner_id="student123",
+    question="Explain Newton's first law",
+    mode="learning"
+)
+print(response.answer)
+print(response.citations)
+
+# Generate quiz
+quiz = system.generate_quiz(
+    learner_id="student123",
+    topic="Thermodynamics",
+    num_questions=5
+)
+
+# Evaluate quiz (auto-updates profile)
+evaluation = system.evaluate_quiz(
+    learner_id="student123",
+    quiz_payload=quiz,
+    answers=[0, 2, 1, 3, 1]  # Answer indices
+)
+```
+
+## Architecture
+
+### Multi-Agent System
+
+Questions are routed to specialized agents based on content:
+
+```
+User Question
+    ↓
+Orchestrator Agent (routing only)
+    ↓
+    ├─→ QA Agent → retrieve_local_context → Answer with citations
+    ├─→ Web Agent → web_search → Answer with URLs
+    └─→ Ingestion Agent → ingest_corpus → Process documents
+```
+
+**STEM Questions** (physics, math, chemistry, etc.)
+- Route to QA Agent
+- Searches local course materials
+- Falls back to web if needed
+- Always includes citations
+
+**Current Events / General Knowledge**
+- Route to Web Agent
+- Searches the web
+- Returns URLs as sources
+
+**System Questions** (help, progress, etc.)
+- Answered directly by orchestrator
+
+### Components
 
 ```
 src/ai_tutor/
-  agents/        # LLM client, context builder, tutor agent, OpenAI SDK adapter
-  config/        # Pydantic settings + YAML loader
-  ingestion/     # Parsers, chunker, embedding client, ingestion pipeline
-  retrieval/     # Simple cosine vector store + retriever
-  storage/       # JSONL persistence for ingested chunks
-  utils/         # Logging + filesystem helpers
-  system.py      # High-level façade wiring ingestion + Q&A together
-config/default.yaml  # Editable runtime configuration
-scripts/openstax_ingest.py  # Example ingestion helper
+├── agents/           # Multi-agent system (orchestrator, QA, web, ingestion)
+├── learning/         # Quiz generation, evaluation, profiles, personalization
+├── retrieval/        # Vector store and semantic search
+├── ingestion/        # Document parsing and chunking
+└── system.py         # Main TutorSystem facade
 ```
 
-## Architecture overview
+## Quiz System
 
-### System Components
+### Generate Personalized Quizzes
 
-- **TutorSystem** – High-level façade that wires ingestion, retrieval, personalization, and the multi-agent tutor workflow. Provides `ingest_directory`, `answer_question`, `generate_quiz`, and `evaluate_quiz` methods.
+The system creates quizzes adapted to learner level:
 
-- **Multi-Agent Architecture**:
-  - **Orchestrator Agent** – Routes questions to the appropriate specialist agent based on content type
-  - **QA Agent** – Retrieves and cites local course materials for STEM questions
-  - **Web Agent** – Searches the web for current events or when local materials are insufficient
-  - **Ingestion Agent** – Handles document upload and indexing requests
+```python
+quiz = system.generate_quiz(
+    learner_id="student123",
+    topic="Newton's laws of motion",
+    num_questions=4
+)
 
-- **IngestionPipeline** – Normalizes raw documents: parsers load files, `Chunker` slices text, `EmbeddingClient` encodes slices, and `VectorStore` plus `ChunkJsonlStore` persist embeddings and citation metadata.
+# Quiz includes:
+# - 4 multiple choice questions
+# - Correct answer indices
+# - Explanations for each answer
+# - References to course materials
+```
 
-- **PersonalizationManager** – Manages learner profiles, tracks progress, and adapts content difficulty based on quiz performance and interaction history.
+### Automatic Profile Updates
 
-- **Session Management** – Date-based session rotation automatically prevents token overflow while maintaining same-day conversation context.
+Quiz results automatically update learner profiles:
 
-The diagrams in `docs/architecture.puml` and `docs/components.puml` illustrate component relationships and data flow in more detail.
+| Score | Strength Δ | Struggle Δ | Difficulty Level |
+|-------|-----------|-----------|------------------|
+| ≥70%  | +0.12     | -0.08     | Independent challenge |
+| 40-69%| +0.06     | 0.00      | Guided practice |
+| <40%  | +0.02     | +0.10     | Foundational guidance |
 
-## Quick start
+Profiles track:
+- Domain strengths and struggles (0.0-1.0 scale)
+- Questions answered correctly per domain
+- Total study time
+- Preferred difficulty level
 
-Install dependencies (Python 3.10+):
+### Quiz App UI
+
+Run the Streamlit interface:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+streamlit run apps/quiz.py
 ```
 
-Set environment variables for your model provider (example uses OpenAI for chat plus optional Google Generative AI embeddings if you switch providers):
-
-```bash
-export OPENAI_API_KEY=...
-```
-
-Run ingestion on a directory of PDFs/Markdown/txt files:
-
-```bash
-ai-tutor ingest ./data/raw
-```
-
-Ask a grounded question:
-
-```bash
-ai-tutor ask student123 "Explain the steps to solve projectile motion problems."
-```
-
-Use the OpenAI Agents runtime to orchestrate everything:
-
-```bash
-ai-tutor agent --agent-role tutor "Summarize the key equations for projectile motion." --learner-id student123
-
-# Ingestion agent example
-ai-tutor agent --agent-role ingest "Ingest the files under ./data/raw/openstax" --learner-id student123
-```
-
-> **Note:** The optional `ai-tutor agent` command depends on the `openai-agents` runtime. Install it separately (`pip install openai-agents`) if you need that workflow; the core CLI (`ingest` / `ask`) only requires the dependencies listed above.
-
-## Quiz Application
-
-The project includes an interactive quiz interface built with Streamlit that generates personalized quizzes and automatically updates learner profiles based on performance.
-
-### Running the Quiz App
-
-```bash
-streamlit run scripts/quiz_app.py
-```
-
-The quiz app provides:
-- **Topic-based quiz generation** – Enter any topic to generate 3-8 multiple-choice questions
-- **Real-time profile tracking** – View learner strengths, struggles, and preferences in the sidebar
-- **Automatic profile updates** – Quiz results update domain strengths, concepts mastered, and study time
-- **Detailed feedback** – See explanations and references for each answer
-
-### Demo Script
-
-See profile updates in action with the demo script:
-
-```bash
-python scripts/demo_profile_update.py
-```
-
-This demonstrates how quiz performance affects learner profiles, including strength/struggle scores, difficulty preferences, and concepts mastered.
-
-For more details, see the [Quiz Profile Updates Documentation](docs/quiz_profile_updates.md).
+Features:
+- Generate quizzes on any topic
+- Real-time profile display in sidebar
+- Detailed feedback with explanations
+- Automatic profile updates based on quiz performance
 
 ## Session Management
 
-The system automatically manages conversation sessions to prevent token overflow:
+Conversations are stored in SQLite with automatic daily rotation to prevent token overflow.
 
-- **Automatic daily rotation** – Sessions reset each day, limiting context to same-day conversations
-- **Persistent across restarts** – Sessions are stored in SQLite and survive application restarts
-- **Manual clearing** – Clear sessions when needed using the management script
+**Session Format**: `ai_tutor_{learner_id}_{YYYYMMDD}`
 
+**Auto-rotation**: Sessions reset daily, limiting context to same-day conversations
+
+**Manual clearing**:
 ```bash
-# View current sessions
+# View sessions
 python scripts/clear_sessions.py
 
-# Clear specific learner's session
+# Clear specific learner
 python scripts/clear_sessions.py student123
 
-# Clear all sessions
+# Clear all
 python scripts/clear_sessions.py all
 ```
 
-Sessions use `gpt-4o-mini` (200K TPM limit) to handle large conversation histories efficiently.
-
-For technical details, see [Token Overflow Fix Documentation](docs/TOKEN_OVERFLOW_FIX.md).
-
-## Multi-Agent Routing
-
-Questions are intelligently routed to specialist agents:
-
-**STEM Questions** → QA Agent → (if needed) Web Agent
-- "What is the Bernoulli equation?"
-- "Explain Newton's laws"
-- "How does photosynthesis work?"
-- Results include **citations** from course materials or web sources
-
-**Current Events / Non-STEM** → Web Agent
-- "What's the weather tomorrow in San Jose?"
-- "Recent developments in AI"
-- Results include **URL citations**
-
-**System Questions** → Orchestrator (direct answer)
-- "What can you help me with?"
-- "What's my learning progress?"
-
-For implementation details, see [Handoff Logic Documentation](docs/HANDOFF_FIX_V2.md).
-
 ## Configuration
 
-Tweak `config/default.yaml` to change models, chunk sizes, retrieval depth, and storage paths. Override values at runtime through the `AI_TUTOR_CONFIG_OVERRIDES` env var (JSON) or by pointing `--config` at another YAML file.
+Edit `config/default.yaml`:
 
-Key settings:
+```yaml
+model:
+  name: gpt-4o-mini        # All agents use this model
+  temperature: 0.7
+  max_output_tokens: 2048
 
-- `model` – chat model name/provider (defaults to OpenAI `gpt-4o-mini`).
-- `embeddings` – embedding model, provider (`sentence-transformers` by default), batch size, and optional dimensionality override.
-- `chunking` – character window and overlap for RAG chunks.
-- `retrieval` – number of nearest neighbours (`top_k`) returned from the vector store.
-- `paths` – where raw data, processed chunks, and vector store files live.
+embeddings:
+  provider: sentence-transformers
+  model_name: BAAI/bge-base-en
 
-## Logging & Storage
+retrieval:
+  top_k: 8                 # Number of chunks to retrieve
 
-### Data Persistence
-- **Raw files**: `data/raw/` – Original PDFs, Markdown, text files
-- **Processed chunks**: `data/processed/chunks.jsonl` – Extracted and chunked content
-- **Embeddings**: `data/vector_store/` – Sentence-transformer vectors (NumPy format)
-- **Learner profiles**: `data/processed/profiles/` – JSON files tracking progress and preferences
-- **Sessions**: `data/processed/sessions.sqlite` – Conversation history (auto-rotates daily)
-
-### Logging
-Logging is configured via `structlog`; adjust verbosity in `config/default.yaml`.
-
-Use `DEBUG` level to see:
-- Agent handoff events
-- Tool calls (retrieve_local_context, web_search)
-- Session creation and rotation
-- Profile updates
-
-## Troubleshooting
-
-### Token Overflow Errors
-If you see "Request too large" errors:
-```bash
-# Clear the session
-python scripts/clear_sessions.py <learner_id>
+chunking:
+  chunk_size: 800          # Characters per chunk
+  overlap: 200             # Overlap between chunks
 ```
-Sessions automatically rotate daily to prevent this.
 
-### Questions Not Getting Citations
-Check that:
-1. STEM questions are being routed to `qa_agent` (check logs for handoff events)
-2. Either local materials exist OR web search is enabled
-3. Agents are using `gpt-4o-mini` model (check agent configurations)
+## Data Storage
 
-See `docs/HANDOFF_FIX_V2.md` for detailed debugging steps.
+```
+data/
+├── raw/                      # Original documents (PDFs, MD, TXT)
+├── processed/
+│   ├── chunks.jsonl         # Extracted and chunked content
+│   ├── profiles/            # Learner profiles (JSON)
+│   └── sessions.sqlite      # Conversation history
+└── vector_store/
+    ├── embeddings.npy       # Vector embeddings
+    └── metadata.json        # Chunk metadata
+```
 
-### Quiz Profile Not Updating
-Ensure:
-1. You're using the same `learner_id` for quiz generation and evaluation
-2. Profile directory exists: `data/processed/profiles/`
-3. Check logs for "Profile updated" messages
+## Test handoff behavior with DEBUG logging
+### Logging
 
-See `docs/quiz_profile_updates.md` for details.
+Set log level in `config/default.yaml`:
 
-## Documentation
+```yaml
+logging:
+  level: DEBUG  # See agent handoffs, tool calls, profile updates
+  use_json: false
+```
 
-- **[Architecture Overview](docs/architecture.puml)** – System component diagrams
-- **[Handoff Logic Fix](docs/HANDOFF_FIX_V2.md)** – Multi-agent routing implementation
-- **[Token Overflow Fix](docs/TOKEN_OVERFLOW_FIX.md)** – Session management and limits
-- **[Quiz Profile Updates](docs/quiz_profile_updates.md)** – Adaptive learning system
-- **[Retrieval Evaluation](docs/retrieval_evaluation.md)** – Vector store performance
+DEBUG logs show:
+- Agent handoff events
+- Tool calls (`retrieve_local_context`, `web_search`)
+- Session creation and rotation  
+- Profile updates after quizzes
 
-## Development Notes
 
-### Model Selection
-All agents use `gpt-4o-mini` for:
-- ✅ Higher TPM limits (200K vs 30K)
-- ✅ Lower cost (16x cheaper than gpt-4o)
-- ✅ Sufficient quality for routing and QA tasks
+ai-tutor --help
+ai-tutor ingest ./data/raw
+ai-tutor ask student123 "your question here"
+```
 
-### Agent Architecture
-- **Orchestrator**: Routes questions only, doesn't answer
+## Technical Notes
+
+### Models
+
+
+All agents use **gpt-4o-mini**:
+
+
+### Agent Behavior
+
+- **Orchestrator**: Routes only, never answers directly
 - **QA Agent**: Must call `retrieve_local_context` before answering
 - **Web Agent**: Must call `web_search` before answering
 - All specialist agents provide citations
 
 ### Session Limits
-- Daily rotation prevents unbounded growth
-- Date-based session IDs: `ai_tutor_{learner_id}_{YYYYMMDD}`
-- Manual clearing available via `clear_sessions.py` script
 
-## Contributing
+- Daily rotation: `ai_tutor_student123_20251023`
+- Prevents unbounded context growth
+- SQLite persistence across restarts
 
-When extending the system:
+## Requirements
 
-1. **Add new agents** via `src/ai_tutor/agents/` following existing patterns
-2. **Update orchestrator** routing rules in `tutor.py` to include new agent
-3. **Test handoff behavior** to ensure proper delegation
-4. **Document changes** in relevant markdown files
+- Python 3.10+
+- OpenAI API key
+- Dependencies in `requirements.txt`
 
-## Next Steps
+## License
 
-- Add safety or heuristic filters before answering
-- Layer on reranking / hybrid retrieval for tougher corpora
-- Implement spaced repetition for quiz topics
-- Add concept prerequisite tracking
-- Support multi-turn problem-solving workflows
+MIT
+
+## Project Structure
+
+```
+ai-tutor/
+├── apps/
+│   ├── quiz.py              # Streamlit quiz interface
+│   └── ui.py                # Additional UI components
+├── scripts/
+│   ├── clear_sessions.py    # Session management CLI
+│   └── tutor_web.py         # Web interface
+├── src/ai_tutor/
+│   ├── agents/              # Multi-agent system
+│   ├── learning/            # Quiz & personalization
+│   ├── retrieval/           # Vector store & search
+│   ├── ingestion/           # Document processing
+│   └── system.py            # Main TutorSystem
+├── config/
+│   └── default.yaml         # Configuration
+└── data/
+    ├── raw/                 # Original documents
+    ├── processed/           # Chunks, profiles, sessions
+    └── vector_store/        # Embeddings
+```
