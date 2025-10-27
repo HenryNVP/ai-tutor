@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -62,3 +62,4 @@ class Query(BaseModel):
 
     text: str
     domain: Optional[str] = None
+    source_filter: Optional[List[str]] = None  # Filenames to restrict search to

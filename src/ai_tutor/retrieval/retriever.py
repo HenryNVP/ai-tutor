@@ -167,9 +167,21 @@ class Retriever:
         embedding = self.embedder.embed_query(query.text)
         
         # Perform similarity search in vector store
-        hits = self.vector_store.search(embedding, self.config.top_k)
+        # Pass source_filter if provided to restrict search to specific files
+        hits = self.vector_store.search(
+            embedding, 
+            self.config.top_k,
+            source_filter=query.source_filter
+        )
         
         # Log retrieval statistics for monitoring
-        logger.info("Retrieved %s hits.", len(hits))
+        if query.source_filter:
+            logger.info(
+                "Retrieved %s hits (filtered to sources: %s).", 
+                len(hits), 
+                query.source_filter
+            )
+        else:
+            logger.info("Retrieved %s hits.", len(hits))
         
         return hits

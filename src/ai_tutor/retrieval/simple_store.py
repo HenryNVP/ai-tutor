@@ -91,8 +91,30 @@ class SimpleVectorStore(VectorStore):
             if chunk_id not in self._chunk_ids:
                 self._chunk_ids.append(chunk_id)
 
-    def search(self, embedding: List[float], top_k: int) -> List[RetrievalHit]:
-        """Return the highest-scoring hits by cosine similarity for the query embedding."""
+    def search(
+        self, 
+        embedding: List[float], 
+        top_k: int,
+        source_filter: List[str] | None = None
+    ) -> List[RetrievalHit]:
+        """
+        Return the highest-scoring hits by cosine similarity for the query embedding.
+        
+        Parameters
+        ----------
+        embedding : List[float]
+            Query embedding vector
+        top_k : int
+            Number of top results to return
+        source_filter : List[str] | None
+            If provided, only return chunks from these source files (filenames).
+            Filenames are matched case-insensitively against chunk.metadata.source_path.
+            
+        Returns
+        -------
+        List[RetrievalHit]
+            Top-k results, optionally filtered by source files
+        """
         if self._matrix is None or not len(self._chunks):
             return []
         query = np.array(embedding).reshape(1, -1)
@@ -104,9 +126,39 @@ class SimpleVectorStore(VectorStore):
                 f"Reingest documents after clearing the vector store at {self.directory} "
                 "or ensure both ingestion and querying use the same embedding model."
             )
-        scores = cosine_similarity(query, matrix)[0]
-        chunk_ids = self._chunk_ids
-        ranked_indices = np.argsort(scores)[::-1][:top_k]
+        
+        # If source_filter provided, pre-filter indices to only matching sources
+        if source_filter:
+            from pathlib import Path
+            # Normalize filter filenames for case-insensitive matching
+            normalized_filter = {Path(f).name.lower() for f in source_filter}
+            
+            # Build list of indices for chunks matching the filter
+            valid_indices = []
+            for idx, chunk_id in enumerate(self._chunk_ids):
+                chunk = self._chunks[chunk_id]
+                source_name = Path(chunk.metadata.source_path).name.lower()
+                if source_name in normalized_filter:
+                    valid_indices.append(idx)
+            
+            if not valid_indices:
+                # No chunks match the filter
+                return []
+            
+            # Only compute scores for filtered indices
+            valid_indices_array = np.array(valid_indices)
+            scores_full = cosine_similarity(query, matrix)[0]
+            scores = scores_full[valid_indices_array]
+            chunk_ids = [self._chunk_ids[i] for i in valid_indices]
+            
+            # Rank within filtered results
+            ranked_indices = np.argsort(scores)[::-1][:top_k]
+        else:
+            # No filter - search all chunks
+            scores = cosine_similarity(query, matrix)[0]
+            chunk_ids = self._chunk_ids
+            ranked_indices = np.argsort(scores)[::-1][:top_k]
+        
         hits: List[RetrievalHit] = []
         for idx in ranked_indices:
             score = float(scores[idx])

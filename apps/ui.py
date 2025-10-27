@@ -243,17 +243,36 @@ def filter_hits_by_filenames(hits: List, filenames: List[str]) -> List:
         st.write(f"**Found in top {len(hits)} retrieval results (unique sources):**")
         seen_sources = set()
         matches_found = 0
+        match_list = []
+        no_match_list = []
         for hit in hits:  # Check ALL hits
             source_name = Path(hit.chunk.metadata.source_path).name.lower()
             if source_name not in seen_sources:
                 seen_sources.add(source_name)
-                match = "✅ MATCH" if source_name in normalized_filenames else "❌ no match"
-                st.write(f"- `{source_name}` {match}")
                 if source_name in normalized_filenames:
+                    match_list.append(source_name)
                     matches_found += 1
+                else:
+                    no_match_list.append(source_name)
                 logger.info(f"Source: {source_name}, Match: {source_name in normalized_filenames}")
+        
+        # Show matches first (good news first!)
+        if match_list:
+            st.write("**✅ MATCHES (your uploaded files):**")
+            for source in match_list:
+                st.write(f"  - `{source}` ✅")
+        else:
+            st.write("**❌ NO MATCHES FOUND**")
+        
         st.write("")
-        st.write(f"**Summary:** {matches_found}/{len(normalized_filenames)} uploaded files found in results")
+        # Show first 10 non-matches to avoid cluttering
+        if no_match_list:
+            st.write(f"**Other files in results (showing first 10 of {len(no_match_list)}):**")
+            for source in no_match_list[:10]:
+                st.write(f"  - `{source}` ❌")
+        
+        st.write("")
+        st.write(f"**Summary:** {matches_found}/{len(normalized_filenames)} uploaded files found in {len(hits)} total results")
     
     filtered_hits = []
     for hit in hits:
@@ -851,31 +870,73 @@ def render() -> None:
                     from collections import defaultdict
                     
                     with st.spinner("Retrieving content from your uploaded documents..."):
-                        # Strategy: Retrieve using both filenames and the user's query
+                        # Strategy: Use source_filter to ONLY search uploaded files
+                        # This is MUCH more efficient than searching everything then filtering!
                         all_hits = []
                         
-                        # 1. Retrieve using filenames to ensure we get content from uploaded docs
-                        for filename in st.session_state.chat_uploaded_filenames:
-                            query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
-                            file_hits = system.tutor_agent.retriever.retrieve(Query(text=query_text))
-                            all_hits.extend(file_hits)
+                        # Increase top_k since we're only searching uploaded files (smaller pool)
+                        original_top_k = system.tutor_agent.retriever.config.top_k
+                        system.tutor_agent.retriever.config.top_k = 50  # More than default, but no need for 200
                         
-                        # 2. Also retrieve using the user's actual query for relevance
-                        query_hits = system.tutor_agent.retriever.retrieve(Query(text=prompt))
-                        all_hits.extend(query_hits)
+                        try:
+                            # 1. Retrieve using filenames with SOURCE FILTER
+                            for filename in st.session_state.chat_uploaded_filenames:
+                                # Extract meaningful terms from filename
+                                query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
+                                file_hits = system.tutor_agent.retriever.retrieve(
+                                    Query(
+                                        text=query_text,
+                                        source_filter=st.session_state.chat_uploaded_filenames
+                                    )
+                                )
+                                all_hits.extend(file_hits)
+                                
+                                # Also try the full filename without extension
+                                full_name_query = Path(filename).stem
+                                more_hits = system.tutor_agent.retriever.retrieve(
+                                    Query(
+                                        text=full_name_query,
+                                        source_filter=st.session_state.chat_uploaded_filenames
+                                    )
+                                )
+                                all_hits.extend(more_hits)
+                            
+                            # 2. Also retrieve using the user's actual query with SOURCE FILTER
+                            query_hits = system.tutor_agent.retriever.retrieve(
+                                Query(
+                                    text=prompt,
+                                    source_filter=st.session_state.chat_uploaded_filenames
+                                )
+                            )
+                            all_hits.extend(query_hits)
+                            
+                            # 3. For newly uploaded files, also try broad subject queries with SOURCE FILTER
+                            if st.session_state.get('chat_files_just_ingested', False):
+                                # Try broad queries that might match the content
+                                broad_queries = ["computer science", "engineering", "mathematics", "lecture", "course material"]
+                                for broad_query in broad_queries:
+                                    broad_hits = system.tutor_agent.retriever.retrieve(
+                                        Query(
+                                            text=broad_query,
+                                            source_filter=st.session_state.chat_uploaded_filenames
+                                        )
+                                    )
+                                    all_hits.extend(broad_hits)
+                        finally:
+                            # ALWAYS restore original top_k
+                            system.tutor_agent.retriever.config.top_k = original_top_k
                         
-                        # Remove duplicates and filter to only uploaded documents
+                        # Remove duplicates - no need to filter since source_filter already did it!
                         seen_chunk_ids = set()
-                        unique_hits = []
+                        filtered_hits = []
                         for hit in all_hits:
                             if hit.chunk.metadata.chunk_id not in seen_chunk_ids:
                                 seen_chunk_ids.add(hit.chunk.metadata.chunk_id)
-                                unique_hits.append(hit)
+                                filtered_hits.append(hit)
                         
-                        filtered_hits = filter_hits_by_filenames(
-                            unique_hits,
-                            st.session_state.chat_uploaded_filenames
-                        )
+                        # Show debug info about what we found
+                        if filtered_hits:
+                            st.caption(f"✅ Found {len(filtered_hits)} passages from your uploaded file(s)")
                         
                         if filtered_hits:
                             # Group hits by document for balanced representation

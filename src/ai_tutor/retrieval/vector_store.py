@@ -15,8 +15,24 @@ class VectorStore(ABC):
         """Insert or update chunk embeddings within the store."""
 
     @abstractmethod
-    def search(self, embedding: List[float], top_k: int) -> List[RetrievalHit]:
-        """Return the top-k matches for the provided embedding."""
+    def search(
+        self, 
+        embedding: List[float], 
+        top_k: int,
+        source_filter: List[str] | None = None
+    ) -> List[RetrievalHit]:
+        """
+        Return the top-k matches for the provided embedding.
+        
+        Parameters
+        ----------
+        embedding : List[float]
+            Query embedding vector
+        top_k : int
+            Maximum number of results to return
+        source_filter : List[str] | None
+            Optional list of source filenames to restrict search to
+        """
 
     @abstractmethod
     def persist(self) -> None:

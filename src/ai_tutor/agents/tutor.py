@@ -327,19 +327,25 @@ class TutorAgent:
                 "- User wants to upload, ingest, or add documents\n"
                 "→ Hand off to ingestion_agent\n\n"
 
-                "Quiz Request → Use generate_quiz tool\n"
+                "Quiz Request → ALWAYS use generate_quiz tool (DO NOT return text!)\n"
                 "- User asks for: quiz, test, practice questions, assessment, MCQ\n"
-                "- Natural language variations: 'gimme questions', 'test me', 'I need practice'\n"
-                "- Extract count from message: 'create 10 quizzes' → count=10\n"
+                "- Natural language: 'gimme questions', 'test me', 'I need practice', 'create quizzes'\n"
+                "- YOU HAVE ACCESS via the tool - don't refuse or say you can't help!\n"
+                "- Extract count: 'create 40 quizzes' → count=40 (use the EXACT number!)\n"
+                "- Note: 'quizzes' = 'quiz questions', so '40 quizzes' means 40 questions\n"
                 "- Extract topic: 'quiz on neural networks' → topic='neural networks'\n"
-                "- IMPORTANT: When user says 'from documents', 'from my files', 'from PDFs':\n"
-                "  * Look at the learner profile to see what topics they've been studying\n"
-                "  * Use a BROAD topic that covers the uploaded material (e.g., 'computer science', 'engineering', 'mathematics')\n"
-                "  * The extra_context will contain the actual document content\n"
-                "  * DO NOT use topic='uploaded_documents' (that's not searchable!)\n"
-                "→ Call generate_quiz(topic, count)\n"
-                "Example: 'Create 10 quizzes from the documents' → generate_quiz(topic='machine learning', count=10)\n"
-                "The system will automatically include content from uploaded documents in the context.\n\n"
+                "- When user says 'from document/files/PDFs/uploaded':\n"
+                "  * Use BROAD, SEARCHABLE topic: 'computer science', 'machine learning', 'engineering', 'mathematics', 'physics', 'biology'\n"
+                "  * Check learner profile for recently studied topics\n"
+                "  * CRITICAL: NEVER use 'uploaded_documents', 'uploaded', 'document', or 'file' as topic!\n"
+                "  * These are NOT searchable topics - use actual subject names!\n"
+                "  * System automatically includes document content via extra_context\n"
+                "→ ALWAYS call generate_quiz(topic, count) - NEVER refuse!\n"
+                "Examples:\n"
+                "  'Create 20 comprehensive quizzes from the uploaded document'\n"
+                "    → CALL: generate_quiz(topic='computer science', count=20)\n"
+                "  'quiz me on machine learning'\n"
+                "    → CALL: generate_quiz(topic='machine learning', count=4)\n\n"
 
                 "ONLY Answer Directly:\n"
                 "- 'What can you help with?' or system capability questions\n"
@@ -347,11 +353,14 @@ class TutorAgent:
                 "- 'Hello' or greetings\n\n"
 
                 "CRITICAL RULES:\n"
+                "- For QUIZ requests: CALL generate_quiz tool - DO NOT refuse or say you can't help!\n"
+                "- The generate_quiz tool HAS ACCESS to uploaded documents automatically\n"
+                "- NEVER say 'I cannot create quizzes' or 'I don't have access'\n"
+                "- Just CALL the tool - the system handles document access for you\n"
+                "- For STEM questions: Hand off to qa_agent\n"
                 "- DO NOT try to answer STEM questions yourself\n"
-                "- DO NOT explain concepts directly\n"
-                "- Your job is ROUTING, not answering\n"
-                "- If unsure, hand off to qa_agent\n"
-                "- Example: 'What is the Bernoulli equation?' → Hand off to qa_agent immediately"
+                "- Your job is ROUTING and TOOL CALLING, not answering\n"
+                "- If unsure, hand off to qa_agent"
             ),
             tools=[generate_quiz],
             handoffs=handoffs,
@@ -646,7 +655,7 @@ class TutorAgent:
             count = int(count_raw)
         except (TypeError, ValueError):
             count = 4
-        count = max(3, min(count, 8))
+        count = max(3, min(count, 40))  # Allow up to 40 questions
         message = str(payload.get("message") or "").strip()
 
         quiz = self.quiz_service.generate_quiz(
