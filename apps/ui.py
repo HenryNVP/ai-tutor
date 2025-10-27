@@ -1066,7 +1066,7 @@ Please answer based only on the provided context."""
                 st.session_state.quiz_answers[idx] = display_options.index(selection) - 1
                 st.markdown("---")
 
-            col_submit, col_download = st.columns([2, 1])
+            col_submit, col_edit_download = st.columns([2, 1])
             with col_submit:
                 if st.button("Submit Quiz", type="primary", use_container_width=True):
                     answers = [st.session_state.quiz_answers.get(idx, -1) for idx in range(len(quiz.questions))]
@@ -1091,16 +1091,47 @@ Please answer based only on the provided context."""
                         )
                         st.rerun()
             
-            with col_download:
-                # Allow downloading quiz before submitting
-                quiz_md = quiz_to_markdown(quiz)
-                st.download_button(
-                    label="💾 Download Quiz",
-                    data=quiz_md,
-                    file_name=f"quiz_{quiz.topic.replace(' ', '_')}.md",
-                    mime="text/markdown",
-                    use_container_width=True
+            with col_edit_download:
+                # Initialize session state for pre-submit edit mode
+                if "pre_submit_edit_mode" not in st.session_state:
+                    st.session_state.pre_submit_edit_mode = False
+                
+                # Toggle edit/download mode
+                if st.button("✏️ Edit & Download", use_container_width=True, key="student_pre_submit_edit_toggle"):
+                    st.session_state.pre_submit_edit_mode = not st.session_state.pre_submit_edit_mode
+                    if st.session_state.pre_submit_edit_mode:
+                        # Initialize markdown when entering edit mode
+                        st.session_state.pre_submit_quiz_markdown = quiz_to_markdown(quiz)
+                    st.rerun()
+            
+            # Show edit/download interface if enabled
+            if st.session_state.get("pre_submit_edit_mode", False):
+                st.divider()
+                st.markdown("### ✏️ Edit Quiz")
+                st.caption("Edit the quiz content below and download when ready.")
+                
+                edited_quiz = st.text_area(
+                    "Quiz Content (Markdown)",
+                    value=st.session_state.get("pre_submit_quiz_markdown", quiz_to_markdown(quiz)),
+                    height=300,
+                    key="pre_submit_quiz_editor"
                 )
+                st.session_state.pre_submit_quiz_markdown = edited_quiz
+                
+                col_download, col_close = st.columns([1, 1])
+                with col_download:
+                    st.download_button(
+                        label="💾 Download Quiz",
+                        data=edited_quiz,
+                        file_name=f"quiz_{quiz.topic.replace(' ', '_')}.md",
+                        mime="text/markdown",
+                        use_container_width=True,
+                        key="student_download_edited_quiz"
+                    )
+                with col_close:
+                    if st.button("✓ Done", use_container_width=True, key="student_close_edit"):
+                        st.session_state.pre_submit_edit_mode = False
+                        st.rerun()
 
         if st.session_state.quiz_result:
             result = QuizEvaluation.model_validate(st.session_state.quiz_result)
