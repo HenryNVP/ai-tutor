@@ -536,13 +536,7 @@ def render_quiz_builder_tab(system: TutorSystem, learner_id: str) -> None:
     """Render the advanced quiz builder tab."""
     st.header("📝 Quiz Builder")
     
-    # Initialize session state
-    if "quiz_builder_quiz" not in st.session_state:
-        st.session_state.quiz_builder_quiz = None
-    if "quiz_edit_mode" not in st.session_state:
-        st.session_state.quiz_edit_mode = False
-    if "edited_quiz_text" not in st.session_state:
-        st.session_state.edited_quiz_text = ""
+    st.info("💡 Generate a quiz here, then switch to the **Chat & Learn** tab to take it interactively!")
     
     col1, col2 = st.columns([1, 1])
     
@@ -557,7 +551,7 @@ def render_quiz_builder_tab(system: TutorSystem, learner_id: str) -> None:
         
         quiz_col1, quiz_col2 = st.columns(2)
         with quiz_col1:
-            num_questions = st.slider("Number of Questions", 3, 8, 4, key="quiz_builder_count")
+            num_questions = st.slider("Number of Questions", 3, 20, 4, key="quiz_builder_count")
         with quiz_col2:
             difficulty = st.selectbox(
                 "Difficulty Level",
@@ -572,7 +566,7 @@ def render_quiz_builder_tab(system: TutorSystem, learner_id: str) -> None:
             help="If checked, quiz questions will be based on relevant passages retrieved from the vector store"
         )
         
-        if st.button("✨ Generate Quiz", type="primary", disabled=not quiz_topic.strip()):
+        if st.button("✨ Generate Interactive Quiz", type="primary", disabled=not quiz_topic.strip()):
             with st.spinner("Generating quiz from retrieved passages..."):
                 try:
                     # Retrieve relevant context if using corpus
@@ -596,77 +590,46 @@ def render_quiz_builder_tab(system: TutorSystem, learner_id: str) -> None:
                         num_questions=num_questions,
                         extra_context=extra_context
                     )
-                    st.session_state.quiz_builder_quiz = quiz
-                    st.session_state.edited_quiz_text = quiz_to_markdown(quiz)
-                    st.success(f"✅ Generated {len(quiz.questions)}-question quiz on '{quiz.topic}'")
-                    st.rerun()
+                    # Use unified quiz interface
+                    st.session_state.quiz = quiz.model_dump(mode="json")
+                    st.session_state.quiz_answers = {}
+                    st.session_state.quiz_result = None
+                    st.success(f"✅ Generated {len(quiz.questions)}-question quiz on '{quiz.topic}'! Go to **Chat & Learn** tab to take it.")
                 except Exception as e:
                     st.error(f"❌ Quiz generation failed: {str(e)}")
     
     with col2:
-        st.subheader("📥 Export Quiz")
+        st.subheader("📥 Quick Download")
+        st.caption("Want to just download a quiz without taking it?")
         
-        if st.session_state.quiz_builder_quiz:
-            quiz = st.session_state.quiz_builder_quiz
-            
-            st.markdown(f"**Topic:** {quiz.topic}")
-            st.markdown(f"**Difficulty:** {quiz.difficulty}")
-            st.markdown(f"**Questions:** {len(quiz.questions)}")
-            
-            # Toggle edit mode
-            if st.button("✏️ Edit Quiz" if not st.session_state.quiz_edit_mode else "👁️ Preview Quiz"):
-                st.session_state.quiz_edit_mode = not st.session_state.quiz_edit_mode
-                st.rerun()
-            
-            # Download button
-            st.download_button(
-                label="⬇️ Download as Markdown",
-                data=st.session_state.edited_quiz_text,
-                file_name=f"quiz_{quiz.topic.replace(' ', '_').lower()}.md",
-                mime="text/markdown",
-                type="primary"
-            )
-        else:
-            st.info("Generate a quiz to see export options")
-    
-    # Preview or Edit section
-    if st.session_state.quiz_builder_quiz:
-        st.divider()
+        download_topic = st.text_input(
+            "Quiz Topic for Download",
+            placeholder="e.g., Binary Search",
+            key="quiz_download_topic"
+        )
         
-        if st.session_state.quiz_edit_mode:
-            st.subheader("✏️ Edit Quiz (Markdown)")
-            st.caption("Edit the quiz in markdown format. Changes will be reflected in the download.")
-            
-            edited_text = st.text_area(
-                "Quiz Content",
-                value=st.session_state.edited_quiz_text,
-                height=500,
-                key="quiz_markdown_editor"
-            )
-            st.session_state.edited_quiz_text = edited_text
-            
-        else:
-            st.subheader("👁️ Quiz Preview")
-            quiz = st.session_state.quiz_builder_quiz
-            
-            for idx, question in enumerate(quiz.questions):
-                with st.expander(f"Question {idx + 1}: {question.question[:50]}...", expanded=idx == 0):
-                    st.markdown(f"**{question.question}**")
-                    st.markdown("")
-                    
-                    for choice_idx, choice in enumerate(question.choices):
-                        if choice_idx == question.correct_index:
-                            st.success(f"✅ **{chr(65 + choice_idx)}.** {choice} _(Correct)_")
-                        else:
-                            st.write(f"○ **{chr(65 + choice_idx)}.** {choice}")
-                    
-                    if question.explanation:
-                        st.info(f"**Explanation:** {question.explanation}")
-                    
-                    if question.references:
-                        st.caption("**References:**")
-                        for ref in question.references:
-                            st.caption(f"• {ref}")
+        download_num = st.number_input("Number of Questions", min_value=3, max_value=20, value=5, key="quiz_download_num")
+        
+        if st.button("📄 Generate & Download Only", disabled=not download_topic.strip()):
+            with st.spinner("Generating quiz..."):
+                try:
+                    quiz = system.generate_quiz(
+                        learner_id=learner_id,
+                        topic=download_topic,
+                        num_questions=download_num
+                    )
+                    quiz_md = quiz_to_markdown(quiz)
+                    st.download_button(
+                        label="💾 Download Quiz (Markdown)",
+                        data=quiz_md,
+                        file_name=f"quiz_{quiz.topic.replace(' ', '_')}.md",
+                        mime="text/markdown",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                    st.success("✅ Quiz ready for download!")
+                except Exception as e:
+                    st.error(f"❌ Quiz generation failed: {str(e)}")
 
 
 def render() -> None:
@@ -711,12 +674,6 @@ def render() -> None:
             st.session_state.chat_uploaded_filenames = []  # Track filenames for filtering
         if "chat_files_ingested" not in st.session_state:
             st.session_state.chat_files_ingested = False
-        if "chat_quiz_preview" not in st.session_state:
-            st.session_state.chat_quiz_preview = None
-        if "chat_quiz_edit_mode" not in st.session_state:
-            st.session_state.chat_quiz_edit_mode = False
-        if "chat_quiz_markdown" not in st.session_state:
-            st.session_state.chat_quiz_markdown = ""
         if "quiz" not in st.session_state:
             st.session_state.quiz = None
         if "quiz_answers" not in st.session_state:
@@ -917,17 +874,17 @@ def render() -> None:
                                 extra_context=extra_context
                             )
                         
-                        # Store quiz for preview/edit
-                        st.session_state.chat_quiz_preview = quiz
-                        st.session_state.chat_quiz_markdown = quiz_to_markdown(quiz)
-                        st.session_state.chat_quiz_edit_mode = False
+                        # Store quiz in unified interface
+                        st.session_state.quiz = quiz.model_dump(mode="json")
+                        st.session_state.quiz_answers = {}
+                        st.session_state.quiz_result = None
                         
-                        st.success(f"✅ Quiz generated! Scroll down to preview, edit, and download.")
+                        st.success(f"✅ Quiz generated! Scroll down to take the quiz.")
                         
                         # Add message
                         st.session_state.messages.append({
                             "role": "assistant",
-                            "content": f"I've created a {len(quiz.questions)}-question quiz on **{quiz.topic}**. You can preview, edit, and download it below."
+                            "content": f"I've created a {len(quiz.questions)}-question quiz on **{quiz.topic}**. Scroll down to take it, and you can edit or download it after completion."
                         })
                     except Exception as e:
                         st.error(f"❌ Quiz generation failed: {str(e)}")
@@ -1076,7 +1033,22 @@ Please answer based only on the provided context."""
         if st.session_state.quiz:
             quiz = Quiz.model_validate(st.session_state.quiz)
             st.divider()
-            st.subheader(f"📝 Quiz: {quiz.topic} ({quiz.difficulty.title()})")
+            
+            # Header with close button
+            col_header, col_close = st.columns([5, 1])
+            with col_header:
+                st.subheader(f"📝 Quiz: {quiz.topic} ({quiz.difficulty.title()})")
+            with col_close:
+                if st.button("❌ Close", use_container_width=True, key="close_quiz_top"):
+                    st.session_state.quiz = None
+                    st.session_state.quiz_answers = {}
+                    st.session_state.quiz_result = None
+                    if "quiz_markdown" in st.session_state:
+                        del st.session_state.quiz_markdown
+                    if "quiz_edit_mode" in st.session_state:
+                        del st.session_state.quiz_edit_mode
+                    st.rerun()
+            
             st.caption("Select answers for each question and submit when ready.")
 
             for idx, question in enumerate(quiz.questions):
@@ -1094,37 +1066,58 @@ Please answer based only on the provided context."""
                 st.session_state.quiz_answers[idx] = display_options.index(selection) - 1
                 st.markdown("---")
 
-            if st.button("Submit quiz", type="primary"):
-                answers = [st.session_state.quiz_answers.get(idx, -1) for idx in range(len(quiz.questions))]
-                if any(choice < 0 or choice > 3 for choice in answers):
-                    st.warning("Answer every question before submitting.")
-                else:
-                    evaluation = system.evaluate_quiz(
-                        learner_id=learner_id,
-                        quiz_payload=quiz,
-                        answers=answers,
-                    )
-                    st.session_state.quiz_result = evaluation.model_dump(mode="json")
-                    st.session_state.quiz = None
-                    st.session_state.quiz_answers = {}
-                    st.success(
-                        f"Quiz scored {evaluation.correct_count}/{evaluation.total_questions} "
-                        f"({evaluation.score * 100:.0f}%)."
-                    )
-                    st.rerun()
+            col_submit, col_download = st.columns([2, 1])
+            with col_submit:
+                if st.button("Submit Quiz", type="primary", use_container_width=True):
+                    answers = [st.session_state.quiz_answers.get(idx, -1) for idx in range(len(quiz.questions))]
+                    if any(choice < 0 or choice > 3 for choice in answers):
+                        st.warning("Answer every question before submitting.")
+                    else:
+                        evaluation = system.evaluate_quiz(
+                            learner_id=learner_id,
+                            quiz_payload=quiz,
+                            answers=answers,
+                        )
+                        st.session_state.quiz_result = evaluation.model_dump(mode="json")
+                        st.session_state.quiz_completed = quiz.model_dump(mode="json")
+                        st.session_state.quiz = None
+                        st.session_state.quiz_answers = {}
+                        # Initialize markdown for download
+                        st.session_state.quiz_markdown = quiz_to_markdown(quiz)
+                        st.session_state.quiz_edit_mode = False
+                        st.success(
+                            f"Quiz scored {evaluation.correct_count}/{evaluation.total_questions} "
+                            f"({evaluation.score * 100:.0f}%)."
+                        )
+                        st.rerun()
+            
+            with col_download:
+                # Allow downloading quiz before submitting
+                quiz_md = quiz_to_markdown(quiz)
+                st.download_button(
+                    label="💾 Download Quiz",
+                    data=quiz_md,
+                    file_name=f"quiz_{quiz.topic.replace(' ', '_')}.md",
+                    mime="text/markdown",
+                    use_container_width=True
+                )
 
         if st.session_state.quiz_result:
             result = QuizEvaluation.model_validate(st.session_state.quiz_result)
-            st.subheader("Quiz feedback")
+            st.divider()
+            st.subheader("📊 Quiz Results")
+            
             st.write(
                 f"Score: **{result.correct_count}/{result.total_questions}** "
                 f"({result.score * 100:.0f}%)."
             )
+            
             if result.review_topics:
-                st.info("Suggested practice:")
+                st.info("💡 Suggested practice:")
                 for topic in result.review_topics:
                     st.write(f"- {topic}")
-            with st.expander("Question breakdown", expanded=False):
+            
+            with st.expander("📝 Question breakdown", expanded=False):
                 for answer in result.answers:
                     label = "✅ Correct" if answer.is_correct else "❌ Incorrect"
                     st.markdown(f"**Q{answer.index + 1}: {label}**")
@@ -1132,66 +1125,58 @@ Please answer based only on the provided context."""
                         st.caption(answer.explanation)
                     if answer.references:
                         st.caption("References: " + "; ".join(answer.references))
-            if st.button("Dismiss quiz feedback"):
-                st.session_state.quiz_result = None
-                st.rerun()
-        
-        # Quiz Preview/Edit Section (from chat quiz requests)
-        if st.session_state.chat_quiz_preview:
+            
+            # Edit and Download Section
             st.divider()
-            st.subheader("🎯 Generated Quiz Preview")
+            col1, col2, col3 = st.columns([1, 1, 1])
             
-            col1, col2 = st.columns([3, 1])
             with col1:
-                st.info("You can preview, edit, and download this quiz as Markdown.")
-            with col2:
-                if st.button("❌ Clear Quiz", use_container_width=True):
-                    st.session_state.chat_quiz_preview = None
-                    st.session_state.chat_quiz_markdown = ""
-                    st.session_state.chat_quiz_edit_mode = False
-                    st.rerun()
-            
-            # Toggle edit mode
-            edit_col1, edit_col2 = st.columns(2)
-            with edit_col1:
-                if st.button("✏️ Edit Mode" if not st.session_state.chat_quiz_edit_mode else "👁️ Preview Mode", 
+                if "quiz_edit_mode" not in st.session_state:
+                    st.session_state.quiz_edit_mode = False
+                
+                if st.button("✏️ Edit Quiz" if not st.session_state.quiz_edit_mode else "👁️ Preview Quiz", 
                             use_container_width=True):
-                    st.session_state.chat_quiz_edit_mode = not st.session_state.chat_quiz_edit_mode
+                    st.session_state.quiz_edit_mode = not st.session_state.quiz_edit_mode
                     st.rerun()
             
-            if st.session_state.chat_quiz_edit_mode:
-                # Edit mode: show text area
-                st.markdown("**Edit the quiz markdown below:**")
-                edited_markdown = st.text_area(
-                    "Quiz Markdown",
-                    value=st.session_state.chat_quiz_markdown,
-                    height=400,
-                    key="chat_quiz_edit_area"
-                )
-                st.session_state.chat_quiz_markdown = edited_markdown
-                
-                # Download button
-                st.download_button(
-                    label="💾 Download Quiz (Markdown)",
-                    data=edited_markdown,
-                    file_name=f"quiz_{st.session_state.chat_quiz_preview.topic.replace(' ', '_')}.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
+            with col2:
+                if "quiz_markdown" in st.session_state:
+                    st.download_button(
+                        label="💾 Download Quiz (MD)",
+                        data=st.session_state.quiz_markdown,
+                        file_name=f"quiz_{Quiz.model_validate(st.session_state.quiz_completed).topic.replace(' ', '_')}.md",
+                        mime="text/markdown",
+                        use_container_width=True
+                    )
+            
+            with col3:
+                if st.button("❌ Close Quiz", use_container_width=True):
+                    st.session_state.quiz_result = None
+                    if "quiz_completed" in st.session_state:
+                        del st.session_state.quiz_completed
+                    if "quiz_markdown" in st.session_state:
+                        del st.session_state.quiz_markdown
+                    if "quiz_edit_mode" in st.session_state:
+                        del st.session_state.quiz_edit_mode
+                    st.rerun()
+            
+            # Show edit or preview mode
+            if st.session_state.get("quiz_edit_mode", False):
+                st.markdown("### ✏️ Edit Quiz Markdown")
+                if "quiz_markdown" in st.session_state:
+                    edited_markdown = st.text_area(
+                        "Quiz Content",
+                        value=st.session_state.quiz_markdown,
+                        height=400,
+                        key="quiz_markdown_editor"
+                    )
+                    st.session_state.quiz_markdown = edited_markdown
             else:
-                # Preview mode: render markdown
-                st.markdown("**Preview:**")
-                with st.container(border=True):
-                    st.markdown(st.session_state.chat_quiz_markdown)
-                
-                # Download button
-                st.download_button(
-                    label="💾 Download Quiz (Markdown)",
-                    data=st.session_state.chat_quiz_markdown,
-                    file_name=f"quiz_{st.session_state.chat_quiz_preview.topic.replace(' ', '_')}.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
+                st.markdown("### 👁️ Quiz Preview")
+                if "quiz_markdown" in st.session_state:
+                    with st.container(border=True):
+                        st.markdown(st.session_state.quiz_markdown)
+        
 
 
 __all__ = [
