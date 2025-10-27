@@ -250,17 +250,20 @@ class TutorAgent:
         @function_tool
         def generate_quiz(topic: str, count: int = 4, difficulty: str | None = None) -> str:
             """
-            Function tool for quiz generation, callable by the orchestrator agent.
+            Generate an interactive quiz on a given topic.
             
-            This tool validates parameters, generates a quiz using the quiz service,
-            and stores the result in shared state for collection by the orchestrator.
+            Creates a multiple-choice quiz and displays it in an interactive interface
+            where students can select answers and get immediate feedback.
             
             Parameters
             ----------
             topic : str
-                Subject matter for the quiz (e.g., "derivatives", "Newton's laws").
+                Subject matter for the quiz (e.g., "machine learning", "physics", "calculus").
+                Should be a broad, searchable topic, NOT "documents" or "uploaded files".
             count : int, default=4
-                Number of questions to generate. Clamped to range [3, 8].
+                Number of questions to generate. Valid range: 3 to 40.
+                IMPORTANT: If user says "create 20 quizzes", use count=20 (their exact number).
+                Only use default (4) if user doesn't specify a number.
             difficulty : str | None, optional
                 Explicit difficulty level. If None, inferred from learner profile.
             
@@ -268,6 +271,14 @@ class TutorAgent:
             -------
             str
                 Confirmation message for the orchestrator to relay to the student.
+                
+            Examples
+            --------
+            User says: "create 20 quizzes from documents"
+            → Call: generate_quiz(topic='computer science', count=20)
+            
+            User says: "quiz me on calculus"  
+            → Call: generate_quiz(topic='calculus', count=4)
             """
             # Validate and clamp question count to reasonable range
             try:
@@ -327,12 +338,20 @@ class TutorAgent:
                 "- User wants to upload, ingest, or add documents\n"
                 "→ Hand off to ingestion_agent\n\n"
 
-                "Quiz Request → ALWAYS use generate_quiz tool (DO NOT return text!)\n"
-                "- User asks for: quiz, test, practice questions, assessment, MCQ\n"
+                "Quiz Request → ⚠️ MANDATORY: USE generate_quiz TOOL - NEVER ANSWER WITH TEXT! ⚠️\n"
+                "- User asks for: quiz, test, practice questions, assessment, MCQ, 'create X quizzes'\n"
                 "- Natural language: 'gimme questions', 'test me', 'I need practice', 'create quizzes'\n"
-                "- YOU HAVE ACCESS via the tool - don't refuse or say you can't help!\n"
-                "- Extract count: 'create 40 quizzes' → count=40 (use the EXACT number!)\n"
-                "- Note: 'quizzes' = 'quiz questions', so '40 quizzes' means 40 questions\n"
+                "- ❌ FORBIDDEN: Generating quiz questions in your response text\n"
+                "- ❌ FORBIDDEN: Listing questions like 'Here are 20 quiz questions:'\n"
+                "- ✅ REQUIRED: Call generate_quiz(topic, count) tool\n"
+                "- ✅ REQUIRED: Let the tool handle quiz generation\n"
+                "- COUNT EXTRACTION (CRITICAL!):\n"
+                "  * 'create 20 quizzes' → count=20 (use EXACT number user says!)\n"
+                "  * 'create 10 quizzes' → count=10\n"
+                "  * 'create 5 questions' → count=5\n"
+                "  * 'quiz me' (no number) → count=4 (default)\n"
+                "  * Note: 'quizzes' = 'quiz questions', so '20 quizzes' means count=20\n"
+                "  * DO NOT use count=10 as default when user specifies a number!\n"
                 "- Extract topic: 'quiz on neural networks' → topic='neural networks'\n"
                 "- When user says 'from document/files/PDFs/uploaded':\n"
                 "  * Use BROAD, SEARCHABLE topic: 'computer science', 'machine learning', 'engineering', 'mathematics', 'physics', 'biology'\n"
@@ -340,12 +359,14 @@ class TutorAgent:
                 "  * CRITICAL: NEVER use 'uploaded_documents', 'uploaded', 'document', or 'file' as topic!\n"
                 "  * These are NOT searchable topics - use actual subject names!\n"
                 "  * System automatically includes document content via extra_context\n"
-                "→ ALWAYS call generate_quiz(topic, count) - NEVER refuse!\n"
+                "→ ⚠️ MANDATORY: Call generate_quiz(topic, count) tool - DO NOT generate questions yourself! ⚠️\n"
                 "Examples:\n"
                 "  'Create 20 comprehensive quizzes from the uploaded document'\n"
-                "    → CALL: generate_quiz(topic='computer science', count=20)\n"
+                "    → ❌ WRONG: 'Here are 20 quiz questions: 1. What is...'\n"
+                "    → ✅ CORRECT: generate_quiz(topic='computer science', count=20)\n"
                 "  'quiz me on machine learning'\n"
-                "    → CALL: generate_quiz(topic='machine learning', count=4)\n\n"
+                "    → ❌ WRONG: 'Here is a quiz: Question 1:...'\n"
+                "    → ✅ CORRECT: generate_quiz(topic='machine learning', count=4)\n\n"
 
                 "ONLY Answer Directly:\n"
                 "- 'What can you help with?' or system capability questions\n"
@@ -353,10 +374,16 @@ class TutorAgent:
                 "- 'Hello' or greetings\n\n"
 
                 "CRITICAL RULES:\n"
-                "- For QUIZ requests: CALL generate_quiz tool - DO NOT refuse or say you can't help!\n"
+                "- For QUIZ requests:\n"
+                "  ❌ DO NOT generate quiz questions in your response text\n"
+                "  ❌ DO NOT write 'Here are 20 quiz questions:' followed by questions\n"
+                "  ❌ DO NOT create a text-based quiz in your answer\n"
+                "  ✅ ALWAYS CALL the generate_quiz(topic, count) tool instead\n"
+                "  ✅ Let the tool create the interactive quiz interface\n"
                 "- The generate_quiz tool HAS ACCESS to uploaded documents automatically\n"
-                "- NEVER say 'I cannot create quizzes' or 'I don't have access'\n"
-                "- Just CALL the tool - the system handles document access for you\n"
+                "- NEVER refuse quiz requests - just call the tool\n"
+                "- The system will display the quiz in an interactive interface\n"
+                "- Your job is ONLY to call the tool, not generate the questions yourself\n"
                 "- For STEM questions: Hand off to qa_agent\n"
                 "- DO NOT try to answer STEM questions yourself\n"
                 "- Your job is ROUTING and TOOL CALLING, not answering\n"

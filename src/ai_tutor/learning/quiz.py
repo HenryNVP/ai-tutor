@@ -211,18 +211,43 @@ class QuizService:
             "- Prefer the supplied context for grounding.\n\n"
             f"Context:\n{context_block}"
         )
+        
+        # Calculate required max_tokens based on number of questions
+        # Each question needs ~120-150 tokens (question + 4 choices + explanation)
+        # Add buffer for JSON structure overhead
+        required_tokens = (num_questions * 150) + 500
+        # Ensure minimum for small quizzes, cap at reasonable maximum
+        max_tokens_for_quiz = max(1024, min(required_tokens, 4000))
+        
+        logger.info(
+            "Generating %d questions, using max_tokens=%d (default: %d)",
+            num_questions,
+            max_tokens_for_quiz,
+            self.llm.config.max_output_tokens
+        )
+        
         response = self.llm.generate(
             [
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": user_message},
-            ]
+            ],
+            max_tokens=max_tokens_for_quiz  # Override default for quiz generation
         )
         cleaned = _clean_json_payload(response)
         try:
             payload = json.loads(cleaned)
         except json.JSONDecodeError as exc:
-            logger.error("Failed to parse quiz generation response: %s", cleaned)
-            raise ValueError("Quiz generation failed due to invalid JSON output.") from exc
+            logger.error("Failed to parse quiz generation response.")
+            logger.error("Raw response length: %d characters", len(response))
+            logger.error("Cleaned response length: %d characters", len(cleaned))
+            logger.error("First 500 chars: %s", cleaned[:500])
+            logger.error("Last 500 chars: %s", cleaned[-500:])
+            logger.error("JSON decode error: %s", exc)
+            raise ValueError(
+                f"Quiz generation failed due to invalid JSON output. "
+                f"Response was {len(response)} characters, may have been truncated. "
+                f"JSON error: {exc}"
+            ) from exc
 
         try:
             quiz = Quiz.model_validate(payload)
