@@ -1,26 +1,32 @@
 project_name: "Personal STEM Instructor"
 
+# LLM Configuration
 model:
-  name: "gpt-4o-mini"
-  provider: "openai"
-  temperature: 0.15
-  max_output_tokens: 2048
-  mode: "chat"
+  name: "gpt-4o-mini"                  # Model for agent orchestration and quiz generation
+  provider: "openai"                    # OpenAI API
+  temperature: 0.15                     # Low temperature for consistent, focused responses
+  max_output_tokens: 2048               # Default max tokens (overridden for large quizzes)
+  mode: "chat"                          # Chat mode for conversational context
 
+# Embedding Model Configuration
 embeddings:
-  model: "BAAI/bge-base-en"
-  provider: "sentence-transformers"
-  batch_size: 256
-  normalize: true
-  dimension: null
+  model: "BAAI/bge-base-en"            # Sentence transformer for vector embeddings
+  provider: "sentence-transformers"     # Local embeddings (no API calls)
+  batch_size: 256                       # Batch size for embedding generation
+  normalize: true                       # Normalize embeddings for cosine similarity
+  dimension: null                       # Auto-detect embedding dimension
 
+# Document Chunking Configuration
 chunking:
-  chunk_size: 500
-  chunk_overlap: 80
-  tokenizer: null
+  chunk_size: 500                       # Tokens per chunk (balance between context and precision)
+  chunk_overlap: 80                     # Overlap between chunks (helps with context continuity)
+  tokenizer: null                       # Auto-detect tokenizer
 
+# Retrieval Configuration
 retrieval:
-  top_k: 5
+  top_k: 5                              # Default number of results per query
+                                        # Note: Auto-increased to 50 for uploaded document queries
+                                        # with source filtering enabled
 
 paths:
   raw_data_dir: "data/raw"

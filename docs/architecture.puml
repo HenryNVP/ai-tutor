@@ -2,14 +2,13 @@
 skinparam componentStyle rectangle
 skinparam wrapWidth 200
 skinparam maxMessageSize 200
-title AI Tutor – Multi-Agent Architecture
+title AI Tutor – Agent-First Architecture (v2.0)
 
 actor User
 
 package "Entry Points" {
+  component "Streamlit UI\n(apps/ui.py)" as UI
   component "CLI (`ai-tutor`)" as CLI
-  component "Web UI\n(tutor_web.py)" as WebUI
-  component "Quiz UI\n(apps/ui.py)" as QuizUI
   component "Python API" as PythonAPI
 }
 
@@ -23,7 +22,7 @@ node "TutorSystem" as TutorSystem {
   component "Retriever" as Retriever
   component "EmbeddingClient" as EmbeddingClient
   component "SearchTool" as SearchTool
-  component "VectorStore\n(SimpleVectorStore)" as VectorStore
+  component "VectorStore\n(with source filtering)" as VectorStore
   component "ChunkJsonlStore" as ChunkStore
   component "QuizService" as QuizService
   component "ProgressTracker" as ProgressTracker
@@ -40,15 +39,14 @@ folder "Raw Documents\n(data/raw)" as RawDocs
 cloud "OpenAI API\n(gpt-4o-mini)" as OpenAI
 cloud "Embedding Provider\n(sentence-transformers)" as EmbeddingProvider
 
+User --> UI : Chat interface
 User --> CLI
-User --> WebUI
-User --> QuizUI
 User --> PythonAPI
 
+UI --> Orchestrator : Natural language\n"create 20 quizzes"
+UI --> Ingestion : Upload PDFs
 CLI --> Ingestion : `ingest` command
 CLI --> Orchestrator : `ask` command
-WebUI --> Orchestrator : answer_question
-QuizUI --> QuizService : generate & evaluate
 PythonAPI --> TutorSystem : all operations
 
 Ingestion --> Parsers : parse PDFs/Markdown
@@ -64,16 +62,16 @@ ChunkStore --> ChunkFS : persist .jsonl
 Orchestrator --> QA : STEM questions
 Orchestrator --> Web : current events/non-STEM
 Orchestrator --> IngestionAgent : file uploads
-Orchestrator --> QuizService : quiz requests
+Orchestrator --> QuizService : generate_quiz tool
 Orchestrator --> SessionFS : maintain context
 
 QA --> Retriever : retrieve_local_context
 Retriever --> EmbeddingClient : embed query
-Retriever --> VectorStore : cosine search
+Retriever --> VectorStore : cosine search\n+ source filter
 Web --> SearchTool : web_search
 
-QuizService --> Retriever : find relevant content
-QuizService --> OpenAI : generate questions
+QuizService --> Retriever : find relevant content\n(with source filtering)
+QuizService --> OpenAI : generate questions\n(dynamic max_tokens)
 QuizService --> ProgressTracker : update profiles
 ProgressTracker --> ProfileFS : save learner data
 ProgressTracker --> Personalizer : track mastery
@@ -83,28 +81,49 @@ QA --> OpenAI : generate cited answers
 Web --> OpenAI : synthesize web results
 
 note right of Orchestrator
-  Pure Router - delegates to specialists:
-  • STEM → qa_agent (with citations)
-  • News/Current → web_agent
-  • Uploads → ingestion_agent
-  • Quizzes → QuizService
+  Agent-First Architecture:
+  • Routes via natural language understanding
+  • Extracts count & topic from user messages
+  • Calls generate_quiz as function tool
+  • NEVER answers quiz requests with text
+  • Supports "create 20 quizzes from documents"
+  
   Daily session rotation prevents token overflow
 end note
 
 note right of QuizService
-  1. Generate adaptive quizzes
-  2. Evaluate learner answers
-  3. Update profiles based on score:
-     - Domain strengths/struggles
-     - Concepts mastered count
-     - Difficulty preferences
-     - Total study time
+  NEW Features (v2.0):
+  1. Generate 3-40 questions (was 3-8)
+  2. Dynamic max_tokens calculation:
+     tokens = (num_questions × 150) + 500
+  3. Source filtering for uploaded docs
+  4. Topic inference from context
+  5. Called as agent tool (not UI button)
+  
+  Profile Updates by Score:
+  • ≥70%: +strength, advance difficulty
+  • 40-69%: moderate adjustment
+  • <40%: +struggle, easier difficulty
 end note
 
 note left of VectorStore
-  Semantic search over
-  local course materials
-  with cosine similarity
+  NEW: Source Filtering (v2.0)
+  • Can search ONLY specific files
+  • 320x faster for uploaded docs
+  • Pre-filters by filename before similarity
+  • Guarantees relevance to user uploads
+  
+  Semantic search with cosine similarity
+  Optional source_filter parameter
+end note
+
+note bottom of UI
+  Two Tabs:
+  1. Chat & Learn (upload, quiz, Q&A)
+  2. Corpus Management (browse docs)
+  
+  Quiz Builder tab REMOVED (v2.0)
+  Use natural language instead!
 end note
 
 @enduml

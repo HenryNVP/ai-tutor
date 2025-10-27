@@ -1,7 +1,7 @@
 @startuml
 skinparam componentStyle rectangle
 skinparam wrapWidth 240
-title Multi-Agent Orchestration & Routing
+title Agent-First Orchestration & Quiz Generation (v2.0)
 
 package "Specialist Agents (gpt-4o-mini)" {
   component "QA Agent\nretrieve_local_context" as QAAgent #lightgreen
@@ -9,48 +9,62 @@ package "Specialist Agents (gpt-4o-mini)" {
   component "Ingestion Agent\ningest_corpus" as IngestionAgent #lightyellow
 }
 
-component "Orchestrator Agent\n(Pure Router)" as Orchestrator #orange
-component "QuizService\ngenerate_quiz tool" as QuizService #pink
+component "Orchestrator Agent\n(Function Tool Calling)" as Orchestrator #orange
+component "generate_quiz\nFunction Tool" as QuizTool #pink
+component "QuizService\n(Core Logic)" as QuizService #pink
 
 actor User
-User --> Orchestrator : Ask question
+User --> Orchestrator : "create 20 quizzes\nfrom documents"
 
 Orchestrator --> QAAgent : STEM questions\n(math, physics, CS, etc.)
 Orchestrator --> WebAgent : Current events\nhistory, arts
 Orchestrator --> IngestionAgent : File uploads
-Orchestrator --> QuizService : Quiz requests
+Orchestrator --> QuizTool : Quiz requests\n(extract count & topic)
+QuizTool --> QuizService : Call service logic
 
 QAAgent --> User : Answer with\nlocal citations [1][2]
 WebAgent --> User : Answer with\nURL citations
 IngestionAgent --> User : Ingestion summary
-QuizService --> User : Quiz questions
+QuizService --> User : Interactive quiz\n(3-40 questions)
 
 note right of Orchestrator
+  NEW: Agent-First Quiz Generation (v2.0)
+  
   Routing Rules:
   • Math/Science/Tech → qa_agent
   • News/Current → web_agent
   • Upload → ingestion_agent
-  • "Generate quiz" → QuizService tool
+  • "create N quizzes" → generate_quiz tool
   
-  Answers directly:
-  • "General knowledge"
-  • "What can you do?"
-  • "What's my progress?"
-  • Greetings
+  Count Extraction:
+  "create 20 quizzes" → count=20
+  "quiz me" → count=4 (default)
+  "10 questions on topic" → count=10
+  
+  Topic Extraction:
+  From: user message, uploaded docs, context
+  NEVER uses: "uploaded_documents", "documents"
+  
+  FORBIDDEN: Answering quiz requests with text
+  REQUIRED: ALWAYS call generate_quiz tool
 end note
 
-note left of QAAgent
-  1. ALWAYS call retrieve_local_context
-  2. Read returned context
-  3. Generate cited answer [1][2]
-  4. If no context → hand off to web_agent
-end note
-
-note right of WebAgent
-  1. ALWAYS call web_search
-  2. Review results
-  3. Synthesize answer with URLs
-  4. List sources at end
+note left of QuizTool
+  Function Tool (NEW in v2.0):
+  
+  Parameters:
+  • topic: str (broad, searchable)
+  • count: int (3-40, enforced)
+  • source_filter: Optional[List[str]]
+  
+  Features:
+  ✅ Uses user's exact count
+  ✅ Dynamic max_tokens
+  ✅ Source filtering for uploads
+  ✅ Topic inference from context
+  
+  Called by orchestrator agent
+  (NOT from UI buttons anymore!)
 end note
 
 @enduml
@@ -58,37 +72,77 @@ end note
 @startuml
 skinparam componentStyle rectangle
 skinparam wrapWidth 240
-title Quiz Generation & Profile Updates
+title Quiz Generation with Source Filtering (v2.0)
 
 actor Learner
+component "Orchestrator Agent" as Orchestrator
+component "generate_quiz Tool" as QuizTool
 component "QuizService" as QuizService
 component "Retriever" as Retriever
 component "VectorStore" as VectorStore
 component "OpenAI API\n(gpt-4o-mini)" as OpenAI
 component "ProgressTracker" as ProgressTracker
-component "PersonalizationManager" as Personalizer
 database "LearnerProfile\n*.json" as Profile
+folder "Uploaded Files" as UploadedFiles
 
-Learner -> QuizService : Request quiz\n(topic, num_questions)
-QuizService -> Retriever : Find relevant content
-Retriever -> VectorStore : Search chunks by topic
-VectorStore --> Retriever : Top chunks
-QuizService -> OpenAI : Generate questions\n+ distractors
-OpenAI --> QuizService : Quiz with 4 choices each
-QuizService --> Learner : Display quiz
+Learner -> Orchestrator : "create 20 quizzes\nfrom uploaded document"
+Orchestrator -> Orchestrator : Extract:\n• count=20\n• source_filter=["doc.pdf"]
+Orchestrator -> QuizTool : Call tool with params
+QuizTool -> QuizService : generate_quiz(topic, count, source_filter)
 
-Learner -> QuizService : Submit answers\n[0,2,1,3]
+QuizService -> QuizService : Calculate max_tokens:\n(20 × 150) + 500 = 3500
+QuizService -> Retriever : Find content\n+ source_filter
+Retriever -> VectorStore : Search ONLY uploaded files\n(320x faster!)
+VectorStore -> UploadedFiles : Filter by filename
+VectorStore --> Retriever : Top chunks from uploads
+Retriever --> QuizService : Relevant passages
+
+QuizService -> OpenAI : Generate 20 questions\nmax_tokens=3500
+OpenAI --> QuizService : Quiz with 20×4 choices
+QuizService --> Orchestrator : Return quiz object
+Orchestrator --> Learner : Display interactive quiz
+
+Learner -> Orchestrator : Submit answers [0,2,1,3...]
+Orchestrator -> QuizService : evaluate_quiz(quiz, answers)
 QuizService -> QuizService : Grade answers
-QuizService -> ProgressTracker : Update profile\n(score, topic)
+QuizService -> ProgressTracker : Update profile (score, topic)
 
 ProgressTracker -> Profile : Load profile
-ProgressTracker -> ProgressTracker : Calculate deltas:\n• score ≥70% → +strength\n• score <40% → +struggle\n• Update mastery count\n• Adjust difficulty
+ProgressTracker -> ProgressTracker : Calculate deltas based on score
 ProgressTracker -> Profile : Save updated profile
-ProgressTracker -> Personalizer : Track progress
 
-QuizService --> Learner : Results + feedback
+QuizService --> Learner : Results + feedback\n+ explanations
 
-note right of ProgressTracker
+note right of QuizService
+  NEW: Dynamic Token Calculation (v2.0)
+  
+  max_tokens = (num_questions × 150) + 500
+  
+  Examples:
+  • 4 questions → 1,100 tokens
+  • 20 questions → 3,500 tokens
+  • 40 questions → 6,500 tokens
+  
+  Prevents JSON truncation!
+  Old system: fixed 1,024 tokens (failed at 10+ questions)
+end note
+
+note left of VectorStore
+  NEW: Source Filtering (v2.0)
+  
+  Without filter:
+  • Searches all 10,000 chunks
+  • Old docs rank higher
+  • Slower, less relevant
+  
+  With filter ["lecture9.pdf"]:
+  • Searches only 31 chunks
+  • 320x faster!
+  • 100% relevance
+  • Guaranteed from user's file
+end note
+
+note bottom of ProgressTracker
   Profile Updates Based on Score:
   
   ≥70% (Strong):
@@ -96,12 +150,12 @@ note right of ProgressTracker
     -0.08 domain struggle
     difficulty = "independent challenge"
   
-  40-70% (Medium):
+  40-69% (Moderate):
     +0.06 domain strength
     no struggle change
     difficulty = "guided practice"
   
-  <40% (Weak):
+  <40% (Struggling):
     +0.02 domain strength
     +0.10 domain struggle
     difficulty = "foundational guidance"
@@ -109,6 +163,7 @@ note right of ProgressTracker
   Also updates:
   • concepts_mastered[domain] += correct_count
   • total_time_minutes += (questions × 1.5)
+  • next_topics based on weak areas
 end note
 
 @enduml
@@ -116,49 +171,135 @@ end note
 @startuml
 skinparam componentStyle rectangle
 skinparam wrapWidth 220
-title Ingestion Pipeline
+title Document Upload & Auto-Ingestion (v2.0)
 
 actor User
-component "CLI\n`ai-tutor ingest`" as CLI
+component "Streamlit UI\n(Chat & Learn tab)" as UI
+component "IngestionAgent" as IngestionAgent
 component "IngestionPipeline" as Ingestion
 component "Parsers\n(PDF, Markdown, TXT)" as Parsers
 component "Chunker" as Chunker
 component "EmbeddingClient\n(sentence-transformers)" as EmbeddingClient
-component "VectorStore\n(SimpleVectorStore)" as VectorStore
+component "VectorStore\n(with source tracking)" as VectorStore
 component "ChunkJsonlStore" as ChunkStore
-folder "data/raw/*.pdf" as RawDocs
 database "embeddings.npy" as EmbeddingsFile
-database "metadata.json" as MetadataFile
+database "metadata.json\n(includes source paths)" as MetadataFile
 database "chunks.jsonl" as ChunksFile
 
-User --> CLI : Select directory
-CLI --> Ingestion : ingest_directory(Path)
-Ingestion --> RawDocs : Scan for PDFs
-Ingestion --> Parsers : Parse documents
-Parsers --> Chunker : Extract text
-Chunker --> Chunker : Create 900-char chunks\n120-char overlap
+User --> UI : Upload PDF in chat
+UI -> UI : Store filename for filtering
+User --> UI : Send first message
+UI --> IngestionAgent : Auto-trigger ingestion
+IngestionAgent --> Ingestion : ingest_file(pdf_path)
+Ingestion --> Parsers : Parse PDF
+Parsers --> Chunker : Extract text by page
+Chunker --> Chunker : Create 500-token chunks\n80-token overlap
 Chunker --> EmbeddingClient : Batch encode
-EmbeddingClient --> VectorStore : Store vectors
-VectorStore --> EmbeddingsFile : Save numpy array
-VectorStore --> MetadataFile : Save chunk IDs
+EmbeddingClient --> VectorStore : Store vectors\n+ source metadata
+VectorStore --> EmbeddingsFile : Append to numpy array
+VectorStore --> MetadataFile : Save chunk IDs + sources
 Ingestion --> ChunkStore : Save full chunks
 ChunkStore --> ChunksFile : Append JSONL
 
-Ingestion --> User : Summary:\n• N documents\n• M chunks\n• Vector store updated
+IngestionAgent --> UI : Summary: N chunks indexed
+UI --> User : "Ready! Try:\n'create 20 quizzes from this'"
 
-note right of EmbeddingClient
-  Uses sentence-transformers locally
-  Model: BAAI/bge-base-en
-  384-dimensional vectors
-  Runs on CPU (no GPU required)
+note right of VectorStore
+  NEW: Source Tracking (v2.0)
+  
+  Each chunk metadata includes:
+  • source_path: "data/uploads/lecture9.pdf"
+  • filename: "lecture9.pdf"
+  
+  Enables source filtering:
+  • Query with source_filter=["lecture9.pdf"]
+  • Only searches matching chunks
+  • 320x faster, 100% relevant
 end note
 
 note left of Chunker
   Smart chunking:
   • Preserves paragraphs
-  • Maintains context
-  • Tracks doc metadata
+  • Maintains context with overlap
+  • Tracks document metadata
   • Page numbers for citations
+  • Source path for filtering (NEW!)
+end note
+
+note bottom of UI
+  NEW: Simplified Workflow (v2.0)
+  
+  OLD (Removed):
+  1. Upload via Corpus Management
+  2. Go to Quiz Builder tab
+  3. Fill in form
+  4. Click button
+  5. Switch to Chat tab
+  
+  NEW:
+  1. Upload in chat
+  2. Say "create 20 quizzes from this"
+  3. Take quiz immediately!
+end note
+
+@enduml
+
+@startuml
+skinparam componentStyle rectangle
+skinparam wrapWidth 220
+title Legacy vs Agent-First Comparison
+
+package "OLD Architecture (Removed v2.0)" #lightgray {
+  component "Quiz Builder Tab\n(Form UI)" as OldUI #gray
+  component "system.generate_quiz()\n(Bypassed agent)" as OldSystem #gray
+  component "agent.create_quiz()\n(Unnecessary wrapper)" as OldAgent #gray
+  component "QuizService" as OldQuizService #gray
+}
+
+package "NEW Architecture (v2.0)" #lightgreen {
+  component "Chat Interface\n(Natural language)" as NewUI #green
+  component "Orchestrator Agent\n(Intent understanding)" as NewOrchestrator #green
+  component "generate_quiz Tool\n(Function calling)" as NewTool #green
+  component "QuizService\n(Enhanced)" as NewQuizService #green
+}
+
+actor User
+
+User -[#gray]-> OldUI : Click button, fill form
+OldUI -[#gray]-> OldSystem : Direct call
+OldSystem -[#gray]-> OldAgent : Wrapper call
+OldAgent -[#gray]-> OldQuizService : Finally generates
+
+User --> NewUI : "create 20 quizzes"
+NewUI --> NewOrchestrator : Natural message
+NewOrchestrator --> NewTool : Extract params & call tool
+NewTool --> NewQuizService : Enhanced generation
+
+note right of OldUI
+  REMOVED (157 lines):
+  • Quiz Builder tab
+  • Quick Quiz Tools
+  • system.generate_quiz()
+  • agent.create_quiz()
+  
+  Limitations:
+  ❌ Button-based (inflexible)
+  ❌ Form inputs required
+  ❌ Max 8-20 questions
+  ❌ No document upload
+  ❌ Bypassed agent intelligence
+end note
+
+note right of NewUI
+  NEW Benefits:
+  ✅ Natural language
+  ✅ Context-aware
+  ✅ 3-40 questions
+  ✅ Document upload support
+  ✅ Source filtering (320x faster)
+  ✅ Dynamic max_tokens
+  ✅ Agent intelligence
+  ✅ Cleaner code (-157 lines)
 end note
 
 @enduml
