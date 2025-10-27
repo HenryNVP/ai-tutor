@@ -1,0 +1,59 @@
+========================================
+⚠️  CRITICAL: APP MUST BE RESTARTED ⚠️
+========================================
+
+The code has been fixed multiple times but the app is still running OLD CODE!
+
+SYMPTOMS OF OLD CODE:
+❌ Generates 8 questions (not 10)
+❌ Topic is "documents" in general
+❌ Message says "prepared a quiz for you"
+❌ No mention of document titles
+
+NEW CODE WILL SHOW:
+✅ Generates exactly 10 questions
+✅ Topic is your document names
+✅ Message says "Switch to Student Quiz tab"
+✅ Shows "Retrieved X from 2 documents"
+
+========================================
+HOW TO RESTART:
+========================================
+
+Option 1: Find the Streamlit terminal
+  1. Look for terminal with "You can now view your Streamlit app..."
+  2. Click on that terminal
+  3. Press Ctrl+C
+  4. Wait for it to stop
+  5. Run: streamlit run apps/ui.py
+
+Option 2: Force kill
+  In a terminal:
+    pkill -9 -f streamlit
+    cd /home/henry/Projects/ai-tutor
+    streamlit run apps/ui.py
+
+Option 3: Check process and kill
+  ps aux | grep streamlit
+  kill <PID>
+  streamlit run apps/ui.py
+
+========================================
+VERIFY IT WORKED:
+========================================
+
+After restart, type: "create 10 quizzes from the documents"
+
+If you see:
+✅ "10-question quiz" → WORKING!
+✅ Your document names → WORKING!
+✅ "Switch to Student Quiz tab" → WORKING!
+
+If you still see:
+❌ "8-question quiz on documents" → NOT RESTARTED YET!
+
+========================================
+
+The code is ready. Just needs restart!
+
+

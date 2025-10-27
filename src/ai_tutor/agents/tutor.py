@@ -483,8 +483,8 @@ class TutorAgent:
             )
             self.state.last_quiz = quiz_payload
             answer_text = (
-                f"I've prepared a {len(quiz_payload.questions)}-question quiz on {quiz_payload.topic}. "
-                "Scroll down to take it when you're ready."
+                f"I've prepared a {len(quiz_payload.questions)}-question quiz on {quiz_payload.topic} for you. "
+                "You can start taking the quiz now!"
             )
         if not quiz_payload and not self.state.last_citations:
             answer_text = self._strip_citation_markers(answer_text)
@@ -667,9 +667,15 @@ class TutorAgent:
 
     @staticmethod
     def _infer_topic_from_request(question: str) -> str:
+        # Check if requesting quiz from documents
+        if re.search(r"from\s+(?:the\s+)?documents?|based\s+on\s+documents?|using\s+(?:the\s+)?(?:uploaded\s+)?(?:documents?|files?)", question, flags=re.IGNORECASE):
+            return "uploaded documents"
+        
         match = re.search(r"(?:about|on|regarding)\s+(.+)", question, flags=re.IGNORECASE)
         topic = match.group(1).strip() if match else question.strip()
         topic = re.sub(r"[\.\?!]+$", "", topic)
+        # Clean up quiz-related words from topic
+        topic = re.sub(r"\b(?:quiz|quizzes|questions?|test)\b", "", topic, flags=re.IGNORECASE).strip()
         return topic or "general review"
 
     @staticmethod
@@ -680,7 +686,7 @@ class TutorAgent:
         if match:
             try:
                 value = int(match.group(1))
-                return max(3, min(value, 8))
+                return max(3, min(value, 40))  # Maximum number of questions is 40
             except ValueError:
                 pass
         return 4

@@ -153,23 +153,24 @@ def detect_quiz_request(message: str) -> bool:
     bool
         True if message is a quiz request
     """
-    quiz_keywords = [
-        "create a quiz",
-        "generate a quiz",
-        "make a quiz",
-        "create quizzes",  # plural
-        "generate quizzes",  # plural
-        "make quizzes",  # plural
-        "quiz me",
-        "test me",
-        "practice questions",
-        "create questions",
-        "generate questions",
-        "downloadable quiz",
-        "quiz from",
-    ]
+    import re
     message_lower = message.lower()
-    return any(keyword in message_lower for keyword in quiz_keywords)
+    
+    # Pattern-based detection (handles numbers/words between action and quiz)
+    patterns = [
+        r"\b(create|generate|make)\s+.*?\bquiz",  # "create 10 quiz(zes)"
+        r"\bquiz\s+me\b",
+        r"\btest\s+me\b",
+        r"\bpractice\s+questions?\b",
+        r"\b(create|generate)\s+.*?\bquestions?\b",
+        r"\bdownloadable\s+quiz",
+    ]
+    
+    for pattern in patterns:
+        if re.search(pattern, message_lower):
+            return True
+    
+    return False
 
 
 def is_question_about_uploaded_docs(message: str) -> bool:
@@ -870,19 +871,39 @@ def render() -> None:
                             )
                             
                             if filtered_hits:
+                                # Get balanced passages from all documents
                                 context_parts = []
-                                for idx, hit in enumerate(filtered_hits[:10], 1):  # Use more context for quiz generation
-                                    context_parts.append(
-                                        f"[{idx}] {hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})\n"
-                                        f"{hit.chunk.text}"
-                                    )
-                                extra_context = "\n\n".join(context_parts)
-                                st.caption(f"📚 Retrieved {len(filtered_hits)} passages from your uploaded documents")
                                 
-                                # If topic is "uploaded documents", let LLM infer topic from context
+                                # Group hits by document
+                                from collections import defaultdict
+                                hits_by_doc = defaultdict(list)
+                                for hit in filtered_hits:
+                                    doc_title = hit.chunk.metadata.title or "Unknown"
+                                    hits_by_doc[doc_title].append(hit)
+                                
+                                # Take passages from each document proportionally
+                                passages_per_doc = max(3, 15 // len(hits_by_doc))  # At least 3 per doc, up to 15 total
+                                idx = 1
+                                for doc_title, hits in hits_by_doc.items():
+                                    for hit in hits[:passages_per_doc]:
+                                        context_parts.append(
+                                            f"[{idx}] {hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})\n"
+                                            f"{hit.chunk.text}"
+                                        )
+                                        idx += 1
+                                
+                                extra_context = "\n\n".join(context_parts)
+                                st.caption(f"📚 Retrieved {len(context_parts)} passages from {len(hits_by_doc)} document(s): {', '.join(hits_by_doc.keys())}")
+                                
+                                # If topic is "uploaded documents", create comprehensive topic
                                 if topic == "uploaded documents":
-                                    # Use first document title or a generic description
-                                    if filtered_hits:
+                                    if len(hits_by_doc) > 1:
+                                        # Multiple documents - list them all
+                                        doc_titles = list(hits_by_doc.keys())
+                                        topic = f"{doc_titles[0]} and {doc_titles[1]}" if len(doc_titles) == 2 else ", ".join(doc_titles)
+                                        st.info(f"🎯 Generating quiz from: **{topic}** ({num_questions} questions)")
+                                    elif filtered_hits:
+                                        # Single document
                                         topic = filtered_hits[0].chunk.metadata.title or "the uploaded documents"
                                         st.info(f"🎯 Generating quiz from: **{topic}** ({num_questions} questions)")
                             else:
