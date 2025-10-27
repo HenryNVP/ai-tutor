@@ -826,149 +826,96 @@ def render() -> None:
                 with st.chat_message("assistant"):
                     st.success(f"✅ Ingested {len(result.documents)} document(s) into {len(result.chunks)} chunks! Now answering your question...")
             
-            # Check if this is a quiz request
-            if detect_quiz_request(prompt):
-                # Don't append user message again - already appended above
-                if not ingestion_happened:
-                    with st.chat_message("user"):
-                        st.markdown(prompt)
-                
-                with st.chat_message("assistant"):
-                    topic = extract_quiz_topic(prompt)
-                    num_questions = extract_quiz_num_questions(prompt)
-                    
-                    # Generate quiz grounded in uploaded documents
-                    extra_context = None
-                    if st.session_state.chat_files_ingested and st.session_state.chat_uploaded_filenames:
-                        # Use filename-based retrieval to ensure we get content from uploaded docs
-                        from ai_tutor.data_models import Query
-                        with st.spinner("Retrieving relevant passages from your uploaded documents..."):
-                            # Strategy: Search using FILENAMES as queries to force retrieval from uploaded docs
-                            all_hits = []
-                            for filename in st.session_state.chat_uploaded_filenames:
-                                # Use filename (without extension) as query
-                                query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
-                                file_hits = system.tutor_agent.retriever.retrieve(Query(text=query_text))
-                                all_hits.extend(file_hits)
-                            
-                            # Also try the topic (but skip if topic is "uploaded documents")
-                            if topic != "uploaded documents":
-                                topic_hits = system.tutor_agent.retriever.retrieve(Query(text=topic))
-                                all_hits.extend(topic_hits)
-                            
-                            # Remove duplicates and filter to only uploaded documents
-                            seen_chunk_ids = set()
-                            unique_hits = []
-                            for hit in all_hits:
-                                if hit.chunk.metadata.chunk_id not in seen_chunk_ids:
-                                    seen_chunk_ids.add(hit.chunk.metadata.chunk_id)
-                                    unique_hits.append(hit)
-                            
-                            # Filter to only uploaded documents
-                            filtered_hits = filter_hits_by_filenames(
-                                unique_hits,
-                                st.session_state.chat_uploaded_filenames
-                            )
-                            
-                            if filtered_hits:
-                                # Get balanced passages from all documents
-                                context_parts = []
-                                
-                                # Group hits by document
-                                from collections import defaultdict
-                                hits_by_doc = defaultdict(list)
-                                for hit in filtered_hits:
-                                    doc_title = hit.chunk.metadata.title or "Unknown"
-                                    hits_by_doc[doc_title].append(hit)
-                                
-                                # Take passages from each document proportionally
-                                passages_per_doc = max(3, 15 // len(hits_by_doc))  # At least 3 per doc, up to 15 total
-                                idx = 1
-                                for doc_title, hits in hits_by_doc.items():
-                                    for hit in hits[:passages_per_doc]:
-                                        context_parts.append(
-                                            f"[{idx}] {hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})\n"
-                                            f"{hit.chunk.text}"
-                                        )
-                                        idx += 1
-                                
-                                extra_context = "\n\n".join(context_parts)
-                                st.caption(f"📚 Retrieved {len(context_parts)} passages from {len(hits_by_doc)} document(s): {', '.join(hits_by_doc.keys())}")
-                                
-                                # If topic is "uploaded documents", create comprehensive topic
-                                if topic == "uploaded documents":
-                                    if len(hits_by_doc) > 1:
-                                        # Multiple documents - list them all
-                                        doc_titles = list(hits_by_doc.keys())
-                                        topic = f"{doc_titles[0]} and {doc_titles[1]}" if len(doc_titles) == 2 else ", ".join(doc_titles)
-                                        st.info(f"🎯 Generating quiz from: **{topic}** ({num_questions} questions)")
-                                    elif filtered_hits:
-                                        # Single document
-                                        topic = filtered_hits[0].chunk.metadata.title or "the uploaded documents"
-                                        st.info(f"🎯 Generating quiz from: **{topic}** ({num_questions} questions)")
-                            else:
-                                st.warning("⚠️ No passages found in uploaded documents. Quiz may not be grounded in your files.")
-                    
-                    # Display topic info if not already shown
-                    if topic != "uploaded documents":
-                        st.info(f"🎯 Generating quiz on: **{topic}** ({num_questions} questions)")
-                    
-                    try:
-                        with st.spinner(f"Generating quiz with {num_questions} questions..."):
-                            quiz = system.generate_quiz(
-                                learner_id=learner_id,
-                                topic=topic,
-                                num_questions=num_questions,
-                                extra_context=extra_context
-                            )
-                        
-                        # Store quiz in unified interface
-                        st.session_state.quiz = quiz.model_dump(mode="json")
-                        st.session_state.quiz_answers = {}
-                        st.session_state.quiz_result = None
-                        st.session_state.show_quiz_notice = True  # Show notification
-                        
-                        st.success(f"✅ Quiz generated! Go to the **🎓 Student Quiz** tab to take it.")
-                        
-                        # Add message
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": f"I've created a {len(quiz.questions)}-question quiz on **{quiz.topic}**. Switch to the **🎓 Student Quiz** tab to take it interactively!"
-                        })
-                    except Exception as e:
-                        st.error(f"❌ Quiz generation failed: {str(e)}")
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": f"Sorry, I couldn't generate a quiz. Error: {str(e)}"
-                        })
-                
-                st.rerun()
+            # Let agent handle everything - it will use tools as needed
+            # Don't append user message again - already appended above
+            if not ingestion_happened:
+                with st.chat_message("user"):
+                    st.markdown(prompt)
             
-            # Regular Q&A
-            else:
-                # Don't append user message again - already appended above
-                if not ingestion_happened:
-                    with st.chat_message("user"):
-                        st.markdown(prompt)
-
+            with st.chat_message("assistant"):
+                placeholder = st.empty()
+                citations_container = st.empty()
+                
+                # Check for quiz context from previous interactions
                 if st.session_state.quiz_result:
                     quiz_result = QuizEvaluation.model_validate(st.session_state.quiz_result)
                     quiz_context = format_quiz_context(quiz_result)
                 else:
                     quiz_context = ""
-
-                with st.chat_message("assistant"):
-                    placeholder = st.empty()
-                    citations_container = st.empty()
+                
+                # Retrieve content from uploaded documents if they exist
+                # This provides context for both Q&A and quiz generation
+                uploaded_docs_context = None
+                if st.session_state.chat_files_ingested and st.session_state.chat_uploaded_filenames:
+                    from ai_tutor.data_models import Query
+                    from collections import defaultdict
                     
-                    # Check if question is specifically about uploaded documents
-                    filter_to_uploaded = (
-                        is_question_about_uploaded_docs(prompt) and
-                        st.session_state.chat_files_ingested and
-                        st.session_state.chat_uploaded_filenames
-                    )
-                    
-                    if filter_to_uploaded:
+                    with st.spinner("Retrieving content from your uploaded documents..."):
+                        # Strategy: Retrieve using both filenames and the user's query
+                        all_hits = []
+                        
+                        # 1. Retrieve using filenames to ensure we get content from uploaded docs
+                        for filename in st.session_state.chat_uploaded_filenames:
+                            query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
+                            file_hits = system.tutor_agent.retriever.retrieve(Query(text=query_text))
+                            all_hits.extend(file_hits)
+                        
+                        # 2. Also retrieve using the user's actual query for relevance
+                        query_hits = system.tutor_agent.retriever.retrieve(Query(text=prompt))
+                        all_hits.extend(query_hits)
+                        
+                        # Remove duplicates and filter to only uploaded documents
+                        seen_chunk_ids = set()
+                        unique_hits = []
+                        for hit in all_hits:
+                            if hit.chunk.metadata.chunk_id not in seen_chunk_ids:
+                                seen_chunk_ids.add(hit.chunk.metadata.chunk_id)
+                                unique_hits.append(hit)
+                        
+                        filtered_hits = filter_hits_by_filenames(
+                            unique_hits,
+                            st.session_state.chat_uploaded_filenames
+                        )
+                        
+                        if filtered_hits:
+                            # Group hits by document for balanced representation
+                            hits_by_doc = defaultdict(list)
+                            for hit in filtered_hits:
+                                doc_title = hit.chunk.metadata.title or "Unknown"
+                                hits_by_doc[doc_title].append(hit)
+                            
+                            # Take passages from each document proportionally
+                            passages_per_doc = max(3, 15 // len(hits_by_doc))
+                            context_parts = []
+                            idx = 1
+                            for doc_title, hits in hits_by_doc.items():
+                                for hit in hits[:passages_per_doc]:
+                                    context_parts.append(
+                                        f"[{idx}] {hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})\n"
+                                        f"{hit.chunk.text}"
+                                    )
+                                    idx += 1
+                            
+                            uploaded_docs_context = "\n\n".join(context_parts)
+                            st.caption(f"📚 Retrieved {len(context_parts)} passages from {len(hits_by_doc)} document(s): {', '.join(hits_by_doc.keys())}")
+                            
+                            # Add document titles to context to help agent understand topic
+                            doc_titles_str = ", ".join(hits_by_doc.keys())
+                            uploaded_docs_context = (
+                                f"Content from uploaded documents: {doc_titles_str}\n\n"
+                                f"{uploaded_docs_context}"
+                            )
+                        else:
+                            st.info("ℹ️ No passages found in uploaded documents. Using general knowledge...")
+                
+                # Check if question is specifically about uploaded documents
+                filter_to_uploaded = (
+                    is_question_about_uploaded_docs(prompt) and
+                    st.session_state.chat_files_ingested and
+                    st.session_state.chat_uploaded_filenames
+                )
+                
+                if filter_to_uploaded:
                         # Do custom retrieval filtered to uploaded documents
                         from ai_tutor.data_models import Query
                         with st.spinner("Searching uploaded documents..."):
@@ -1002,8 +949,7 @@ def render() -> None:
                             if filtered_hits:
                                 st.caption(f"📚 Found {len(filtered_hits)} passages from your uploaded documents")
                             else:
-                                st.warning("No relevant passages found in uploaded documents. Searching broader corpus...")
-                                filtered_hits = hits  # Fallback to all results
+                                st.warning("No relevant passages found in uploaded documents. Using general knowledge...")
                             
                             # Format context from filtered hits
                             context_parts = []
@@ -1049,20 +995,37 @@ Please answer based only on the provided context."""
                                 source="local",  # From uploaded documents
                                 quiz=None
                             )
-                    else:
-                        # Regular Q&A without filtering
-                        with st.spinner("Thinking..."):
-                            response = system.answer_question(
-                                learner_id=learner_id,
-                                question=prompt,
-                                extra_context=quiz_context or None,
-                            )
+                else:
+                    # Regular Q&A - let agent handle it
+                    # Combine quiz context and uploaded docs context
+                    combined_context = None
+                    if uploaded_docs_context and quiz_context:
+                        combined_context = f"{uploaded_docs_context}\n\n{quiz_context}"
+                    elif uploaded_docs_context:
+                        combined_context = uploaded_docs_context
+                    elif quiz_context:
+                        combined_context = quiz_context
                     
-                    placeholder.markdown(format_answer(response.answer))
-                    if response.citations:
-                        citations_container.markdown("**Citations:**\n" + "\n".join(f"- {c}" for c in response.citations))
-                    else:
-                        citations_container.caption("No citations provided.")
+                    # If user mentions "documents" and we have uploaded files, enhance the prompt
+                    enhanced_prompt = prompt
+                    if uploaded_docs_context and ("document" in prompt.lower() or "file" in prompt.lower() or "pdf" in prompt.lower()):
+                        # Extract document titles from context
+                        if st.session_state.chat_uploaded_filenames:
+                            doc_names = [Path(f).stem.replace('_', ' ').replace('-', ' ') for f in st.session_state.chat_uploaded_filenames]
+                            enhanced_prompt = f"{prompt} (Note: User has uploaded documents about: {', '.join(doc_names)})"
+                    
+                    with st.spinner("Thinking..."):
+                        response = system.answer_question(
+                            learner_id=learner_id,
+                            question=enhanced_prompt,
+                            extra_context=combined_context,
+                        )
+                
+                placeholder.markdown(format_answer(response.answer))
+                if response.citations:
+                    citations_container.markdown("**Citations:**\n" + "\n".join(f"- {c}" for c in response.citations))
+                else:
+                    citations_container.caption("No citations provided.")
 
                 if response.quiz:
                     st.session_state.quiz = response.quiz.model_dump(mode="json")

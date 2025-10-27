@@ -149,13 +149,27 @@ class QuizService:
         difficulty: Optional[str] = None,
         extra_context: Optional[str] = None,
     ) -> Quiz:
-        hits = list(self.retriever.retrieve(Query(text=topic)))
-        references = _format_references(hits)
         context_sections: List[str] = []
-        if hits:
-            context_sections.append("Retrieved passages:\n" + _render_hit_context(hits))
-        if extra_context:
-            context_sections.append("Session context:\n" + extra_context.strip())
+        references = []
+        
+        # If we have substantial extra_context (e.g., from uploaded documents), prioritize it
+        if extra_context and len(extra_context) > 500:
+            context_sections.append("Document content:\n" + extra_context.strip())
+            # Still do retrieval but treat it as supplementary
+            if topic and not any(x in topic.lower() for x in ['uploaded', 'document', 'file']):
+                hits = list(self.retriever.retrieve(Query(text=topic)))
+                references = _format_references(hits)
+                if hits:
+                    context_sections.append("Additional passages:\n" + _render_hit_context(hits))
+        else:
+            # Normal flow: retrieve first, then add extra context if available
+            hits = list(self.retriever.retrieve(Query(text=topic)))
+            references = _format_references(hits)
+            if hits:
+                context_sections.append("Retrieved passages:\n" + _render_hit_context(hits))
+            if extra_context:
+                context_sections.append("Session context:\n" + extra_context.strip())
+        
         if not context_sections:
             context_sections.append(
                 "No local passages found. Base questions on trustworthy STEM knowledge."

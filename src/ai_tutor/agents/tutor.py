@@ -274,7 +274,7 @@ class TutorAgent:
                 question_count = int(count)
             except (TypeError, ValueError):
                 question_count = 4
-            question_count = max(3, min(question_count, 8))  # Enforce [3-8] range
+            question_count = max(3, min(question_count, 40))  # Enforce [3-40] range
             
             # Access the currently active learner profile (set by answer() method)
             profile = self._active_profile
@@ -328,8 +328,18 @@ class TutorAgent:
                 "→ Hand off to ingestion_agent\n\n"
 
                 "Quiz Request → Use generate_quiz tool\n"
-                "- User asks for quiz, test, practice questions\n"
-                "→ Call generate_quiz(topic, count)\n\n"
+                "- User asks for: quiz, test, practice questions, assessment, MCQ\n"
+                "- Natural language variations: 'gimme questions', 'test me', 'I need practice'\n"
+                "- Extract count from message: 'create 10 quizzes' → count=10\n"
+                "- Extract topic: 'quiz on neural networks' → topic='neural networks'\n"
+                "- IMPORTANT: When user says 'from documents', 'from my files', 'from PDFs':\n"
+                "  * Look at the learner profile to see what topics they've been studying\n"
+                "  * Use a BROAD topic that covers the uploaded material (e.g., 'computer science', 'engineering', 'mathematics')\n"
+                "  * The extra_context will contain the actual document content\n"
+                "  * DO NOT use topic='uploaded_documents' (that's not searchable!)\n"
+                "→ Call generate_quiz(topic, count)\n"
+                "Example: 'Create 10 quizzes from the documents' → generate_quiz(topic='machine learning', count=10)\n"
+                "The system will automatically include content from uploaded documents in the context.\n\n"
 
                 "ONLY Answer Directly:\n"
                 "- 'What can you help with?' or system capability questions\n"
