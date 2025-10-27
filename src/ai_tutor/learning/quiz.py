@@ -189,6 +189,7 @@ class QuizService:
             f"Target difficulty: {requested_difficulty}\n"
             f"Learner summary: {learner_summary}\n\n"
             "Guidance:\n"
+            f"- CRITICAL: Generate EXACTLY {num_questions} questions. No more, no less.\n"
             "- Cover varied facets of the topic.\n"
             "- Each question must have exactly four answer choices.\n"
             "- Provide the zero-based index of the correct option.\n"

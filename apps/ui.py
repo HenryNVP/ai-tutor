@@ -120,9 +120,12 @@ def quiz_to_markdown(quiz: Quiz) -> str:
     
     for idx, question in enumerate(quiz.questions):
         lines.append(f"{idx + 1}. {question.question}")
+        lines.append("")  # Blank line after question
         
         for choice_idx, choice in enumerate(question.choices):
             lines.append(f"{chr(97 + choice_idx)}) {choice}")
+        
+        lines.append("")  # Blank line after choices
         
         # Add answer line with letter
         answer_letter = chr(97 + question.correct_index)
@@ -131,7 +134,7 @@ def quiz_to_markdown(quiz: Quiz) -> str:
         if question.explanation:
             lines.append(f"Explanation: {question.explanation}")
         
-        lines.append("")
+        lines.append("")  # Blank line after question
     
     return "\n".join(lines)
 
@@ -311,17 +314,30 @@ def extract_quiz_topic(message: str) -> str:
     Returns
     -------
     str
-        Extracted topic or the full message if no specific topic found
+        Extracted topic or the full message if no specific topic found.
+        Returns "uploaded documents" as a special marker when user references documents.
     """
     import re
+    
+    # Check if user is asking for quiz from uploaded documents  
+    doc_patterns = [
+        r"(?:from|using)\s+(?:the|my|these|uploaded)?\s*(?:document|documents|files|pdfs)",
+        r"based\s+on\s+(?:the|my|these|uploaded)?\s*(?:document|documents|files|pdfs)",
+        r"quiz\s+(?:from\s+)?(?:the|my|these)\s+(?:document|documents|files)",
+        r"(?:the|my|these)\s+uploaded\s+(?:document|documents|files|pdfs)",
+    ]
+    
+    for pattern in doc_patterns:
+        if re.search(pattern, message.lower()):
+            return "uploaded documents"  # Special marker
     
     # Try to extract topic after common patterns
     # Updated to handle numbers, adjectives, and plural forms
     patterns = [
         # Handles: "create 8 downloadable quizzes about CNN"
-        r"(?:create|generate|make)\s+(?:\d+\s+)?(?:\w+\s+)?quiz(?:zes)?\s+(?:about|on|regarding|for|from)\s+(.+)",
-        # Handles: "quiz about CNN"
-        r"quiz(?:zes)?\s+(?:about|on|regarding|for|from)\s+(.+)",
+        r"(?:create|generate|make)\s+(?:\d+\s+)?(?:\w+\s+)?quiz(?:zes)?\s+(?:about|on|regarding|for)\s+(.+)",
+        # Handles: "quiz about CNN" (removed "from" to avoid document confusion)
+        r"quiz(?:zes)?\s+(?:about|on|regarding|for)\s+(.+)",
         # Handles: "test me on CNN"
         r"test me on\s+(.+)",
         # Handles: "questions about CNN"
@@ -819,7 +835,6 @@ def render() -> None:
                 with st.chat_message("assistant"):
                     topic = extract_quiz_topic(prompt)
                     num_questions = extract_quiz_num_questions(prompt)
-                    st.info(f"🎯 Generating quiz on: **{topic}** ({num_questions} questions)")
                     
                     # Generate quiz grounded in uploaded documents
                     extra_context = None
@@ -835,9 +850,10 @@ def render() -> None:
                                 file_hits = system.tutor_agent.retriever.retrieve(Query(text=query_text))
                                 all_hits.extend(file_hits)
                             
-                            # Also try the topic
-                            topic_hits = system.tutor_agent.retriever.retrieve(Query(text=topic))
-                            all_hits.extend(topic_hits)
+                            # Also try the topic (but skip if topic is "uploaded documents")
+                            if topic != "uploaded documents":
+                                topic_hits = system.tutor_agent.retriever.retrieve(Query(text=topic))
+                                all_hits.extend(topic_hits)
                             
                             # Remove duplicates and filter to only uploaded documents
                             seen_chunk_ids = set()
@@ -862,8 +878,19 @@ def render() -> None:
                                     )
                                 extra_context = "\n\n".join(context_parts)
                                 st.caption(f"📚 Retrieved {len(filtered_hits)} passages from your uploaded documents")
+                                
+                                # If topic is "uploaded documents", let LLM infer topic from context
+                                if topic == "uploaded documents":
+                                    # Use first document title or a generic description
+                                    if filtered_hits:
+                                        topic = filtered_hits[0].chunk.metadata.title or "the uploaded documents"
+                                        st.info(f"🎯 Generating quiz from: **{topic}** ({num_questions} questions)")
                             else:
                                 st.warning("⚠️ No passages found in uploaded documents. Quiz may not be grounded in your files.")
+                    
+                    # Display topic info if not already shown
+                    if topic != "uploaded documents":
+                        st.info(f"🎯 Generating quiz on: **{topic}** ({num_questions} questions)")
                     
                     try:
                         with st.spinner(f"Generating quiz with {num_questions} questions..."):
@@ -878,13 +905,14 @@ def render() -> None:
                         st.session_state.quiz = quiz.model_dump(mode="json")
                         st.session_state.quiz_answers = {}
                         st.session_state.quiz_result = None
+                        st.session_state.show_quiz_notice = True  # Show notification
                         
-                        st.success(f"✅ Quiz generated! Scroll down to take the quiz.")
+                        st.success(f"✅ Quiz generated! Go to the **🎓 Student Quiz** tab to take it.")
                         
                         # Add message
                         st.session_state.messages.append({
                             "role": "assistant",
-                            "content": f"I've created a {len(quiz.questions)}-question quiz on **{quiz.topic}**. Scroll down to take it, and you can edit or download it after completion."
+                            "content": f"I've created a {len(quiz.questions)}-question quiz on **{quiz.topic}**. Switch to the **🎓 Student Quiz** tab to take it interactively!"
                         })
                     except Exception as e:
                         st.error(f"❌ Quiz generation failed: {str(e)}")
