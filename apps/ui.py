@@ -568,106 +568,6 @@ def render_corpus_management_tab(system: TutorSystem) -> None:
                         st.divider()
 
 
-def render_quiz_builder_tab(system: TutorSystem, learner_id: str) -> None:
-    """Render the advanced quiz builder tab."""
-    st.header("📝 Quiz Builder")
-    
-    st.info("💡 Generate a quiz here, then switch to the **Chat & Learn** tab to take it interactively!")
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("🎯 Generate Quiz")
-        
-        quiz_topic = st.text_input(
-            "Quiz Topic",
-            placeholder="e.g., Newton's Laws of Motion",
-            key="quiz_builder_topic"
-        )
-        
-        quiz_col1, quiz_col2 = st.columns(2)
-        with quiz_col1:
-            num_questions = st.slider("Number of Questions", 3, 20, 4, key="quiz_builder_count")
-        with quiz_col2:
-            difficulty = st.selectbox(
-                "Difficulty Level",
-                ["foundational", "balanced", "guided", "advanced"],
-                index=1,
-                key="quiz_builder_difficulty"
-            )
-        
-        use_corpus = st.checkbox(
-            "Ground quiz in retrieved passages from corpus",
-            value=True,
-            help="If checked, quiz questions will be based on relevant passages retrieved from the vector store"
-        )
-        
-        if st.button("✨ Generate Interactive Quiz", type="primary", disabled=not quiz_topic.strip()):
-            with st.spinner("Generating quiz from retrieved passages..."):
-                try:
-                    # Retrieve relevant context if using corpus
-                    extra_context = None
-                    if use_corpus:
-                        from ai_tutor.data_models import Query
-                        hits = system.tutor_agent.retriever.retrieve(Query(text=quiz_topic))
-                        if hits:
-                            context_parts = []
-                            for idx, hit in enumerate(hits[:3], 1):
-                                context_parts.append(
-                                    f"[{idx}] {hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})\n"
-                                    f"{hit.chunk.text}"
-                                )
-                            extra_context = "\n\n".join(context_parts)
-                            st.info(f"📚 Retrieved {len(hits)} relevant passages from corpus")
-                    
-                    quiz = system.generate_quiz(
-                        learner_id=learner_id,
-                        topic=quiz_topic,
-                        num_questions=num_questions,
-                        extra_context=extra_context
-                    )
-                    # Use unified quiz interface
-                    st.session_state.quiz = quiz.model_dump(mode="json")
-                    st.session_state.quiz_answers = {}
-                    st.session_state.quiz_result = None
-                    st.success(f"✅ Generated {len(quiz.questions)}-question quiz on '{quiz.topic}'! Go to **Chat & Learn** tab to take it.")
-                except Exception as e:
-                    st.error(f"❌ Quiz generation failed: {str(e)}")
-    
-    with col2:
-        st.subheader("📥 Quick Download")
-        st.caption("Want to just download a quiz without taking it?")
-        
-        download_topic = st.text_input(
-            "Quiz Topic for Download",
-            placeholder="e.g., Binary Search",
-            key="quiz_download_topic"
-        )
-        
-        download_num = st.number_input("Number of Questions", min_value=3, max_value=20, value=5, key="quiz_download_num")
-        
-        if st.button("📄 Generate & Download Only", disabled=not download_topic.strip()):
-            with st.spinner("Generating quiz..."):
-                try:
-                    quiz = system.generate_quiz(
-                        learner_id=learner_id,
-                        topic=download_topic,
-                        num_questions=download_num
-                    )
-                    quiz_md = quiz_to_markdown(quiz)
-                    st.download_button(
-                        label="💾 Download Quiz (Markdown)",
-                        data=quiz_md,
-                        file_name=f"quiz_{quiz.topic.replace(' ', '_')}.md",
-                        mime="text/markdown",
-                        use_container_width=True,
-                        type="primary"
-                    )
-                    st.success("✅ Quiz ready for download!")
-                except Exception as e:
-                    st.error(f"❌ Quiz generation failed: {str(e)}")
-
-
 def render() -> None:
     st.set_page_config(page_title="AI Tutor", page_icon="🎓", layout="wide")
     st.title("🎓 AI Tutor Demo")
@@ -688,16 +588,11 @@ def render() -> None:
     system = load_system(api_key)
     
     # Create tabs
-    tab1, tab2, tab3 = st.tabs(["💬 Chat & Learn", "📚 Corpus Management", "📝 Quiz Builder"])
+    tab1, tab2 = st.tabs(["💬 Chat & Learn", "📚 Corpus Management"])
 
     # Tab 2: Corpus Management
     with tab2:
         render_corpus_management_tab(system)
-    
-    # Tab 3: Quiz Builder
-    with tab3:
-        learner_id = st.session_state.get("learner_id_global", "s1")
-        render_quiz_builder_tab(system, learner_id)
     
     # Tab 1: Chat & Learn (enhanced with auto-ingestion and quiz preview)
     with tab1:
@@ -767,31 +662,7 @@ def render() -> None:
                 st.rerun()
             
             st.divider()
-            
-            # Legacy quiz tools (for backward compatibility)
-            with st.expander("🎯 Quick Quiz Tools (Legacy)"):
-                quiz_topic = st.text_input("Quiz topic", key="quiz_topic_input")
-                quiz_questions = st.slider("Questions", min_value=3, max_value=8, value=4, key="quiz_question_count")
-                if st.button("Generate quiz", use_container_width=True):
-                    if not quiz_topic.strip():
-                        st.warning("Enter a quiz topic before generating.")
-                    else:
-                        quiz = system.generate_quiz(
-                            learner_id=learner_id,
-                            topic=quiz_topic.strip(),
-                            num_questions=quiz_questions,
-                        )
-                        st.session_state.quiz = quiz.model_dump(mode="json")
-                        st.session_state.quiz_answers = {}
-                        st.session_state.quiz_result = None
-                        st.success(f"Created quiz for {quiz.topic}.")
-                        st.rerun()
-                if st.button("Clear quiz state", use_container_width=True):
-                    st.session_state.quiz = None
-                    st.session_state.quiz_answers = {}
-                    st.session_state.quiz_result = None
-                    st.rerun()
-
+        
         for message in st.session_state.messages:
             role = message["role"]
             with st.chat_message(role):
@@ -1297,7 +1168,6 @@ __all__ = [
     "quiz_to_markdown",
     "analyze_corpus",
     "render_corpus_management_tab",
-    "render_quiz_builder_tab",
     "render",
 ]
 

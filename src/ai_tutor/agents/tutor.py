@@ -393,23 +393,6 @@ class TutorAgent:
             handoffs=handoffs,
         )
 
-    def create_quiz(
-        self,
-        *,
-        topic: str,
-        profile: Optional[LearnerProfile],
-        num_questions: int = 4,
-        difficulty: Optional[str] = None,
-        extra_context: Optional[str] = None,
-    ) -> Quiz:
-        """Generate a multiple-choice quiz tailored to the learner."""
-        return self.quiz_service.generate_quiz(
-            topic=topic,
-            profile=profile,
-            num_questions=num_questions,
-            difficulty=difficulty,
-            extra_context=extra_context,
-        )
 
     def evaluate_quiz(
         self,

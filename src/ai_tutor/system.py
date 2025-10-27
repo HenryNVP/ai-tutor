@@ -364,26 +364,6 @@ class TutorSystem:
         
         return response
 
-    def generate_quiz(
-        self,
-        learner_id: str,
-        topic: str,
-        num_questions: int = 4,
-        extra_context: Optional[str] = None,
-    ) -> Quiz:
-        """Produce a multiple-choice quiz tailored to the learner and topic."""
-        profile = self.personalizer.load_profile(learner_id)
-        style = self.personalizer.select_style(profile, None)
-        difficulty = self._style_to_difficulty(style)
-        quiz = self.tutor_agent.create_quiz(
-            topic=topic,
-            profile=profile,
-            num_questions=num_questions,
-            difficulty=difficulty,
-            extra_context=extra_context,
-        )
-        self.personalizer.save_profile(profile)
-        return quiz
 
     def evaluate_quiz(
         self,
