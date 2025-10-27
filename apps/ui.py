@@ -114,38 +114,24 @@ def quiz_to_markdown(quiz: Quiz) -> str:
         Markdown-formatted quiz content.
     """
     lines = [
-        f"# Quiz: {quiz.topic}",
-        f"**Difficulty:** {quiz.difficulty}",
+        f"# {quiz.topic}",
         "",
     ]
     
     for idx, question in enumerate(quiz.questions):
-        lines.append(f"## Question {idx + 1}")
-        lines.append(f"{question.question}")
-        lines.append("")
+        lines.append(f"{idx + 1}. {question.question}")
         
         for choice_idx, choice in enumerate(question.choices):
-            marker = "✓" if choice_idx == question.correct_index else "○"
-            lines.append(f"{marker} **{chr(65 + choice_idx)}.** {choice}")
+            lines.append(f"{chr(97 + choice_idx)}) {choice}")
         
-        lines.append("")
+        # Add answer line with letter
+        answer_letter = chr(97 + question.correct_index)
+        lines.append(f"Answer: {answer_letter}")
+        
         if question.explanation:
-            lines.append(f"**Explanation:** {question.explanation}")
-            lines.append("")
+            lines.append(f"Explanation: {question.explanation}")
         
-        if question.references:
-            lines.append("**References:**")
-            for ref in question.references:
-                lines.append(f"- {ref}")
-            lines.append("")
-        
-        lines.append("---")
         lines.append("")
-    
-    if quiz.references:
-        lines.append("## Overall References")
-        for ref in quiz.references:
-            lines.append(f"- {ref}")
     
     return "\n".join(lines)
 
@@ -292,12 +278,12 @@ def extract_quiz_num_questions(message: str) -> int:
     import re
     
     # Try to extract numbers from patterns like:
-    # "create 10 quizzes", "quiz with 15 questions", "20 question quiz"
+    # "create 8 downloadable quizzes", "quiz with 15 questions", "20 question quiz"
     patterns = [
         r"(\d+)\s+(?:question|questions)",
-        r"create\s+(\d+)\s+(?:quiz|quizzes)",
-        r"generate\s+(\d+)\s+(?:quiz|quizzes)",
-        r"make\s+(\d+)\s+(?:quiz|quizzes)",
+        r"create\s+(\d+)\s+(?:\w+\s+)?(?:quiz|quizzes)",  # Handles optional adjective
+        r"generate\s+(\d+)\s+(?:\w+\s+)?(?:quiz|quizzes)",  # Handles optional adjective
+        r"make\s+(\d+)\s+(?:\w+\s+)?(?:quiz|quizzes)",  # Handles optional adjective
         r"quiz\s+with\s+(\d+)",
     ]
     
@@ -330,11 +316,16 @@ def extract_quiz_topic(message: str) -> str:
     import re
     
     # Try to extract topic after common patterns
+    # Updated to handle numbers, adjectives, and plural forms
     patterns = [
-        r"quiz (?:about|on|regarding|for|from)\s+(.+)",
-        r"(?:create|generate|make)\s+(?:a\s+)?quiz\s+(?:about|on|regarding|for|from)\s+(.+)",
+        # Handles: "create 8 downloadable quizzes about CNN"
+        r"(?:create|generate|make)\s+(?:\d+\s+)?(?:\w+\s+)?quiz(?:zes)?\s+(?:about|on|regarding|for|from)\s+(.+)",
+        # Handles: "quiz about CNN"
+        r"quiz(?:zes)?\s+(?:about|on|regarding|for|from)\s+(.+)",
+        # Handles: "test me on CNN"
         r"test me on\s+(.+)",
-        r"questions (?:about|on|regarding|for)\s+(.+)",
+        # Handles: "questions about CNN"
+        r"questions\s+(?:about|on|regarding|for)\s+(.+)",
     ]
     
     for pattern in patterns:
@@ -347,8 +338,10 @@ def extract_quiz_topic(message: str) -> str:
     
     # Fallback: return the message without quiz keywords
     cleaned = message.lower()
-    for keyword in ["create", "generate", "make", "quiz", "test", "questions"]:
+    for keyword in ["create", "generate", "make", "quiz", "quizzes", "test", "questions", "downloadable"]:
         cleaned = cleaned.replace(keyword, "")
+    # Remove numbers at the start
+    cleaned = re.sub(r"^\d+\s*", "", cleaned)
     return cleaned.strip() or "general topics"
 
 
