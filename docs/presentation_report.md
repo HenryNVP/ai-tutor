@@ -955,33 +955,8 @@ Total: 3-4 steps, 1 UI element, no tab switching
 - Context-aware (remembers uploaded files)
 - More powerful (up to 40 questions)
 
-### 5.6 Performance Benchmarks
 
-#### Retrieval Performance
-| Metric | v1.0 | v2.0 | Improvement |
-|--------|------|------|-------------|
-| Search time (uploaded docs) | 850ms | 2.6ms | **320x faster** |
-| Chunks searched | 10,000 | 31 | **320x fewer** |
-| Relevance rate | 60% | 100% | **40% better** |
-| Match rate for new files | 40% | 100% | **60% better** |
-
-#### Quiz Generation Performance
-| Metric | v1.0 | v2.0 | Improvement |
-|--------|------|------|-------------|
-| Max questions | 8 | 40 | **5x increase** |
-| Success rate (20Q) | 0% (truncated) | 100% | **Infinite** |
-| Tokens/question (40Q) | N/A | 163 | **37% more efficient** |
-| Generation time (20Q) | Fails | 8-12s | **Works!** |
-
-#### Code Metrics
-| Metric | v1.0 | v2.0 | Improvement |
-|--------|------|------|-------------|
-| UI lines (quiz features) | 142 | 0 (in chat) | **-142 lines** |
-| Backend methods | 37 | 0 (tool-based) | **-37 lines** |
-| Total removed | - | 157 | **-10% UI code** |
-| Quiz code paths | 2 (button + agent) | 1 (agent only) | **50% simpler** |
-
-### 5.7 Technical Lessons Learned
+### 5.6 Technical Lessons Learned
 
 #### Lesson 1: Agent Instructions Must Be Explicit
 **Finding**: Subtle phras ing like "you can generate quizzes" led to agent refusal.

@@ -156,3 +156,7 @@ data/
 *.jar
 *.png
 *.pdf
+
+# examples
+examples/
+*.csv

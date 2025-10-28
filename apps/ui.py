@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 import shutil
+import base64
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from collections import Counter
@@ -16,6 +17,9 @@ from streamlit.runtime.secrets import StreamlitSecretNotFoundError
 
 from ai_tutor.system import TutorSystem
 from ai_tutor.learning.quiz import Quiz, QuizEvaluation
+from ai_tutor.agents.visualization import VisualizationAgent
+from ai_tutor.agents.llm_client import LLMClient
+from ai_tutor.config.loader import load_settings
 
 try:  # pragma: no cover - optional dependency
     from pypdf import PdfReader
@@ -26,6 +30,16 @@ except ImportError:  # pragma: no cover
 @st.cache_resource(show_spinner=False)
 def load_system(api_key: Optional[str]) -> TutorSystem:
     return TutorSystem.from_config(api_key=api_key)
+
+
+@st.cache_resource(show_spinner=False)
+def load_visualization_agent(_api_key: Optional[str]) -> VisualizationAgent:
+    """Initialize visualization agent with cached settings."""
+    settings = load_settings()
+    llm_client = LLMClient(config=settings.model)
+    upload_dir = Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return VisualizationAgent(llm_client, upload_dir)
 
 
 def extract_text(upload: Any) -> str:
@@ -171,6 +185,29 @@ def detect_quiz_request(message: str) -> bool:
             return True
     
     return False
+
+
+def is_visualization_request(text: str) -> bool:
+    """
+    Detect if the user is asking for data visualization.
+    
+    Parameters
+    ----------
+    text : str
+        User's message
+    
+    Returns
+    -------
+    bool
+        True if request involves creating a plot/chart/graph
+    """
+    viz_keywords = [
+        "plot", "chart", "graph", "visualize", "visualization", 
+        "histogram", "scatter", "bar chart", "line chart", 
+        "pie chart", "heatmap", "box plot", "show me a", "draw"
+    ]
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in viz_keywords)
 
 
 def is_question_about_uploaded_docs(message: str) -> bool:
@@ -586,6 +623,7 @@ def render() -> None:
         st.stop()
 
     system = load_system(api_key)
+    viz_agent = load_visualization_agent(api_key)
     
     # Create tabs
     tab1, tab2 = st.tabs(["💬 Chat & Learn", "📚 Corpus Management"])
@@ -611,6 +649,11 @@ def render() -> None:
             st.session_state.quiz_answers = {}
         if "quiz_result" not in st.session_state:
             st.session_state.quiz_result = None
+        # Visualization state
+        if "uploaded_csv" not in st.session_state:
+            st.session_state.uploaded_csv = None
+        if "csv_filename" not in st.session_state:
+            st.session_state.csv_filename = None
 
         with st.sidebar:
             st.header("Session Settings")
@@ -662,18 +705,77 @@ def render() -> None:
                 st.rerun()
             
             st.divider()
+            
+            # CSV Upload for Visualization
+            st.subheader("📊 Data Visualization")
+            st.caption("Upload a CSV file to create plots and charts")
+            
+            uploaded_csv = st.file_uploader(
+                "Upload CSV file",
+                type=["csv"],
+                key="csv_uploader",
+                help="Upload a CSV file and then ask to plot/visualize the data"
+            )
+            
+            if uploaded_csv:
+                # Save CSV to uploads directory
+                upload_dir = Path("data/uploads")
+                upload_dir.mkdir(parents=True, exist_ok=True)
+                csv_path = upload_dir / uploaded_csv.name
+                csv_path.write_bytes(uploaded_csv.getvalue())
+                
+                st.session_state.uploaded_csv = csv_path
+                st.session_state.csv_filename = uploaded_csv.name
+                st.success(f"✅ Uploaded: {uploaded_csv.name}")
+                
+                # Show preview
+                with st.expander("Preview data"):
+                    import pandas as pd
+                    df = pd.read_csv(csv_path)
+                    st.write(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
+                    st.write(f"**Columns:** {', '.join(df.columns.tolist())}")
+                    st.dataframe(df.head(5), use_container_width=True)
+            elif st.session_state.csv_filename:
+                st.info(f"📁 Current file: {st.session_state.csv_filename}")
+                if st.button("🗑️ Clear CSV"):
+                    st.session_state.uploaded_csv = None
+                    st.session_state.csv_filename = None
+                    st.rerun()
+            
+            # Show visualization examples
+            if st.session_state.csv_filename:
+                with st.expander("💡 Visualization Examples"):
+                    st.markdown("""
+                    Try asking:
+                    - "plot sales by month"
+                    - "create a bar chart of revenue"
+                    - "show me a histogram of scores"
+                    - "line chart of temperature over time"
+                    - "scatter plot of X vs Y"
+                    """)
+            
+            st.divider()
         
         for message in st.session_state.messages:
             role = message["role"]
             with st.chat_message(role):
                 content = str(message.get("content", ""))
                 if role == "assistant":
-                    st.markdown(format_answer(content))
-                    citations = message.get("citations")
-                    if isinstance(citations, (list, tuple)) and citations:
-                        st.markdown("**Citations:**")
-                        for cite in citations:
-                            st.markdown(f"- {cite}")
+                    # Check if this is a visualization message
+                    if message.get("image_base64"):
+                        st.markdown(content)
+                        img_data = base64.b64decode(message["image_base64"])
+                        st.image(img_data, use_container_width=True)
+                        if message.get("code"):
+                            with st.expander("📝 View generated code"):
+                                st.code(message["code"], language="python")
+                    else:
+                        st.markdown(format_answer(content))
+                        citations = message.get("citations")
+                        if isinstance(citations, (list, tuple)) and citations:
+                            st.markdown("**Citations:**")
+                            for cite in citations:
+                                st.markdown(f"- {cite}")
                 else:
                     st.markdown(content)
 
@@ -715,6 +817,58 @@ def render() -> None:
                     st.markdown(prompt)
                 with st.chat_message("assistant"):
                     st.success(f"✅ Ingested {len(result.documents)} document(s) into {len(result.chunks)} chunks! Now answering your question...")
+            
+            # Check if this is a visualization request
+            is_viz_request = is_visualization_request(prompt) and st.session_state.csv_filename
+            
+            if is_viz_request:
+                # Handle visualization request
+                if not ingestion_happened:
+                    with st.chat_message("user"):
+                        st.markdown(prompt)
+                
+                with st.chat_message("assistant"):
+                    with st.spinner("Creating visualization..."):
+                        try:
+                            viz_result = viz_agent.create_visualization(
+                                csv_filename=st.session_state.csv_filename,
+                                user_request=prompt
+                            )
+                            
+                            if viz_result.get("success"):
+                                st.success("✅ Visualization created!")
+                                
+                                # Display the plot
+                                img_data = base64.b64decode(viz_result["image_base64"])
+                                st.image(img_data, use_container_width=True)
+                                
+                                # Show generated code in expander
+                                with st.expander("📝 View generated code"):
+                                    st.code(viz_result["code"], language="python")
+                                
+                                # Add to message history with plot data
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": "Here's your visualization:",
+                                    "image_base64": viz_result["image_base64"],
+                                    "code": viz_result["code"]
+                                })
+                            else:
+                                error_msg = viz_result.get("error", "Unknown error")
+                                st.error(f"❌ Failed to create visualization: {error_msg}")
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": f"I encountered an error creating the visualization: {error_msg}"
+                                })
+                        
+                        except Exception as e:
+                            st.error(f"❌ Error: {str(e)}")
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": f"I encountered an error: {str(e)}"
+                            })
+                
+                st.rerun()
             
             # Let agent handle everything - it will use tools as needed
             # Don't append user message again - already appended above
