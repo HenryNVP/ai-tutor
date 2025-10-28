@@ -1,11 +1,12 @@
 @startuml
 skinparam componentStyle rectangle
 skinparam wrapWidth 240
-title Agent-First Orchestration & Quiz Generation (v2.0)
+title Agent-First Orchestration
 
 package "Specialist Agents (gpt-4o-mini)" {
   component "QA Agent\nretrieve_local_context" as QAAgent #lightgreen
   component "Web Agent\nweb_search" as WebAgent #lightblue
+  component "Visualization Agent\ncreate_visualization" as VizAgent #lightpink
   component "Ingestion Agent\ningest_corpus" as IngestionAgent #lightyellow
 }
 
@@ -14,27 +15,30 @@ component "generate_quiz\nFunction Tool" as QuizTool #pink
 component "QuizService\n(Core Logic)" as QuizService #pink
 
 actor User
-User --> Orchestrator : "create 20 quizzes\nfrom documents"
+User --> Orchestrator : "create 20 quizzes\nfrom documents"\n"plot revenue by month"
 
 Orchestrator --> QAAgent : STEM questions\n(math, physics, CS, etc.)
 Orchestrator --> WebAgent : Current events\nhistory, arts
 Orchestrator --> IngestionAgent : File uploads
 Orchestrator --> QuizTool : Quiz requests\n(extract count & topic)
+Orchestrator --> VizAgent : Visualization requests\n(CSV analysis)
 QuizTool --> QuizService : Call service logic
 
 QAAgent --> User : Answer with\nlocal citations [1][2]
 WebAgent --> User : Answer with\nURL citations
 IngestionAgent --> User : Ingestion summary
 QuizService --> User : Interactive quiz\n(3-40 questions)
+VizAgent --> User : Base64 plot\n+ generated code
 
 note right of Orchestrator
-  NEW: Agent-First Quiz Generation (v2.0)
+  Agent-First Quiz Generation:
   
   Routing Rules:
   • Math/Science/Tech → qa_agent
   • News/Current → web_agent
   • Upload → ingestion_agent
   • "create N quizzes" → generate_quiz tool
+  • "plot/chart/graph" → viz_agent
   
   Count Extraction:
   "create 20 quizzes" → count=20
@@ -43,14 +47,33 @@ note right of Orchestrator
   
   Topic Extraction:
   From: user message, uploaded docs, context
-  NEVER uses: "uploaded_documents", "documents"
   
   FORBIDDEN: Answering quiz requests with text
-  REQUIRED: ALWAYS call generate_quiz tool
+  REQUIRED: ALWAYS call appropriate tool/agent
+end note
+
+note right of VizAgent
+  Visualization Agent:
+  
+  Input:
+  • CSV filename
+  • User request ("plot X by Y")
+  
+  Process:
+  1. Inspect dataset structure
+  2. Generate matplotlib/seaborn code
+  3. Execute in safe environment
+  4. Return base64-encoded PNG
+  
+  Supports:
+  Line, bar, scatter, histogram,
+  pie, heatmap, box plots, etc.
+  
+  Performance: ~3-5 seconds
 end note
 
 note left of QuizTool
-  Function Tool (NEW in v2.0):
+  Function Tool:
   
   Parameters:
   • topic: str (broad, searchable)
@@ -64,7 +87,6 @@ note left of QuizTool
   ✅ Topic inference from context
   
   Called by orchestrator agent
-  (NOT from UI buttons anymore!)
 end note
 
 @enduml
@@ -72,7 +94,7 @@ end note
 @startuml
 skinparam componentStyle rectangle
 skinparam wrapWidth 240
-title Quiz Generation with Source Filtering (v2.0)
+title Quiz Generation with Source Filtering
 
 actor Learner
 component "Orchestrator Agent" as Orchestrator
@@ -114,7 +136,7 @@ ProgressTracker -> Profile : Save updated profile
 QuizService --> Learner : Results + feedback\n+ explanations
 
 note right of QuizService
-  NEW: Dynamic Token Calculation (v2.0)
+  Dynamic Token Calculation:
   
   max_tokens = (num_questions × 150) + 500
   
@@ -124,11 +146,10 @@ note right of QuizService
   • 40 questions → 6,500 tokens
   
   Prevents JSON truncation!
-  Old system: fixed 1,024 tokens (failed at 10+ questions)
 end note
 
 note left of VectorStore
-  NEW: Source Filtering (v2.0)
+  Source Filtering:
   
   Without filter:
   • Searches all 10,000 chunks
@@ -171,7 +192,7 @@ end note
 @startuml
 skinparam componentStyle rectangle
 skinparam wrapWidth 220
-title Document Upload & Auto-Ingestion (v2.0)
+title Document Upload & Auto-Ingestion
 
 actor User
 component "Streamlit UI\n(Chat & Learn tab)" as UI
@@ -205,7 +226,7 @@ IngestionAgent --> UI : Summary: N chunks indexed
 UI --> User : "Ready! Try:\n'create 20 quizzes from this'"
 
 note right of VectorStore
-  NEW: Source Tracking (v2.0)
+  Source Tracking:
   
   Each chunk metadata includes:
   • source_path: "data/uploads/lecture9.pdf"
@@ -223,83 +244,107 @@ note left of Chunker
   • Maintains context with overlap
   • Tracks document metadata
   • Page numbers for citations
-  • Source path for filtering (NEW!)
+  • Source path for filtering
 end note
 
 note bottom of UI
-  NEW: Simplified Workflow (v2.0)
+  Simplified Workflow:
   
-  OLD (Removed):
-  1. Upload via Corpus Management
-  2. Go to Quiz Builder tab
-  3. Fill in form
-  4. Click button
-  5. Switch to Chat tab
-  
-  NEW:
-  1. Upload in chat
+  1. Upload PDF in chat
   2. Say "create 20 quizzes from this"
   3. Take quiz immediately!
+  
+  Features:
+  • Auto-ingestion on first message
+  • Source filtering enabled
+  • Interactive quiz interface
+  • Markdown export available
 end note
 
 @enduml
 
 @startuml
 skinparam componentStyle rectangle
-skinparam wrapWidth 220
-title Legacy vs Agent-First Comparison
-
-package "OLD Architecture (Removed v2.0)" #lightgray {
-  component "Quiz Builder Tab\n(Form UI)" as OldUI #gray
-  component "system.generate_quiz()\n(Bypassed agent)" as OldSystem #gray
-  component "agent.create_quiz()\n(Unnecessary wrapper)" as OldAgent #gray
-  component "QuizService" as OldQuizService #gray
-}
-
-package "NEW Architecture (v2.0)" #lightgreen {
-  component "Chat Interface\n(Natural language)" as NewUI #green
-  component "Orchestrator Agent\n(Intent understanding)" as NewOrchestrator #green
-  component "generate_quiz Tool\n(Function calling)" as NewTool #green
-  component "QuizService\n(Enhanced)" as NewQuizService #green
-}
+skinparam wrapWidth 240
+title Data Visualization Workflow
 
 actor User
+component "Streamlit UI\n(Chat & Learn)" as UI
+component "Orchestrator Agent" as Orchestrator
+component "Visualization Agent" as VizAgent
+component "OpenAI API\n(gpt-4o-mini)" as OpenAI
+database "CSV Upload\n(data/uploads/*.csv)" as CSVFile
 
-User -[#gray]-> OldUI : Click button, fill form
-OldUI -[#gray]-> OldSystem : Direct call
-OldSystem -[#gray]-> OldAgent : Wrapper call
-OldAgent -[#gray]-> OldQuizService : Finally generates
+User --> UI : Upload CSV file
+UI --> CSVFile : Save to disk
+UI --> User : Show preview\n(columns, shape, first 5 rows)
 
-User --> NewUI : "create 20 quizzes"
-NewUI --> NewOrchestrator : Natural message
-NewOrchestrator --> NewTool : Extract params & call tool
-NewTool --> NewQuizService : Enhanced generation
+User --> UI : "plot revenue by month"
+UI --> Orchestrator : Natural language request
+Orchestrator --> Orchestrator : Detect visualization\nkeywords (plot, chart, graph)
+Orchestrator --> VizAgent : create_visualization(\ncsv_filename, user_request)
 
-note right of OldUI
-  REMOVED (157 lines):
-  • Quiz Builder tab
-  • Quick Quiz Tools
-  • system.generate_quiz()
-  • agent.create_quiz()
+VizAgent --> CSVFile : Read CSV
+VizAgent --> VizAgent : Inspect dataset:\n• columns & types\n• sample rows\n• summary stats
+
+VizAgent --> OpenAI : Generate matplotlib code\nwith dataset context
+OpenAI --> VizAgent : Python plotting code
+
+VizAgent --> VizAgent : Execute code safely\n(restricted environment)
+VizAgent --> VizAgent : Capture plot as\nbase64-encoded PNG
+
+VizAgent --> Orchestrator : Return:\n• image_base64\n• code\n• success/error
+Orchestrator --> UI : Display plot + code
+UI --> User : Show visualization\n+ code expander
+
+note right of VizAgent
+  Dataset Inspection:
   
-  Limitations:
-  ❌ Button-based (inflexible)
-  ❌ Form inputs required
-  ❌ Max 8-20 questions
-  ❌ No document upload
-  ❌ Bypassed agent intelligence
+  Analyzes CSV to extract:
+  • Column names & types
+  • Numeric vs categorical
+  • Sample rows (first 5)
+  • Basic statistics (mean, min, max)
+  • Value counts for categories
+  
+  Provides context to LLM for
+  intelligent code generation
 end note
 
-note right of NewUI
-  NEW Benefits:
-  ✅ Natural language
-  ✅ Context-aware
-  ✅ 3-40 questions
-  ✅ Document upload support
-  ✅ Source filtering (320x faster)
-  ✅ Dynamic max_tokens
-  ✅ Agent intelligence
-  ✅ Cleaner code (-157 lines)
+note left of VizAgent
+  Safe Execution:
+  
+  Restricted environment:
+  • Limited imports (pandas, matplotlib, seaborn)
+  • No file system access (except reading CSV)
+  • No network access
+  • No dangerous builtins (exec, eval, etc.)
+  • Only safe operations allowed
+  
+  Returns:
+  • Base64-encoded PNG (for display)
+  • Generated Python code (for viewing)
+  • Error message (if failed)
+end note
+
+note bottom of UI
+  Supported Visualizations:
+  
+  • Line charts
+  • Bar charts (single/grouped)
+  • Scatter plots
+  • Histograms
+  • Pie charts
+  • Heatmaps
+  • Box plots
+  
+  Performance: ~3-5 seconds per plot
+  
+  Features:
+  • Natural language requests
+  • Code viewer (expandable)
+  • Plot persistence in chat history
+  • Multiple plots per session
 end note
 
 @enduml

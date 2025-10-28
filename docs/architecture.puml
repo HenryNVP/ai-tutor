@@ -2,7 +2,7 @@
 skinparam componentStyle rectangle
 skinparam wrapWidth 200
 skinparam maxMessageSize 200
-title AI Tutor – Agent-First Architecture (v2.0)
+title AI Tutor – System Architecture
 
 actor User
 
@@ -18,6 +18,7 @@ node "TutorSystem" as TutorSystem {
   component "Orchestrator Agent\n(tutor_orchestrator)" as Orchestrator
   component "QA Agent\n(qa_agent)" as QA
   component "Web Agent\n(web_agent)" as Web
+  component "Visualization Agent\n(viz_agent)" as VizAgent
   component "Ingestion Agent\n(ingestion_agent)" as IngestionAgent
   component "Retriever" as Retriever
   component "EmbeddingClient" as EmbeddingClient
@@ -36,6 +37,7 @@ database "Chunks Index\n(data/processed/chunks.jsonl)" as ChunkFS
 database "Learner Profiles\n(data/processed/profiles/*.json)" as ProfileFS
 database "Session History\n(data/processed/sessions.sqlite)" as SessionFS
 folder "Raw Documents\n(data/raw)" as RawDocs
+folder "CSV Uploads\n(data/uploads)" as CSVUploads
 cloud "OpenAI API\n(gpt-4o-mini)" as OpenAI
 cloud "Embedding Provider\n(sentence-transformers)" as EmbeddingProvider
 
@@ -43,8 +45,9 @@ User --> UI : Chat interface
 User --> CLI
 User --> PythonAPI
 
-UI --> Orchestrator : Natural language\n"create 20 quizzes"
+UI --> Orchestrator : Natural language\n"create 20 quizzes"\n"plot revenue by month"
 UI --> Ingestion : Upload PDFs
+UI --> VizAgent : Upload CSV
 CLI --> Ingestion : `ingest` command
 CLI --> Orchestrator : `ask` command
 PythonAPI --> TutorSystem : all operations
@@ -63,6 +66,7 @@ Orchestrator --> QA : STEM questions
 Orchestrator --> Web : current events/non-STEM
 Orchestrator --> IngestionAgent : file uploads
 Orchestrator --> QuizService : generate_quiz tool
+Orchestrator --> VizAgent : visualization requests
 Orchestrator --> SessionFS : maintain context
 
 QA --> Retriever : retrieve_local_context
@@ -76,6 +80,10 @@ QuizService --> ProgressTracker : update profiles
 ProgressTracker --> ProfileFS : save learner data
 ProgressTracker --> Personalizer : track mastery
 
+VizAgent --> CSVUploads : read CSV files
+VizAgent --> OpenAI : generate plot code
+VizAgent --> VizAgent : execute code safely
+
 Orchestrator --> OpenAI : stream responses
 QA --> OpenAI : generate cited answers
 Web --> OpenAI : synthesize web results
@@ -83,22 +91,23 @@ Web --> OpenAI : synthesize web results
 note right of Orchestrator
   Agent-First Architecture:
   • Routes via natural language understanding
-  • Extracts count & topic from user messages
-  • Calls generate_quiz as function tool
-  • NEVER answers quiz requests with text
+  • Extracts parameters from user messages
+  • Calls specialized tools/agents
+  • NEVER answers quiz/viz requests with text
   • Supports "create 20 quizzes from documents"
+  • Supports "plot revenue by month"
   
   Daily session rotation prevents token overflow
 end note
 
 note right of QuizService
-  NEW Features (v2.0):
-  1. Generate 3-40 questions (was 3-8)
-  2. Dynamic max_tokens calculation:
-     tokens = (num_questions × 150) + 500
-  3. Source filtering for uploaded docs
-  4. Topic inference from context
-  5. Called as agent tool (not UI button)
+  Quiz Generation:
+  • 3-40 questions per quiz
+  • Dynamic max_tokens calculation:
+    tokens = (num_questions × 150) + 500
+  • Source filtering for uploaded docs
+  • Topic inference from context
+  • Called as agent function tool
   
   Profile Updates by Score:
   • ≥70%: +strength, advance difficulty
@@ -106,8 +115,20 @@ note right of QuizService
   • <40%: +struggle, easier difficulty
 end note
 
+note right of VizAgent
+  Visualization Agent:
+  • Inspects CSV dataset structure
+  • LLM generates matplotlib/seaborn code
+  • Safe execution (restricted environment)
+  • Returns base64-encoded PNG
+  • Supports: line, bar, scatter, histogram,
+    pie, heatmap, box plots, etc.
+  
+  Performance: ~3-5 seconds per plot
+end note
+
 note left of VectorStore
-  NEW: Source Filtering (v2.0)
+  Source Filtering:
   • Can search ONLY specific files
   • 320x faster for uploaded docs
   • Pre-filters by filename before similarity
@@ -119,11 +140,17 @@ end note
 
 note bottom of UI
   Two Tabs:
-  1. Chat & Learn (upload, quiz, Q&A)
-  2. Corpus Management (browse docs)
+  1. Chat & Learn
+     - Document upload (PDF/TXT/MD)
+     - CSV upload for visualization
+     - Interactive Q&A
+     - Quiz generation & taking
+     - Data visualization
   
-  Quiz Builder tab REMOVED (v2.0)
-  Use natural language instead!
+  2. Corpus Management
+     - Bulk ingestion
+     - Corpus statistics
+     - Search testing
 end note
 
 @enduml
