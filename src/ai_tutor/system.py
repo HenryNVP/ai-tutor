@@ -66,38 +66,6 @@ class TutorSystem:
     tutor_agent : TutorAgent
         Multi-agent orchestrator that handles query routing and response generation.
     
-    Examples
-    --------
-    >>> # Initialize from default config
-    >>> system = TutorSystem.from_config(api_key="sk-...")
-    >>> 
-    >>> # Ingest course materials
-    >>> from pathlib import Path
-    >>> system.ingest_directory(Path("data/raw"))
-    >>> 
-    >>> # Ask a question
-    >>> response = system.answer_question(
-    ...     learner_id="student123",
-    ...     question="What is the derivative of x^2?",
-    ...     mode="learning"
-    ... )
-    >>> print(response.answer)
-    >>> print(response.citations)
-    >>> 
-    >>> # Generate a quiz
-    >>> quiz = system.generate_quiz(
-    ...     learner_id="student123",
-    ...     topic="derivatives",
-    ...     num_questions=4
-    ... )
-    >>> 
-    >>> # Evaluate quiz submission
-    >>> evaluation = system.evaluate_quiz(
-    ...     learner_id="student123",
-    ...     quiz_payload=quiz,
-    ...     answers=[2, 0, 1, 3]  # Selected choice indices
-    ... )
-    >>> print(f"Score: {evaluation.score:.0%}")
     """
 
     def __init__(self, settings: Settings, api_key: Optional[str] = None):
@@ -196,16 +164,6 @@ class TutorSystem:
         ValueError
             If required configuration fields are missing or invalid.
         
-        Examples
-        --------
-        >>> # Use default config
-        >>> system = TutorSystem.from_config(api_key="sk-...")
-        >>> 
-        >>> # Use custom config
-        >>> system = TutorSystem.from_config(
-        ...     config_path="configs/production.yaml",
-        ...     api_key="sk-..."
-        ... )
         """
         # Load settings from YAML configuration
         settings = load_settings(config_path)
@@ -287,39 +245,6 @@ class TutorSystem:
         - Conversation history is automatically managed via daily-rotating sessions
         - Citations are only included for local answers; web answers use URLs
         
-        Examples
-        --------
-        >>> system = TutorSystem.from_config(api_key="sk-...")
-        >>> 
-        >>> # Basic question
-        >>> response = system.answer_question(
-        ...     learner_id="student123",
-        ...     question="What is Newton's second law?"
-        ... )
-        >>> print(response.answer)
-        "Newton's second law [1] states that F = ma..."
-        >>> print(response.citations)
-        ["[1] College Physics Vol 1 (Doc: phys_v1, Page: 87)"]
-        >>> 
-        >>> # With streaming
-        >>> def print_token(token: str):
-        ...     print(token, end="", flush=True)
-        >>> 
-        >>> response = system.answer_question(
-        ...     learner_id="student123",
-        ...     question="Explain derivatives",
-        ...     on_delta=print_token
-        ... )
-        >>> 
-        >>> # With extra context from uploaded file
-        >>> with open("lecture_notes.txt") as f:
-        ...     notes = f.read()
-        >>> 
-        >>> response = system.answer_question(
-        ...     learner_id="student123",
-        ...     question="Summarize the key points from the lecture",
-        ...     extra_context=notes
-        ... )
         """
         # Load learner profile (creates new one if doesn't exist)
         profile = self.personalizer.load_profile(learner_id)
