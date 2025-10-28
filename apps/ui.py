@@ -742,18 +742,6 @@ def render() -> None:
                     st.session_state.csv_filename = None
                     st.rerun()
             
-            # Show visualization examples
-            if st.session_state.csv_filename:
-                with st.expander("💡 Visualization Examples"):
-                    st.markdown("""
-                    Try asking:
-                    - "plot sales by month"
-                    - "create a bar chart of revenue"
-                    - "show me a histogram of scores"
-                    - "line chart of temperature over time"
-                    - "scatter plot of X vs Y"
-                    """)
-            
             st.divider()
         
         for message in st.session_state.messages:
