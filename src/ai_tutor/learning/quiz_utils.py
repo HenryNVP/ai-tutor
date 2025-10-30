@@ -5,22 +5,38 @@ from ai_tutor.learning.quiz import Quiz, QuizEvaluation
 
 def quiz_to_markdown(quiz: Quiz) -> str:
     """Convert a Quiz object to markdown for download/export."""
-    lines: list[str] = [f"# {quiz.topic}", ""]
+    # Better title with question count and difficulty
+    title = f"{quiz.topic}"
+    if quiz.difficulty and quiz.difficulty != "balanced":
+        title += f" ({quiz.difficulty.title()})"
+    title += f" - {len(quiz.questions)} Question{'s' if len(quiz.questions) != 1 else ''}"
+    
+    lines: list[str] = [f"# {title}", ""]
 
     for idx, question in enumerate(quiz.questions):
-        lines.append(f"{idx + 1}. {question.question}")
+        lines.append(f"## Question {idx + 1}")
+        lines.append(question.question)
         lines.append("")
         for choice_idx, choice in enumerate(question.choices):
             prefix = chr(65 + choice_idx)
-            lines.append(f"   - {prefix}. {choice}")
+            lines.append(f"{prefix}. {choice}")
+        lines.append("")
+        
+        # Add correct answer
+        correct_letter = chr(65 + question.correct_index)
+        correct_answer = question.choices[question.correct_index]
+        lines.append(f"**Answer: {correct_letter}. {correct_answer}**")
+        lines.append("")
+        
         if question.explanation:
+            lines.append(f"**Explanation:** {question.explanation}")
             lines.append("")
-            lines.append(f"   > Explanation: {question.explanation}")
         if question.references:
-            lines.append("")
-            lines.append("   References:")
+            lines.append("**References:**")
             for ref in question.references:
-                lines.append(f"   - {ref}")
+                lines.append(f"- {ref}")
+            lines.append("")
+        lines.append("---")
         lines.append("")
 
     return "\n".join(lines)

@@ -707,6 +707,7 @@ Please answer based only on the provided context."""
                 answer_choices = [f"{chr(65 + opt)}. {text}" for opt, text in enumerate(question.choices)]
                 display_options = ["Not answered"] + answer_choices
                 current = st.session_state.quiz_answers.get(idx, -1)
+                
                 selection = st.radio(
                     "Choose one",
                     options=display_options,
@@ -714,7 +715,10 @@ Please answer based only on the provided context."""
                     key=f"quiz_q_{idx}",
                     horizontal=True,
                 )
-                st.session_state.quiz_answers[idx] = display_options.index(selection) - 1
+                # Update session state from selection
+                selected_index = display_options.index(selection) - 1
+                if selected_index >= 0:
+                    st.session_state.quiz_answers[idx] = selected_index
                 st.markdown("---")
 
             col_submit, col_edit_download = st.columns([2, 1])
