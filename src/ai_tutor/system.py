@@ -11,6 +11,15 @@ from ai_tutor.ingestion import IngestionPipeline
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.learning import PersonalizationManager, ProgressTracker, QuizService
 from ai_tutor.learning.quiz import Quiz, QuizEvaluation
+from ai_tutor.learning.quiz_utils import (
+    quiz_to_markdown as _quiz_to_markdown,
+    format_quiz_context as _format_quiz_context,
+)
+from ai_tutor.learning.quiz_intent import (
+    detect_quiz_request as _detect_quiz_request,
+    extract_quiz_topic as _extract_quiz_topic,
+    extract_quiz_num_questions as _extract_quiz_num_questions,
+)
 from ai_tutor.retrieval import create_vector_store
 from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.search.tool import SearchTool
@@ -306,6 +315,44 @@ class TutorSystem:
         )
         self.personalizer.save_profile(profile)
         return evaluation
+
+    # --- Quiz API (UI-thin wrappers) ---
+    def quiz_to_markdown(self, quiz_payload: Quiz | dict) -> str:
+        quiz = quiz_payload if isinstance(quiz_payload, Quiz) else Quiz.model_validate(quiz_payload)
+        return _quiz_to_markdown(quiz)
+
+    def format_quiz_context(self, result: QuizEvaluation | dict) -> str:
+        evaluation = result if isinstance(result, QuizEvaluation) else QuizEvaluation.model_validate(result)
+        return _format_quiz_context(evaluation)
+
+    def detect_quiz_request(self, message: str) -> bool:
+        return _detect_quiz_request(message)
+
+    def extract_quiz_topic(self, message: str) -> str:
+        return _extract_quiz_topic(message)
+
+    def extract_quiz_num_questions(self, message: str) -> int:
+        return _extract_quiz_num_questions(message)
+
+    def create_quiz(
+        self,
+        learner_id: str,
+        *,
+        topic: str,
+        num_questions: int = 4,
+        difficulty: Optional[str] = None,
+        extra_context: Optional[str] = None,
+    ) -> Quiz:
+        profile = self.personalizer.load_profile(learner_id)
+        quiz = self.quiz_service.generate_quiz(
+            topic=topic,
+            profile=profile,
+            num_questions=num_questions,
+            difficulty=difficulty,
+            extra_context=extra_context,
+        )
+        # No immediate profile mutation; evaluation will update mastery
+        return quiz
 
     def clear_conversation_history(self, learner_id: str) -> None:
         """Clear the conversation session history for a learner to prevent token overflow."""

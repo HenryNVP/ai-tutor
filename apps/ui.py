@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import sys
 import tempfile
 import shutil
 import base64
@@ -12,10 +13,22 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from collections import Counter
 
+# Add project root to Python path for absolute imports
+_project_root = Path(__file__).parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 import streamlit as st
 from streamlit.runtime.secrets import StreamlitSecretNotFoundError
 
 from ai_tutor.system import TutorSystem
+from apps.chat_helpers import (
+    format_answer,
+    is_question_about_uploaded_docs,
+    filter_hits_by_filenames,
+)
+from apps.corpus_tab import render_corpus_management_tab
+from apps.file_utils import extract_text, summarize_documents
 from ai_tutor.learning.quiz import Quiz, QuizEvaluation
 from ai_tutor.agents.visualization import VisualizationAgent
 from ai_tutor.agents.llm_client import LLMClient
@@ -42,149 +55,16 @@ def load_visualization_agent(_api_key: Optional[str]) -> VisualizationAgent:
     return VisualizationAgent(llm_client, upload_dir)
 
 
-def extract_text(upload: Any) -> str:
-    suffix = Path(upload.name).suffix.lower()
-    try:
-        upload.seek(0)
-    except AttributeError:  # pragma: no cover - UploadedFile implements seek but guard anyway
-        pass
-    data = upload.read()
-    if not data:
-        return ""
-    if suffix == ".pdf":
-        if PdfReader is None:
-            raise RuntimeError("pypdf is required to read PDF files. Install it or upload text instead.")
-        reader = PdfReader(io.BytesIO(data))
-        pages: List[str] = []
-        for page in reader.pages:
-            try:
-                pages.append(page.extract_text() or "")
-            except Exception:  # pragma: no cover - best effort extraction
-                pages.append("")
-        return "\n\n".join(pages)
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode("latin-1", errors="ignore")
+ 
 
 
-def summarize_documents(docs: Iterable[Dict[str, str]], max_chars: int = 6000) -> str:
-    parts: List[str] = []
-    remaining = max_chars
-    for doc in docs:
-        text = doc.get("text", "").strip()
-        if not text:
-            continue
-        header = f"[{doc.get('name', 'Document')}]\n"
-        available = max(0, remaining - len(header))
-        body = text[:available] if available else ""
-        parts.append(header + body)
-        remaining -= len(header) + len(body) + 2
-        if remaining <= 0:
-            break
-    return "\n\n".join(parts)
+ 
 
 
-def format_answer(text: str) -> str:
-    normalized = re.sub(r"(?<=\S)\s+(?=(?:[-•*]|\d+\.)\s)", "\n", text)
-    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
-    lines = normalized.splitlines()
-    formatted: List[str] = []
-    for line in lines:
-        stripped = line.rstrip()
-        is_bullet = stripped.startswith(("-", "*", "•"))
-        is_enumeration = bool(re.match(r"^\d+\.\s", stripped))
-        if (is_bullet or is_enumeration) and formatted and formatted[-1] != "":
-            formatted.append("")
-        formatted.append(stripped)
-    return "\n".join(formatted)
+ 
 
 
-def format_quiz_context(result: QuizEvaluation) -> str:
-    lines = [
-        f"Recent quiz: {result.topic}",
-        f"Score: {result.correct_count}/{result.total_questions} ({result.score * 100:.0f}%)",
-    ]
-    for answer in result.answers:
-        status = "correct" if answer.is_correct else "incorrect"
-        lines.append(f"- Q{answer.index + 1}: {status}")
-    if result.review_topics:
-        lines.append("Focus areas: " + "; ".join(result.review_topics))
-    return "\n".join(lines)
-
-
-def quiz_to_markdown(quiz: Quiz) -> str:
-    """
-    Convert a Quiz object to markdown format for download.
-    
-    Parameters
-    ----------
-    quiz : Quiz
-        The quiz to convert to markdown.
-    
-    Returns
-    -------
-    str
-        Markdown-formatted quiz content.
-    """
-    lines = [
-        f"# {quiz.topic}",
-        "",
-    ]
-    
-    for idx, question in enumerate(quiz.questions):
-        lines.append(f"{idx + 1}. {question.question}")
-        lines.append("")  # Blank line after question
-        
-        for choice_idx, choice in enumerate(question.choices):
-            lines.append(f"{chr(97 + choice_idx)}) {choice}")
-        
-        lines.append("")  # Blank line after choices
-        
-        # Add answer line with letter
-        answer_letter = chr(97 + question.correct_index)
-        lines.append(f"Answer: {answer_letter}")
-        
-        if question.explanation:
-            lines.append(f"Explanation: {question.explanation}")
-        
-        lines.append("")  # Blank line after question
-    
-    return "\n".join(lines)
-
-
-def detect_quiz_request(message: str) -> bool:
-    """
-    Detect if user is requesting a quiz from their message.
-    
-    Parameters
-    ----------
-    message : str
-        User's chat message
-    
-    Returns
-    -------
-    bool
-        True if message is a quiz request
-    """
-    import re
-    message_lower = message.lower()
-    
-    # Pattern-based detection (handles numbers/words between action and quiz)
-    patterns = [
-        r"\b(create|generate|make)\s+.*?\bquiz",  # "create 10 quiz(zes)"
-        r"\bquiz\s+me\b",
-        r"\btest\s+me\b",
-        r"\bpractice\s+questions?\b",
-        r"\b(create|generate)\s+.*?\bquestions?\b",
-        r"\bdownloadable\s+quiz",
-    ]
-    
-    for pattern in patterns:
-        if re.search(pattern, message_lower):
-            return True
-    
-    return False
+ 
 
 
 def is_visualization_request(text: str) -> bool:
@@ -210,399 +90,16 @@ def is_visualization_request(text: str) -> bool:
     return any(keyword in text_lower for keyword in viz_keywords)
 
 
-def is_question_about_uploaded_docs(message: str) -> bool:
-    """
-    Detect if user is asking specifically about uploaded documents.
-    
-    Parameters
-    ----------
-    message : str
-        User's question
-    
-    Returns
-    -------
-    bool
-        True if question is specifically about uploaded documents
-    """
-    upload_keywords = [
-        "uploaded",
-        "upload",
-        "the documents i uploaded",
-        "the files i uploaded",
-        "these documents",
-        "these files",
-        "the 2 documents",
-        "the 2 files",
-        "the two documents",
-        "the two files",
-        "this document",
-        "this file",
-    ]
-    message_lower = message.lower()
-    return any(keyword in message_lower for keyword in upload_keywords)
+ 
 
 
-def filter_hits_by_filenames(hits: List, filenames: List[str]) -> List:
-    """
-    Filter retrieval hits to only include chunks from specific filenames.
-    
-    Parameters
-    ----------
-    hits : List[RetrievalHit]
-        List of retrieval hits from vector search
-    filenames : List[str]
-        List of filenames to filter by (e.g., ["lecture9.pdf", "lecture10.pdf"])
-    
-    Returns
-    -------
-    List[RetrievalHit]
-        Filtered hits containing only chunks from the specified files
-    """
-    if not filenames:
-        return hits
-    
-    # Normalize filenames for comparison (case-insensitive, handle paths)
-    normalized_filenames = {Path(fn).name.lower() for fn in filenames}
-    
-    # Debug logging
-    import streamlit as st
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    # Log to console as well
-    logger.info(f"Filtering by filenames: {normalized_filenames}")
-    
-    with st.expander("🔍 Debug: Filename Matching", expanded=False):
-        st.write("**Looking for these files:**")
-        for fn in normalized_filenames:
-            st.write(f"- `{fn}`")
-        st.write("")
-        st.write(f"**Found in top {len(hits)} retrieval results (unique sources):**")
-        seen_sources = set()
-        matches_found = 0
-        match_list = []
-        no_match_list = []
-        for hit in hits:  # Check ALL hits
-            source_name = Path(hit.chunk.metadata.source_path).name.lower()
-            if source_name not in seen_sources:
-                seen_sources.add(source_name)
-                if source_name in normalized_filenames:
-                    match_list.append(source_name)
-                    matches_found += 1
-                else:
-                    no_match_list.append(source_name)
-                logger.info(f"Source: {source_name}, Match: {source_name in normalized_filenames}")
-        
-        # Show matches first (good news first!)
-        if match_list:
-            st.write("**✅ MATCHES (your uploaded files):**")
-            for source in match_list:
-                st.write(f"  - `{source}` ✅")
-        else:
-            st.write("**❌ NO MATCHES FOUND**")
-        
-        st.write("")
-        # Show first 10 non-matches to avoid cluttering
-        if no_match_list:
-            st.write(f"**Other files in results (showing first 10 of {len(no_match_list)}):**")
-            for source in no_match_list[:10]:
-                st.write(f"  - `{source}` ❌")
-        
-        st.write("")
-        st.write(f"**Summary:** {matches_found}/{len(normalized_filenames)} uploaded files found in {len(hits)} total results")
-    
-    filtered_hits = []
-    for hit in hits:
-        # Get the source path from chunk metadata
-        source_name = Path(hit.chunk.metadata.source_path).name.lower()
-        if source_name in normalized_filenames:
-            filtered_hits.append(hit)
-    
-    return filtered_hits
+ 
 
 
-def extract_quiz_num_questions(message: str) -> int:
-    """
-    Extract the number of questions requested from user message.
-    
-    Parameters
-    ----------
-    message : str
-        User's message requesting a quiz
-    
-    Returns
-    -------
-    int
-        Number of questions requested (default: 4, max: 20)
-    """
-    import re
-    
-    # Try to extract numbers from patterns like:
-    # "create 8 downloadable quizzes", "quiz with 15 questions", "20 question quiz"
-    patterns = [
-        r"(\d+)\s+(?:question|questions)",
-        r"create\s+(\d+)\s+(?:\w+\s+)?(?:quiz|quizzes)",  # Handles optional adjective
-        r"generate\s+(\d+)\s+(?:\w+\s+)?(?:quiz|quizzes)",  # Handles optional adjective
-        r"make\s+(\d+)\s+(?:\w+\s+)?(?:quiz|quizzes)",  # Handles optional adjective
-        r"quiz\s+with\s+(\d+)",
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, message.lower())
-        if match:
-            num = int(match.group(1))
-            # If user asks for "10 quizzes", interpret as 10 questions
-            # Cap at 20 questions for reasonable generation time
-            return min(num, 20)
-    
-    # Default to 4 questions
-    return 4
+ 
 
 
-def extract_quiz_topic(message: str) -> str:
-    """
-    Extract quiz topic from user message.
-    
-    Parameters
-    ----------
-    message : str
-        User's message requesting a quiz
-    
-    Returns
-    -------
-    str
-        Extracted topic or the full message if no specific topic found.
-        Returns "uploaded documents" as a special marker when user references documents.
-    """
-    import re
-    
-    # Check if user is asking for quiz from uploaded documents  
-    doc_patterns = [
-        r"(?:from|using)\s+(?:the|my|these|uploaded)?\s*(?:document|documents|files|pdfs)",
-        r"based\s+on\s+(?:the|my|these|uploaded)?\s*(?:document|documents|files|pdfs)",
-        r"quiz\s+(?:from\s+)?(?:the|my|these)\s+(?:document|documents|files)",
-        r"(?:the|my|these)\s+uploaded\s+(?:document|documents|files|pdfs)",
-    ]
-    
-    for pattern in doc_patterns:
-        if re.search(pattern, message.lower()):
-            return "uploaded documents"  # Special marker
-    
-    # Try to extract topic after common patterns
-    # Updated to handle numbers, adjectives, and plural forms
-    patterns = [
-        # Handles: "create 8 downloadable quizzes about CNN"
-        r"(?:create|generate|make)\s+(?:\d+\s+)?(?:\w+\s+)?quiz(?:zes)?\s+(?:about|on|regarding|for)\s+(.+)",
-        # Handles: "quiz about CNN" (removed "from" to avoid document confusion)
-        r"quiz(?:zes)?\s+(?:about|on|regarding|for)\s+(.+)",
-        # Handles: "test me on CNN"
-        r"test me on\s+(.+)",
-        # Handles: "questions about CNN"
-        r"questions\s+(?:about|on|regarding|for)\s+(.+)",
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, message.lower())
-        if match:
-            topic = match.group(1).strip()
-            # Clean up common endings
-            topic = re.sub(r"[.!?]+$", "", topic)
-            return topic
-    
-    # Fallback: return the message without quiz keywords
-    cleaned = message.lower()
-    for keyword in ["create", "generate", "make", "quiz", "quizzes", "test", "questions", "downloadable"]:
-        cleaned = cleaned.replace(keyword, "")
-    # Remove numbers at the start
-    cleaned = re.sub(r"^\d+\s*", "", cleaned)
-    return cleaned.strip() or "general topics"
-
-
-def analyze_corpus(system: TutorSystem) -> Dict[str, Any]:
-    """
-    Analyze the ingested corpus to show coverage statistics.
-    
-    Parameters
-    ----------
-    system : TutorSystem
-        The tutor system with loaded vector store.
-    
-    Returns
-    -------
-    dict
-        Statistics about the corpus including domains, documents, and sample topics.
-    """
-    chunks = system.chunk_store.load()
-    
-    if not chunks:
-        return {
-            "total_chunks": 0,
-            "total_documents": 0,
-            "domains": {},
-            "documents": [],
-            "sample_topics": []
-        }
-    
-    # Analyze domains
-    domains = Counter(
-        chunk.metadata.domain
-        for chunk in chunks
-    )
-    
-    # Analyze documents
-    doc_ids = set(chunk.metadata.doc_id for chunk in chunks)
-    doc_titles = {}
-    for chunk in chunks:
-        if chunk.metadata.doc_id not in doc_titles:
-            doc_titles[chunk.metadata.doc_id] = chunk.metadata.title
-    
-    # Get sample topics (first sentence of random chunks)
-    import random
-    sample_size = min(10, len(chunks))
-    sample_chunks = random.sample(chunks, sample_size) if len(chunks) > sample_size else chunks
-    sample_topics = []
-    for chunk in sample_chunks:
-        # Extract first sentence as topic
-        text = chunk.text.strip()
-        first_sentence = text.split('.')[0][:100]
-        if first_sentence:
-            sample_topics.append({
-                "text": first_sentence + "...",
-                "doc": chunk.metadata.title,
-                "domain": chunk.metadata.domain
-            })
-    
-    return {
-        "total_chunks": len(chunks),
-        "total_documents": len(doc_ids),
-        "domains": dict(domains),
-        "documents": [{"id": doc_id, "title": doc_titles[doc_id]} for doc_id in doc_ids],
-        "sample_topics": sample_topics
-    }
-
-
-def render_corpus_management_tab(system: TutorSystem) -> None:
-    """Render the corpus management and ingestion tab."""
-    st.header("📚 Corpus Management")
-    
-    # Initialize session state for corpus management
-    if "uploaded_files_for_ingestion" not in st.session_state:
-        st.session_state.uploaded_files_for_ingestion = []
-    if "ingestion_result" not in st.session_state:
-        st.session_state.ingestion_result = None
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("📤 Upload & Ingest Documents")
-        st.markdown("""
-        Upload PDF, Markdown, or TXT files to add them to the permanent knowledge base.
-        These documents will be chunked, embedded, and stored in the vector database for future retrieval.
-        """)
-        
-        uploaded_files = st.file_uploader(
-            "Select files to ingest into vector store",
-            type=["pdf", "txt", "md"],
-            accept_multiple_files=True,
-            key="corpus_uploader"
-        )
-        
-        if uploaded_files:
-            st.session_state.uploaded_files_for_ingestion = uploaded_files
-            st.success(f"✓ {len(uploaded_files)} file(s) ready for ingestion")
-            
-            with st.expander("View files to be ingested"):
-                for file in uploaded_files:
-                    file_size_mb = len(file.getvalue()) / (1024 * 1024)
-                    st.write(f"• **{file.name}** ({file_size_mb:.2f} MB)")
-        
-        if st.button("🚀 Ingest Files into Vector Store", type="primary", disabled=not uploaded_files):
-            with st.spinner("Processing and ingesting documents... This may take a few minutes."):
-                # Create temporary directory for uploaded files
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    temp_path = Path(temp_dir)
-                    
-                    # Save uploaded files to temp directory
-                    saved_paths = []
-                    for uploaded_file in uploaded_files:
-                        file_path = temp_path / uploaded_file.name
-                        with open(file_path, "wb") as f:
-                            f.write(uploaded_file.getvalue())
-                        saved_paths.append(file_path)
-                    
-                    # Ingest using the system's ingestion pipeline
-                    try:
-                        result = system.ingest_directory(temp_path)
-                        st.session_state.ingestion_result = {
-                            "documents": len(result.documents),
-                            "chunks": len(result.chunks),
-                            "skipped": [str(p) for p in result.skipped],
-                            "success": True
-                        }
-                        st.success(f"✅ Successfully ingested {len(result.documents)} documents into {len(result.chunks)} chunks!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Ingestion failed: {str(e)}")
-                        st.session_state.ingestion_result = {
-                            "error": str(e),
-                            "success": False
-                        }
-        
-        if st.session_state.ingestion_result and st.session_state.ingestion_result.get("success"):
-            result = st.session_state.ingestion_result
-            st.info(f"""
-            **Last Ingestion Result:**
-            - Documents processed: {result['documents']}
-            - Chunks created: {result['chunks']}
-            - Files skipped: {len(result['skipped'])}
-            """)
-            if result['skipped']:
-                with st.expander("View skipped files"):
-                    for skipped in result['skipped']:
-                        st.write(f"• {skipped}")
-    
-    with col2:
-        st.subheader("📊 Corpus Analysis")
-        st.markdown("View statistics about the ingested knowledge base.")
-        
-        if st.button("🔍 Analyze Corpus", type="secondary"):
-            with st.spinner("Analyzing corpus..."):
-                analysis = analyze_corpus(system)
-                st.session_state.corpus_analysis = analysis
-        
-        if "corpus_analysis" in st.session_state:
-            analysis = st.session_state.corpus_analysis
-            
-            if analysis["total_chunks"] == 0:
-                st.warning("No documents in corpus. Upload and ingest some files first!")
-            else:
-                # Display metrics
-                metric_col1, metric_col2, metric_col3 = st.columns(3)
-                with metric_col1:
-                    st.metric("📄 Documents", analysis["total_documents"])
-                with metric_col2:
-                    st.metric("🧩 Chunks", analysis["total_chunks"])
-                with metric_col3:
-                    avg_chunks = analysis["total_chunks"] / analysis["total_documents"] if analysis["total_documents"] > 0 else 0
-                    st.metric("📏 Avg Chunks/Doc", f"{avg_chunks:.1f}")
-                
-                # Domain distribution
-                st.markdown("**📚 Domain Distribution:**")
-                for domain, count in analysis["domains"].items():
-                    percentage = (count / analysis["total_chunks"]) * 100
-                    st.progress(percentage / 100, text=f"{domain}: {count} chunks ({percentage:.1f}%)")
-                
-                # Documents list
-                with st.expander("📑 Documents in Corpus"):
-                    for doc in analysis["documents"]:
-                        st.write(f"• {doc['title']} (ID: `{doc['id']}`)")
-                
-                # Sample topics
-                with st.expander("🎯 Sample Topics Coverage"):
-                    for topic in analysis["sample_topics"]:
-                        st.markdown(f"**{topic['domain'].upper()}** • {topic['doc']}")
-                        st.caption(topic['text'])
-                        st.divider()
+ 
 
 
 def render() -> None:
@@ -871,7 +368,7 @@ def render() -> None:
                 # Check for quiz context from previous interactions
                 if st.session_state.quiz_result:
                     quiz_result = QuizEvaluation.model_validate(st.session_state.quiz_result)
-                    quiz_context = format_quiz_context(quiz_result)
+                    quiz_context = system.format_quiz_context(quiz_result)
                 else:
                     quiz_context = ""
                 
@@ -1088,12 +585,32 @@ Please answer based only on the provided context."""
                             doc_names = [Path(f).stem.replace('_', ' ').replace('-', ' ') for f in st.session_state.chat_uploaded_filenames]
                             enhanced_prompt = f"{prompt} (Note: User has uploaded documents about: {', '.join(doc_names)})"
                     
-                    with st.spinner("Thinking..."):
-                        response = system.answer_question(
-                            learner_id=learner_id,
-                            question=enhanced_prompt,
-                            extra_context=combined_context,
+                    # If this is a quiz request, create quiz directly via backend wrappers
+                    if system.detect_quiz_request(enhanced_prompt):
+                        num_questions = system.extract_quiz_num_questions(enhanced_prompt)
+                        topic = system.extract_quiz_topic(enhanced_prompt)
+                        effective_topic = (
+                            "Uploaded documents" if topic == "uploaded documents" and uploaded_docs_context else topic
                         )
+                        with st.spinner("Creating quiz..."):
+                            quiz_obj = system.create_quiz(
+                                learner_id=learner_id,
+                                topic=effective_topic,
+                                num_questions=num_questions,
+                                difficulty=None,
+                                extra_context=uploaded_docs_context or combined_context,
+                            )
+                        st.session_state.quiz = quiz_obj.model_dump(mode="json")
+                        st.session_state.quiz_answers = {}
+                        st.session_state.quiz_result = None
+                        st.rerun()
+                    else:
+                        with st.spinner("Thinking..."):
+                            response = system.answer_question(
+                                learner_id=learner_id,
+                                question=enhanced_prompt,
+                                extra_context=combined_context,
+                            )
                 
                 placeholder.markdown(format_answer(response.answer))
                 if response.citations:
@@ -1169,7 +686,7 @@ Please answer based only on the provided context."""
                         st.session_state.quiz = None
                         st.session_state.quiz_answers = {}
                         # Initialize markdown for download
-                        st.session_state.quiz_markdown = quiz_to_markdown(quiz)
+                        st.session_state.quiz_markdown = system.quiz_to_markdown(quiz)
                         st.session_state.quiz_edit_mode = False
                         st.success(
                             f"Quiz scored {evaluation.correct_count}/{evaluation.total_questions} "
@@ -1187,7 +704,7 @@ Please answer based only on the provided context."""
                     st.session_state.pre_submit_edit_mode = not st.session_state.pre_submit_edit_mode
                     if st.session_state.pre_submit_edit_mode:
                         # Initialize markdown when entering edit mode
-                        st.session_state.pre_submit_quiz_markdown = quiz_to_markdown(quiz)
+                        st.session_state.pre_submit_quiz_markdown = system.quiz_to_markdown(quiz)
                     st.rerun()
             
             # Show edit/download interface if enabled
@@ -1198,7 +715,7 @@ Please answer based only on the provided context."""
                 
                 edited_quiz = st.text_area(
                     "Quiz Content (Markdown)",
-                    value=st.session_state.get("pre_submit_quiz_markdown", quiz_to_markdown(quiz)),
+                    value=st.session_state.get("pre_submit_quiz_markdown", system.quiz_to_markdown(quiz)),
                     height=300,
                     key="pre_submit_quiz_editor"
                 )
@@ -1302,14 +819,10 @@ __all__ = [
     "summarize_documents",
     "format_answer",
     "format_quiz_context",
-    "detect_quiz_request",
     "is_question_about_uploaded_docs",
     "filter_hits_by_filenames",
-    "extract_quiz_num_questions",
-    "extract_quiz_topic",
-    "quiz_to_markdown",
-    "analyze_corpus",
-    "render_corpus_management_tab",
+    
+    
     "render",
 ]
 
