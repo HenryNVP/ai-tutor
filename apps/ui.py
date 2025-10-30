@@ -479,11 +479,79 @@ def render() -> None:
                         else:
                             st.info("ℹ️ No passages found in uploaded documents. Using general knowledge...")
                 
-                # Check if question is specifically about uploaded documents
+                # Check for quiz requests FIRST (before other processing)
+                is_quiz_request = system.detect_quiz_request(prompt)
+                
+                if is_quiz_request:
+                    # Handle quiz creation
+                    num_questions = system.extract_quiz_num_questions(prompt)
+                    topic = system.extract_quiz_topic(prompt)
+                    
+                    # If quiz is about uploaded documents, use that context
+                    effective_topic = topic
+                    quiz_context = None
+                    
+                    if topic == "uploaded documents" or is_question_about_uploaded_docs(prompt):
+                        # Use uploaded documents context
+                        if uploaded_docs_context:
+                            quiz_context = uploaded_docs_context
+                            effective_topic = "Uploaded documents"
+                        elif st.session_state.chat_files_ingested and st.session_state.chat_uploaded_filenames:
+                            # Retrieve content from uploaded documents for quiz
+                            from ai_tutor.data_models import Query
+                            from collections import defaultdict
+                            all_hits = []
+                            for filename in st.session_state.chat_uploaded_filenames:
+                                query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
+                                file_hits = system.tutor_agent.retriever.retrieve(Query(text=query_text))
+                                all_hits.extend(file_hits)
+                            
+                            seen_chunk_ids = set()
+                            unique_hits = []
+                            for hit in all_hits:
+                                if hit.chunk.metadata.chunk_id not in seen_chunk_ids:
+                                    seen_chunk_ids.add(hit.chunk.metadata.chunk_id)
+                                    unique_hits.append(hit)
+                            
+                            filtered_hits = filter_hits_by_filenames(unique_hits, st.session_state.chat_uploaded_filenames)
+                            
+                            if filtered_hits:
+                                hits_by_doc = defaultdict(list)
+                                for hit in filtered_hits:
+                                    hits_by_doc[hit.chunk.metadata.title or "Unknown"].append(hit)
+                                
+                                passages_per_doc = max(3, 15 // len(hits_by_doc))
+                                context_parts = []
+                                for doc_title, hits in hits_by_doc.items():
+                                    for hit in hits[:passages_per_doc]:
+                                        context_parts.append(
+                                            f"{hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})\n{hit.chunk.text}"
+                                        )
+                                quiz_context = "\n\n".join(context_parts)
+                                effective_topic = "Uploaded documents"
+                    
+                    # Use quiz context if available, otherwise uploaded docs context
+                    extra_context = quiz_context or uploaded_docs_context
+                    
+                    with st.spinner("Creating quiz..."):
+                        quiz_obj = system.create_quiz(
+                            learner_id=learner_id,
+                            topic=effective_topic,
+                            num_questions=num_questions,
+                            difficulty=None,
+                            extra_context=extra_context,
+                        )
+                    st.session_state.quiz = quiz_obj.model_dump(mode="json")
+                    st.session_state.quiz_answers = {}
+                    st.session_state.quiz_result = None
+                    st.rerun()
+                
+                # Check if question is specifically about uploaded documents (but not a quiz request)
                 filter_to_uploaded = (
                     is_question_about_uploaded_docs(prompt) and
                     st.session_state.chat_files_ingested and
-                    st.session_state.chat_uploaded_filenames
+                    st.session_state.chat_uploaded_filenames and
+                    not is_quiz_request
                 )
                 
                 if filter_to_uploaded:
@@ -585,32 +653,12 @@ Please answer based only on the provided context."""
                             doc_names = [Path(f).stem.replace('_', ' ').replace('-', ' ') for f in st.session_state.chat_uploaded_filenames]
                             enhanced_prompt = f"{prompt} (Note: User has uploaded documents about: {', '.join(doc_names)})"
                     
-                    # If this is a quiz request, create quiz directly via backend wrappers
-                    if system.detect_quiz_request(enhanced_prompt):
-                        num_questions = system.extract_quiz_num_questions(enhanced_prompt)
-                        topic = system.extract_quiz_topic(enhanced_prompt)
-                        effective_topic = (
-                            "Uploaded documents" if topic == "uploaded documents" and uploaded_docs_context else topic
+                    with st.spinner("Thinking..."):
+                        response = system.answer_question(
+                            learner_id=learner_id,
+                            question=enhanced_prompt,
+                            extra_context=combined_context,
                         )
-                        with st.spinner("Creating quiz..."):
-                            quiz_obj = system.create_quiz(
-                                learner_id=learner_id,
-                                topic=effective_topic,
-                                num_questions=num_questions,
-                                difficulty=None,
-                                extra_context=uploaded_docs_context or combined_context,
-                            )
-                        st.session_state.quiz = quiz_obj.model_dump(mode="json")
-                        st.session_state.quiz_answers = {}
-                        st.session_state.quiz_result = None
-                        st.rerun()
-                    else:
-                        with st.spinner("Thinking..."):
-                            response = system.answer_question(
-                                learner_id=learner_id,
-                                question=enhanced_prompt,
-                                extra_context=combined_context,
-                            )
                 
                 placeholder.markdown(format_answer(response.answer))
                 if response.citations:
