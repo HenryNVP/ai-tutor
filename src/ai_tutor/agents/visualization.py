@@ -193,12 +193,13 @@ plt.tight_layout()
     def execute_plot_code(self, code: str) -> str:
         """
         Execute plotting code and return base64-encoded image.
+        Handles multiple figures by combining them vertically.
         
         Args:
-            code: Python code that generates a matplotlib plot
+            code: Python code that generates matplotlib plot(s)
             
         Returns:
-            Base64-encoded PNG image string
+            Base64-encoded PNG image string (combined if multiple figures)
             
         Raises:
             Exception: If code execution fails
@@ -218,19 +219,70 @@ plt.tight_layout()
             # Execute code
             exec(code, safe_globals)
             
-            # Save plot to bytes buffer
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-            buf.seek(0)
+            # Get all open figures
+            figures = plt.get_fignums()
+            num_figures = len(figures)
             
-            # Encode as base64
-            img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+            if num_figures == 0:
+                raise Exception("No figures were created by the plotting code")
             
-            # Cleanup
+            logger.info(f"Found {num_figures} figure(s)")
+            
+            if num_figures == 1:
+                # Single figure - save directly
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                buf.seek(0)
+                img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+                buf.close()
+            else:
+                # Multiple figures - save each and combine vertically with PIL
+                from PIL import Image
+                
+                # Save each figure to a buffer and load fully into memory
+                figure_images = []
+                max_width = 0
+                total_height = 0
+                
+                for fig_num in figures:
+                    fig = plt.figure(fig_num)
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                    buf.seek(0)
+                    # Read bytes from buffer and create Image from bytes
+                    # This ensures the image is fully loaded and independent of the buffer
+                    img_bytes = buf.read()
+                    buf.close()
+                    img = Image.open(io.BytesIO(img_bytes))
+                    img.load()  # Force loading of image data into memory
+                    # Convert to RGB to ensure it's a fully in-memory image
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    figure_images.append(img)
+                    max_width = max(max_width, img.width)
+                    total_height += img.height
+                
+                # Create combined image
+                combined_img = Image.new('RGB', (max_width, total_height), color='white')
+                y_offset = 0
+                
+                for img in figure_images:
+                    # Center horizontally if narrower than max_width
+                    x_offset = (max_width - img.width) // 2
+                    combined_img.paste(img, (x_offset, y_offset))
+                    y_offset += img.height
+                
+                # Save combined image to base64
+                buf = io.BytesIO()
+                combined_img.save(buf, format='PNG')
+                buf.seek(0)
+                img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+                buf.close()
+            
+            # Cleanup all original figures
             plt.close('all')
-            buf.close()
             
-            logger.info(f"Successfully generated plot ({len(img_base64)} bytes encoded)")
+            logger.info(f"Successfully generated plot ({len(img_base64)} bytes encoded, {num_figures} figure(s))")
             
             return img_base64
             
