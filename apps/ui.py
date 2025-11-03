@@ -702,24 +702,29 @@ Please answer based only on the provided context."""
             
             st.caption("Select answers for each question and submit when ready.")
 
-            for idx, question in enumerate(quiz.questions):
-                st.markdown(f"**Q{idx + 1}. {question.question}**")
-                answer_choices = [f"{chr(65 + opt)}. {text}" for opt, text in enumerate(question.choices)]
-                display_options = ["Not answered"] + answer_choices
-                current = st.session_state.quiz_answers.get(idx, -1)
-                
-                selection = st.radio(
-                    "Choose one",
-                    options=display_options,
-                    index=current + 1 if current >= 0 else 0,
-                    key=f"quiz_q_{idx}",
-                    horizontal=True,
-                )
-                # Update session state from selection
-                selected_index = display_options.index(selection) - 1
-                if selected_index >= 0:
-                    st.session_state.quiz_answers[idx] = selected_index
-                st.markdown("---")
+            # Use columns to reduce layout recalculations
+            with st.container():
+                for idx, question in enumerate(quiz.questions):
+                    # Pre-compute display options to avoid recalculation
+                    if f"quiz_options_{idx}" not in st.session_state:
+                        answer_choices = [f"{chr(65 + opt)}. {text}" for opt, text in enumerate(question.choices)]
+                        st.session_state[f"quiz_options_{idx}"] = ["Not answered"] + answer_choices
+                    
+                    display_options = st.session_state[f"quiz_options_{idx}"]
+                    current = st.session_state.quiz_answers.get(idx, -1)
+                    
+                    selection = st.radio(
+                        f"Q{idx + 1}. {question.question}",
+                        options=display_options,
+                        index=current + 1 if current >= 0 else 0,
+                        key=f"quiz_q_{idx}",
+                        horizontal=True,
+                    )
+                    # Update session state from selection
+                    selected_index = display_options.index(selection) - 1
+                    if selected_index >= 0:
+                        st.session_state.quiz_answers[idx] = selected_index
+                    st.markdown("---")
 
             col_submit, col_edit_download = st.columns([2, 1])
             with col_submit:
