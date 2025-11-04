@@ -107,10 +107,12 @@ User Message → Orchestrator Agent → Specialized Tools/Agents
 - Metadata tracking (title, page, source)
 
 **2. Retrieval System**
-- Vector similarity search
+- ChromaDB vector store (default, production-ready)
+- Vector similarity search with cosine distance
 - Source filtering for uploaded documents
 - Top-k configurable (default: 5-8)
 - Citation generation with page numbers
+- Automatic persistence (SQLite backend)
 
 **3. QA Agent**
 - Retrieval-augmented generation

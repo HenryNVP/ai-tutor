@@ -31,7 +31,7 @@ retrieval:
 paths:
   raw_data_dir: "data/raw"
   processed_data_dir: "data/processed"
-  vector_store_dir: "data/vector_store"
+  vector_store_dir: "data/vector_store"  # ChromaDB stores data here (chroma.sqlite3)
   chunks_index: "data/processed/chunks.jsonl"
   logs_dir: "logs"
   profiles_dir: "data/processed/profiles"
