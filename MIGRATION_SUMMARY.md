@@ -22,7 +22,7 @@ The AI Tutor system has been successfully migrated to use **ChromaDB** as the de
 - ✅ **Automatic persistence** - ChromaDB handles all persistence automatically
 - ✅ **Better performance** - Optimized for vector search
 - ✅ **Metadata filtering** - Built-in support for source filtering
-- ✅ **Backward compatible** - Falls back to SimpleVectorStore if ChromaDB unavailable
+- ✅ **SimpleVectorStore removed** - ChromaDB is now the default and required vector store
 
 ## How to Use
 
@@ -34,13 +34,7 @@ The system now uses ChromaDB by default. No configuration needed!
 streamlit run apps/ui.py
 ```
 
-### Switch Back to SimpleVectorStore (if needed)
-```bash
-export VECTOR_STORE_TYPE=simple
-streamlit run apps/ui.py
-```
-
-### Use FAISS (future)
+### Switch to FAISS (alternative)
 ```bash
 export VECTOR_STORE_TYPE=faiss
 streamlit run apps/ui.py
@@ -72,7 +66,10 @@ pip install chromadb>=0.4.24
 ```
 
 ### Import errors
-The system automatically falls back to SimpleVectorStore with a warning if ChromaDB is unavailable.
+If ChromaDB is not installed, the system will raise an error. Install ChromaDB with:
+```bash
+pip install chromadb>=0.4.24
+```
 
 ## Benefits
 

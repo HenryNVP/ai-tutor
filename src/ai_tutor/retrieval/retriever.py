@@ -48,14 +48,14 @@ class Retriever:
     --------
     >>> from ai_tutor.config.schema import RetrievalConfig
     >>> from ai_tutor.ingestion.embeddings import EmbeddingClient
-    >>> from ai_tutor.retrieval.vector_store import SimpleVectorStore
+    >>> from ai_tutor.retrieval.chroma_store import ChromaVectorStore
     >>> from ai_tutor.data_models import Query
     >>> from pathlib import Path
     >>> 
     >>> # Initialize components
     >>> config = RetrievalConfig(top_k=5)
     >>> embedder = EmbeddingClient(embedding_config)
-    >>> vector_store = SimpleVectorStore(Path("data/vector_store"))
+    >>> vector_store = ChromaVectorStore(Path("data/vector_store"))
     >>> 
     >>> # Create retriever
     >>> retriever = Retriever(config, embedder, vector_store)

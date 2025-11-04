@@ -1,8 +1,7 @@
 from .factory import create_vector_store
-from .simple_store import SimpleVectorStore
 from .vector_store import VectorStore
 
-__all__ = ["SimpleVectorStore", "VectorStore", "create_vector_store"]
+__all__ = ["VectorStore", "create_vector_store"]
 
 # Optional imports for ChromaDB and FAISS stores
 try:
