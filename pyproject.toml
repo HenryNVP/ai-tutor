@@ -7,7 +7,7 @@ name = "personal-stem-instructor"
 version = "0.1.0"
 description = "Personalized STEM tutoring agent with RAG, course planning, and assessments."
 authors = [
-  { name = "Henry", email = "henry@example.com" }
+  { name = "Henry", email = "henrynguyen.vp@gmail.com" }
 ]
 readme = "README.md"
 requires-python = ">=3.10"
