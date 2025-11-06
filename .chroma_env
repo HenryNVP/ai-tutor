@@ -1,0 +1,12 @@
+# ChromaDB MCP Server Configuration
+# This file configures chroma-mcp-server to use the AI Tutor vector store
+
+# Use persistent client (local file-based storage)
+CHROMA_CLIENT_TYPE=persistent
+
+# Path to vector store directory (relative to project root)
+# Note: Use absolute path in Claude Desktop configuration
+CHROMA_DATA_DIR=data/vector_store
+
+
+

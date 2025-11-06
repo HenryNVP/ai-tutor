@@ -160,3 +160,4 @@ data/
 # examples
 examples/
 *.csv
+chroma-mcp/
