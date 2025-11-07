@@ -1,7 +1,10 @@
-"""Example demonstrating how to connect to a local Chroma MCP server.
+"""Example demonstrating how to connect to a local Chroma MCP server and explore domain-based collections.
 
-This example shows how to connect to a Chroma MCP server running locally.
-Chroma MCP servers typically use either SSE or Streamable HTTP transport.
+This example shows how to:
+- List and analyze domain-based collections
+- Explore metadata (primary_domain, secondary_domains, tags)
+- Query collections by domain
+- Get statistics and insights about the database
 """
 
 import asyncio
@@ -15,33 +18,255 @@ from agents import Agent, Runner, gen_trace_id, trace
 from agents.mcp import MCPServer, MCPServerSse, MCPServerStreamableHttp
 from agents.model_settings import ModelSettings
 
+# Direct ChromaDB exploration (without MCP agent)
+try:
+    import chromadb
+    from pathlib import Path
+    CHROMADB_AVAILABLE = True
+except ImportError:
+    CHROMADB_AVAILABLE = False
+
+
+def explore_database_direct():
+    """Directly explore the ChromaDB database without using MCP agent."""
+    if not CHROMADB_AVAILABLE:
+        print("chromadb not available for direct exploration")
+        return
+    
+    # Connect to the database
+    this_dir = Path(__file__).parent
+    chroma_data_dir = this_dir.parent
+    client = chromadb.PersistentClient(path=str(chroma_data_dir))
+    
+    print("=" * 80)
+    print("DIRECT CHROMA DATABASE EXPLORATION")
+    print("=" * 80)
+    
+    # List all collections
+    collections = client.list_collections()
+    print(f"\n[1] Found {len(collections)} collection(s):\n")
+    
+    domain_collections = {}
+    other_collections = []
+    total_docs = 0
+    
+    for collection_obj in collections:
+        collection = client.get_collection(name=collection_obj.name)
+        count = collection.count()
+        total_docs += count
+        
+        if collection_obj.name.startswith("ai_tutor_"):
+            domain = collection_obj.name.replace("ai_tutor_", "")
+            domain_collections[domain] = {
+                "name": collection_obj.name,
+                "count": count,
+                "metadata": collection_obj.metadata or {},
+            }
+        else:
+            other_collections.append({
+                "name": collection_obj.name,
+                "count": count,
+                "metadata": collection_obj.metadata or {},
+            })
+    
+    # Display domain collections
+    if domain_collections:
+        print("Domain-based Collections:")
+        print("-" * 80)
+        for domain in sorted(domain_collections.keys()):
+            info = domain_collections[domain]
+            print(f"  {domain:12s} ({info['name']:25s}): {info['count']:5d} documents")
+            if info['metadata']:
+                print(f"    Metadata: {info['metadata']}")
+        print()
+    
+    # Display other collections
+    if other_collections:
+        print("Other Collections:")
+        print("-" * 80)
+        for info in other_collections:
+            print(f"  {info['name']:25s}: {info['count']:5d} documents")
+            if info['metadata']:
+                print(f"    Metadata: {info['metadata']}")
+        print()
+    
+    # Domain distribution
+    if domain_collections:
+        print("\n[2] Domain Distribution:")
+        print("-" * 80)
+        print(f"Total documents across all domain collections: {total_docs}")
+        print()
+        
+        for domain in sorted(domain_collections.keys()):
+            info = domain_collections[domain]
+            percentage = (info['count'] / total_docs * 100) if total_docs > 0 else 0
+            bar = "█" * int(percentage / 2)  # Visual bar
+            print(f"  {domain:12s}: {info['count']:5d} ({percentage:5.1f}%) {bar}")
+    
+    # Sample metadata from domain collections
+    print("\n[3] Sample Metadata Structure:")
+    print("-" * 80)
+    for domain in sorted(domain_collections.keys()):
+        info = domain_collections[domain]
+        if info['count'] > 0:
+            collection = client.get_collection(name=info['name'])
+            # Get a sample document using get() to avoid embedding dimension issues
+            try:
+                results = collection.get(limit=1)
+                if results['metadatas'] and len(results['metadatas']) > 0:
+                    metadata = results['metadatas'][0]
+                    print(f"\n  {domain} collection sample metadata:")
+                    for key, value in metadata.items():
+                        if isinstance(value, str) and len(value) > 100:
+                            value = value[:100] + "..."
+                        print(f"    {key}: {value}")
+                break  # Just show one example
+            except Exception as e:
+                print(f"  Error getting sample from {domain}: {e}")
+                break
+    
+    # Query examples (note: requires embeddings for custom-embedded collections)
+    print("\n[4] Sample Queries:")
+    print("-" * 80)
+    print("  Note: Collections with custom embeddings (768-dim) require query_embeddings.")
+    print("  Skipping text-based queries to avoid dimension mismatch errors.")
+    print("  Use the MCP agent with proper embedding generation for queries.")
+    
+    print("\n" + "=" * 80)
+    print("DIRECT EXPLORATION COMPLETE")
+    print("=" * 80)
+
 
 async def run(mcp_server: MCPServer):
-    """Run the agent with the provided MCP server."""
+    """Run the agent with the provided MCP server to explore the database."""
     agent = Agent(
-        name="Assistant",
-        instructions="Use the Chroma MCP tools to answer questions about the vector database.",
+        name="Database Explorer",
+        instructions=(
+            "You are a database exploration assistant. Use the Chroma MCP tools to explore "
+            "the vector database. Focus on domain-based collections (ai_tutor_math, ai_tutor_physics, "
+            "ai_tutor_cs, etc.) and provide detailed analysis including:\n"
+            "- Collection statistics\n"
+            "- Domain distribution\n"
+            "- Metadata analysis (primary_domain, secondary_domains, tags)\n"
+            "- Sample queries across different domains\n"
+            "Be thorough and provide clear, formatted output."
+        ),
         mcp_servers=[mcp_server],
         model_settings=ModelSettings(tool_choice="required"),
     )
 
-    # List all collections
-    message = "List all collections in the database."
-    print(f"Running: {message}")
+    print("=" * 80)
+    print("CHROMA DATABASE EXPLORATION")
+    print("=" * 80)
+    
+    # 1. List all collections with detailed information
+    print("\n[1] Listing all collections in the database...")
+    print("-" * 80)
+    message = (
+        "List all collections in the database. For each collection, provide:\n"
+        "- Collection name\n"
+        "- Document count\n"
+        "- Collection metadata (especially domain information)\n"
+        "- Identify which collections are domain-based (ai_tutor_* collections)"
+    )
     result = await Runner.run(starting_agent=agent, input=message)
     print(result.final_output)
 
-    # Create a collection and add some documents
-    message = "Create a collection called 'test_docs' and add 3 sample documents about Python programming."
-    print(f"\n\nRunning: {message}")
+    # 2. Get detailed statistics for domain-based collections
+    print("\n[2] Analyzing domain-based collections...")
+    print("-" * 80)
+    message = (
+        "For each domain-based collection (ai_tutor_math, ai_tutor_physics, ai_tutor_cs, etc.), "
+        "get detailed information including:\n"
+        "- Total document count\n"
+        "- Collection metadata\n"
+        "- If possible, sample a few documents to see their metadata structure"
+    )
     result = await Runner.run(starting_agent=agent, input=message)
     print(result.final_output)
 
-    # Query the collection
-    message = "Query the 'test_docs' collection for information about Python."
-    print(f"\n\nRunning: {message}")
+    # 3. Explore metadata structure
+    print("\n[3] Exploring document metadata structure...")
+    print("-" * 80)
+    message = (
+        "Query one of the domain collections (preferably one with documents) to get sample results. "
+        "Show the metadata structure of the returned documents, focusing on:\n"
+        "- primary_domain\n"
+        "- secondary_domains\n"
+        "- domain_tags\n"
+        "- domain_confidence\n"
+        "- source_path\n"
+        "- Any other metadata fields"
+    )
     result = await Runner.run(starting_agent=agent, input=message)
     print(result.final_output)
+
+    # 4. Domain distribution analysis
+    print("\n[4] Analyzing domain distribution...")
+    print("-" * 80)
+    message = (
+        "Analyze the distribution of documents across domains. For each domain collection:\n"
+        "- Count the total documents\n"
+        "- Calculate the percentage of total documents\n"
+        "- Identify which domains have the most/least documents\n"
+        "- Provide a summary table"
+    )
+    result = await Runner.run(starting_agent=agent, input=message)
+    print(result.final_output)
+
+    # 5. Sample queries across different domains
+    print("\n[5] Testing queries across different domains...")
+    print("-" * 80)
+    
+    test_queries = [
+        ("ai_tutor_math", "What is calculus?"),
+        ("ai_tutor_physics", "What is quantum mechanics?"),
+        ("ai_tutor_cs", "What is machine learning?"),
+    ]
+    
+    for collection_name, query_text in test_queries:
+        print(f"\nQuerying '{collection_name}' with: '{query_text}'")
+        message = (
+            f"Use the query_with_text tool to query the collection '{collection_name}' "
+            f"with the query text: '{query_text}'. "
+            f"This will automatically generate the correct 768-dim embeddings. "
+            f"Return the top 3 results with their metadata, especially domain information."
+        )
+        try:
+            result = await Runner.run(starting_agent=agent, input=message)
+            print(result.final_output)
+        except Exception as e:
+            print(f"Error querying {collection_name}: {e}")
+
+    # 6. Find collections with specific metadata
+    print("\n[6] Finding documents with specific domain characteristics...")
+    print("-" * 80)
+    message = (
+        "Use query_with_text to search for documents with secondary_domains. "
+        "Query each domain collection with a generic query like 'example' or 'introduction', "
+        "then filter the results to find documents where secondary_domains metadata field is not empty. "
+        "Show examples of multi-domain documents if they exist."
+    )
+    result = await Runner.run(starting_agent=agent, input=message)
+    print(result.final_output)
+
+    # 7. Summary and recommendations
+    print("\n[7] Generating summary and insights...")
+    print("-" * 80)
+    message = (
+        "Provide a comprehensive summary of the database including:\n"
+        "- Total number of collections\n"
+        "- Total documents across all collections\n"
+        "- Domain distribution summary\n"
+        "- Notable patterns or insights\n"
+        "- Recommendations for database usage"
+    )
+    result = await Runner.run(starting_agent=agent, input=message)
+    print(result.final_output)
+    
+    print("\n" + "=" * 80)
+    print("EXPLORATION COMPLETE")
+    print("=" * 80)
 
 
 async def main():
@@ -149,5 +374,12 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    
+    # Check if user wants direct exploration (faster, no agent needed)
+    if len(sys.argv) > 1 and sys.argv[1] == "--direct":
+        explore_database_direct()
+    else:
+        # Use MCP agent for interactive exploration
+        asyncio.run(main())
 
