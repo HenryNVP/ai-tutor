@@ -48,12 +48,22 @@ def chunk_document(document: Document, config: ChunkingConfig) -> List[Chunk]:
             )
             page_label = document.page_map.get(approx_page - 1)
 
+        # Copy domain metadata from document to chunk
+        primary_domain = getattr(document.metadata, "primary_domain", None) or document.metadata.extra.get("domain", "general")
+        secondary_domains = getattr(document.metadata, "secondary_domains", []) or []
+        domain_tags = getattr(document.metadata, "domain_tags", []) or []
+        domain_confidence = getattr(document.metadata, "domain_confidence", 0.5)
+        
         chunk_metadata = ChunkMetadata(
             chunk_id=chunk_id,
             doc_id=document.metadata.doc_id,
             title=document.metadata.title,
             page=page_label,
-            domain=document.metadata.extra.get("domain", "general"),
+            domain=document.metadata.extra.get("domain", primary_domain),  # Legacy field
+            primary_domain=primary_domain,
+            secondary_domains=secondary_domains,
+            domain_tags=domain_tags,
+            domain_confidence=domain_confidence,
             source_path=document.metadata.source_path,
         )
         chunk = Chunk(metadata=chunk_metadata, text=chunk_text, token_count=len(chunk_words))

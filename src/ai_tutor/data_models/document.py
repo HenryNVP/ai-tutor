@@ -13,7 +13,11 @@ class DocumentMetadata(BaseModel):
     doc_id: str
     title: str
     source_path: Path
-    domain: str = "general"
+    domain: str = "general"  # Deprecated: use primary_domain instead
+    primary_domain: str = "general"
+    secondary_domains: List[str] = Field(default_factory=list)
+    domain_tags: List[str] = Field(default_factory=list)
+    domain_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     extra: Dict[str, Any] = Field(default_factory=dict)
@@ -37,7 +41,11 @@ class ChunkMetadata(BaseModel):
     title: str
     page: Optional[str] = None
     section: Optional[str] = None
-    domain: str = "general"
+    domain: str = "general"  # Deprecated: use primary_domain instead
+    primary_domain: str = "general"
+    secondary_domains: List[str] = Field(default_factory=list)
+    domain_tags: List[str] = Field(default_factory=list)
+    domain_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     source_path: Path
 
 

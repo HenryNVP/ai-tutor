@@ -7,13 +7,15 @@ from typing import Iterable, List
 
 from tqdm import tqdm
 
-from ai_tutor.config.schema import ChunkingConfig, Settings
+from ai_tutor.config.schema import ChunkingConfig, ModelConfig, Settings
 from ai_tutor.data_models import Chunk, Document
 from ai_tutor.ingestion.chunker import chunk_document
+from ai_tutor.ingestion.domain_classifier import DomainClassifier
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.ingestion.parsers import parse_path
 from ai_tutor.retrieval.vector_store import VectorStore
 from ai_tutor.storage import ChunkJsonlStore
+from ai_tutor.agents.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,7 @@ class IngestionPipeline:
         embedder: EmbeddingClient,
         vector_store: VectorStore,
         chunk_store: ChunkJsonlStore,
+        use_ai_domain_detection: bool = True,
     ):
         """
         Initialize the ingestion pipeline with all required components.
@@ -115,6 +118,7 @@ class IngestionPipeline:
             - chunking: Chunk size and overlap parameters
             - paths: Directories for data storage
             - course_defaults: Domain labels for classification
+            - model: LLM configuration for AI domain detection
         embedder : EmbeddingClient
             Embedding generator for converting text to vectors. Should be
             configured with appropriate batch size for performance.
@@ -124,17 +128,35 @@ class IngestionPipeline:
         chunk_store : ChunkJsonlStore
             JSONL storage backend for chunk metadata and text. Supports
             incremental updates and efficient streaming.
+        use_ai_domain_detection : bool
+            Whether to use AI-based domain detection for new documents.
+            Default True. If False, only uses rule-based filename heuristics.
         
         Notes
         -----
         - The embedder and vector store dimensions must match (default: 768)
         - Chunk store and vector store should point to consistent directories
         - Pipeline can be reused for multiple ingestion runs
+        - AI domain detection requires OPENAI_API_KEY to be set
         """
         self.settings = settings
         self.embedder = embedder
         self.vector_store = vector_store
         self.chunk_store = chunk_store
+        
+        # Initialize domain classifier
+        llm_client = None
+        if use_ai_domain_detection:
+            try:
+                llm_client = LLMClient(settings.model)
+            except Exception as e:
+                logger.warning(f"Failed to initialize LLM client for domain detection: {e}. Using rule-based only.")
+                use_ai_domain_detection = False
+        
+        self.domain_classifier = DomainClassifier(
+            llm_client=llm_client,
+            use_ai_detection=use_ai_domain_detection
+        )
 
     def ingest_paths(self, paths: Iterable[Path]) -> IngestionResult:
         """
@@ -234,8 +256,33 @@ class IngestionPipeline:
                 skipped.append(path)
                 continue
             
-            # Stage 2: Infer and attach domain metadata
-            document.metadata.extra.setdefault("domain", self._infer_domain(path))
+            # Stage 2: Classify domain using AI or rule-based methods
+            # First, try fast path-based classification
+            initial_classification = self.domain_classifier.classify_from_path(path)
+            
+            # If AI detection is enabled, refine with content analysis
+            # Sample first 2000 chars for efficiency
+            sample_text = document.text[:2000] if len(document.text) > 2000 else document.text
+            classification = self.domain_classifier.classify_from_content(
+                text=sample_text,
+                filename=path.name,
+                initial_classification=initial_classification
+            )
+            
+            # Attach domain metadata to document
+            document.metadata.primary_domain = classification.primary_domain
+            document.metadata.secondary_domains = classification.secondary_domains
+            document.metadata.domain_tags = classification.tags
+            document.metadata.domain_confidence = classification.confidence
+            # Legacy field for backward compatibility
+            document.metadata.domain = classification.primary_domain
+            document.metadata.extra.setdefault("domain", classification.primary_domain)
+            
+            logger.debug(
+                f"Classified {path.name}: primary={classification.primary_domain}, "
+                f"secondary={classification.secondary_domains}, confidence={classification.confidence:.2f}"
+            )
+            
             documents.append(document)
             
             # Stage 3: Chunk document into overlapping segments
@@ -264,15 +311,3 @@ class IngestionPipeline:
         logger.info("Ingested %s documents into %s chunks.", len(documents), len(chunks))
         return IngestionResult(documents=documents, chunks=chunks, skipped=skipped)
 
-    def _infer_domain(self, path: Path) -> str:
-        """Guess a subject domain from the file name, falling back to 'general'."""
-        lowercase = path.name.lower()
-        default_domains = ["math", "physics", "cs"]
-        configured_domains = getattr(
-            getattr(self.settings, "course_defaults", None), "domains", None
-        )
-        candidates = configured_domains or default_domains
-        for domain in candidates:
-            if domain in lowercase:
-                return domain
-        return "general"

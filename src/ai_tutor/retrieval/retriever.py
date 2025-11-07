@@ -168,11 +168,22 @@ class Retriever:
         
         # Perform similarity search in vector store
         # Pass source_filter if provided to restrict search to specific files
-        hits = self.vector_store.search(
-            embedding, 
-            self.config.top_k,
-            source_filter=query.source_filter
-        )
+        # Support domain filtering if vector store supports it
+        search_kwargs = {
+            "embedding": embedding,
+            "top_k": self.config.top_k,
+            "source_filter": query.source_filter,
+        }
+        
+        # Add domain filtering if supported (ChromaVectorStore)
+        if hasattr(self.vector_store, "search") and query.domain:
+            # Check if search method accepts domain_filter parameter
+            import inspect
+            sig = inspect.signature(self.vector_store.search)
+            if "domain_filter" in sig.parameters:
+                search_kwargs["domain_filter"] = query.domain
+        
+        hits = self.vector_store.search(**search_kwargs)
         
         # Log retrieval statistics for monitoring
         if query.source_filter:
