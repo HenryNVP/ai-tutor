@@ -5,6 +5,25 @@ This example shows how to:
 - Explore metadata (primary_domain, secondary_domains, tags)
 - Query collections by domain
 - Get statistics and insights about the database
+
+Environment Variables:
+    MCP_PORT: Port number for the MCP server (default: 8000)
+    MCP_SERVER_TOKEN: Optional Bearer token for authentication
+    MCP_TIMEOUT: HTTP request timeout in seconds (default: 10)
+    MCP_AUTO_START: Set to "true", "1", or "yes" to auto-start the server
+
+Usage:
+    # Basic usage (server must be running)
+    python main.py
+
+    # Auto-start server
+    MCP_AUTO_START=true python main.py
+
+    # With authentication
+    MCP_SERVER_TOKEN=your_token python main.py
+
+    # Direct database exploration (no MCP server needed)
+    python main.py --direct
 """
 
 import asyncio
@@ -328,13 +347,32 @@ async def main():
 
     try:
         # Try Streamable HTTP first (most common for newer MCP servers)
+        # Configure connection parameters
+        streamable_params = {
+            "url": server_url,
+            "timeout": int(os.getenv("MCP_TIMEOUT", "10")),  # HTTP request timeout
+        }
+        
+        # Add authorization header if token is provided
+        mcp_token = os.getenv("MCP_SERVER_TOKEN")
+        if mcp_token:
+            streamable_params["headers"] = {"Authorization": f"Bearer {mcp_token}"}
+        
+        # Configure Streamable HTTP server with best practices:
+        # - cache_tools_list: Cache tool list to reduce API calls
+        # - max_retry_attempts: Automatic retries for list_tools() and call_tool()
+        # - client_session_timeout_seconds: HTTP read timeout (optional, defaults handled by library)
+        # - use_structured_content: Prefer structured content over text (optional)
+        # - retry_backoff_seconds_base: Base delay for retry backoff (optional)
         async with MCPServerStreamableHttp(
             name="Chroma MCP Server (Streamable HTTP)",
-            params={
-                "url": server_url,
-            },
-            cache_tools_list=True,
-            max_retry_attempts=3,
+            params=streamable_params,
+            cache_tools_list=True,  # Cache tool list to reduce API calls
+            max_retry_attempts=3,  # Automatic retries for network issues
+            # Optional: client_session_timeout_seconds=30,  # HTTP read timeout
+            # Optional: use_structured_content=True,  # Prefer structured content
+            # Optional: retry_backoff_seconds_base=1.0,  # Retry backoff delay
+            # Optional: tool_filter=lambda tool: tool.name.startswith("chroma_"),  # Filter tools
         ) as server:
             trace_id = gen_trace_id()
             with trace(workflow_name="Chroma MCP Example", trace_id=trace_id):
