@@ -22,7 +22,7 @@ from ai_tutor.learning.quiz_intent import (
 )
 from ai_tutor.retrieval import create_vector_store
 from ai_tutor.retrieval.retriever import Retriever
-from ai_tutor.search.tool import SearchTool
+# SearchTool removed - web_agent uses WebSearchTool directly
 from ai_tutor.storage import ChunkJsonlStore
 from ai_tutor.utils.files import collect_documents
 from ai_tutor.utils.logging import configure_logging
@@ -66,8 +66,7 @@ class TutorSystem:
         Adaptive learning coordinator that adjusts difficulty and selects styles.
     llm_client : LLMClient
         OpenAI API client for text generation (GPT-4o-mini by default).
-    search_tool : SearchTool
-        Web search interface for non-local queries (DuckDuckGo).
+    # Web search handled directly by web_agent using WebSearchTool
     quiz_service : QuizService
         Assessment generator and evaluator with RAG-based question creation.
     ingestion_pipeline : IngestionPipeline
@@ -117,9 +116,9 @@ class TutorSystem:
         self.progress_tracker = ProgressTracker(settings.paths.profiles_dir)
         self.personalizer = PersonalizationManager(self.progress_tracker)
         
-        # Initialize LLM and web search clients
+        # Initialize LLM client
         self.llm_client = LLMClient(settings.model, api_key=api_key)
-        self.search_tool = SearchTool(model=settings.model.name, api_key=api_key)
+        # Web search handled directly by web_agent using WebSearchTool
         
         # Build quiz service with dedicated retriever instance
         quiz_retriever = Retriever(settings.retrieval, embedder=self.embedder, vector_store=self.vector_store)
@@ -142,7 +141,6 @@ class TutorSystem:
             retrieval_config=settings.retrieval,
             embedder=self.embedder,
             vector_store=self.vector_store,
-            search_tool=self.search_tool,
             ingest_directory=self.ingest_directory,
             session_db_path=settings.paths.processed_data_dir / "sessions.sqlite",
             quiz_service=self.quiz_service,

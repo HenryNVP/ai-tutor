@@ -152,8 +152,42 @@ class MCPServerManager:
                     
                     self.server_obj = self.loop.run_until_complete(_connect_with_timeout())
                     self._connection_error = None
-                    self._connection_event.set()  # Signal connection ready
                     logger.info("[MCP] Successfully connected to MCP server")
+                    
+                    # Pre-warm tool list in background to avoid blocking first query
+                    # This fetches the tool list eagerly so the first agent query doesn't wait
+                    async def _prewarm_tools():
+                        try:
+                            import time
+                            prewarm_start = time.time()
+                            # Try to access tools property or trigger tool list fetch
+                            # MCPServerStreamableHttp with cache_tools_list=True will cache the result
+                            if hasattr(self.server_obj, 'list_tools'):
+                                tools = await self.server_obj.list_tools()
+                                prewarm_duration = time.time() - prewarm_start
+                                logger.info(f"[MCP] Pre-warmed tool list: {len(tools) if tools else 0} tools cached in {prewarm_duration:.3f}s")
+                            elif hasattr(self.server_obj, 'tools'):
+                                # Access tools property to trigger fetch
+                                tools = self.server_obj.tools
+                                prewarm_duration = time.time() - prewarm_start
+                                logger.info(f"[MCP] Pre-warmed tool list via property: {len(tools) if tools else 0} tools cached in {prewarm_duration:.3f}s")
+                            elif hasattr(self.server, 'list_tools'):
+                                # Try on the server object itself
+                                tools = await self.server.list_tools()
+                                prewarm_duration = time.time() - prewarm_start
+                                logger.info(f"[MCP] Pre-warmed tool list via server: {len(tools) if tools else 0} tools cached in {prewarm_duration:.3f}s")
+                            else:
+                                # Tool list will be fetched on first use (cached by cache_tools_list=True)
+                                logger.debug("[MCP] Tool list will be fetched on first use (will be cached)")
+                        except Exception as e:
+                            # Non-critical - tool list will be fetched on first use anyway
+                            logger.debug(f"[MCP] Tool list pre-warming skipped (will fetch on first use): {e}")
+                    
+                    # Pre-warm tools in background (non-blocking)
+                    # This happens after connection is established but before first query
+                    self.loop.create_task(_prewarm_tools())
+                    
+                    self._connection_event.set()  # Signal connection ready
                     
                     # Keep connection alive with a periodic task
                     async def _keep_alive():

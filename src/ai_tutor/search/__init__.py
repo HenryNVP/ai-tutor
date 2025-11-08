@@ -1,3 +1,4 @@
-from .tool import SearchResult, SearchTool
+# Search module - WebSearchTool is used directly via agents SDK
+# No wrapper classes needed
 
-__all__ = ["SearchResult", "SearchTool"]
+__all__ = []

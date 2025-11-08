@@ -27,7 +27,7 @@ from ai_tutor.learning.quiz import Quiz, QuizService
 from ai_tutor.learning.quiz import Quiz, QuizEvaluation, QuizService
 from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.retrieval.vector_store import VectorStore
-from ai_tutor.search.tool import SearchTool
+# SearchTool removed - web_agent uses WebSearchTool directly
 
 logger = logging.getLogger(__name__)
 
@@ -151,8 +151,7 @@ class TutorAgent:
         relevant. Queries with no hits above this threshold fall back to web search.
     retriever : Retriever
         Vector search coordinator that embeds queries and retrieves similar chunks.
-    search_tool : SearchTool
-        Web search interface (DuckDuckGo) used by the Web Agent.
+    # Web search is handled directly by web_agent using WebSearchTool
     ingest_fn : Callable
         Directory ingestion function for processing and indexing new documents.
     sessions : Dict[str, SQLiteSession]
@@ -172,7 +171,6 @@ class TutorAgent:
         retrieval_config: RetrievalConfig,
         embedder: EmbeddingClient,
         vector_store: VectorStore,
-        search_tool: SearchTool,
         ingest_directory: Callable[[Path], object],
         session_db_path: Path,
         quiz_service: QuizService,
@@ -189,8 +187,7 @@ class TutorAgent:
             Sentence transformer for encoding queries and documents.
         vector_store : VectorStore
             Indexed vector database for similarity search.
-        search_tool : SearchTool
-            Web search interface for non-local queries.
+        # Web search handled directly by web_agent
         ingest_directory : Callable[[Path], object]
             Function to process and index documents from a directory.
         session_db_path : Path
@@ -200,7 +197,6 @@ class TutorAgent:
         """
         # Core retrieval infrastructure
         self.retriever = Retriever(retrieval_config, embedder=embedder, vector_store=vector_store)
-        self.search_tool = search_tool
         self.ingest_fn = ingest_directory
         self.mcp_server = mcp_server  # Optional MCP server for Chroma (persistent across queries)
         
@@ -249,7 +245,8 @@ class TutorAgent:
         # MCP server connection is shared and tool list is cached to avoid redundant API calls
         logger.debug("[TutorAgent] Building agents with persistent MCP server context")
         self.ingestion_agent = build_ingestion_agent(self.ingest_fn)
-        self.web_agent = build_web_agent(self.search_tool, self.state)
+        # Web agent uses WebSearchTool directly - no SearchTool wrapper needed
+        self.web_agent = build_web_agent(state=self.state)
         self.qa_agent = build_qa_agent(
             self.retriever, 
             self.state, 
