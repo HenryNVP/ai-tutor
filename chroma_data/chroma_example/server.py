@@ -10,7 +10,9 @@ It provides tools for:
 - Retrieving collection information
 """
 
+import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,10 @@ chroma_data_dir = this_dir.parent  # Go up one level to chroma_data directory
 chroma_client = chromadb.PersistentClient(
     path=str(chroma_data_dir),  # Use chroma_data directory containing chroma.sqlite3
 )
+
+# Thread pool executor for offloading CPU-bound embedding operations
+# This prevents blocking the async event loop
+_embedding_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="embedding")
 
 
 @mcp.tool()
@@ -291,20 +297,8 @@ def get_collection_info(collection_name: str) -> str:
         return f"Error getting info for collection '{collection_name}': {str(e)}"
 
 
-@mcp.tool()
-def generate_embedding(query_text: str) -> dict[str, Any]:
-    """Generate a 768-dimensional embedding vector for a query text.
-    
-    This is useful for querying collections that use custom embeddings (BAAI/bge-base-en, 768-dim).
-    
-    Args:
-        query_text: The text to embed.
-    
-    Returns:
-        A dictionary with the embedding vector and metadata.
-    """
-    print(f"[debug-server] generate_embedding(query_text='{query_text[:50]}...')")
-    
+def _generate_embedding_sync(query_text: str) -> dict[str, Any]:
+    """Synchronous embedding generation (runs in thread pool)."""
     if not EMBEDDING_AVAILABLE or embedding_client is None:
         return {
             "error": "Embedding client not available. Cannot generate embeddings.",
@@ -329,41 +323,34 @@ def generate_embedding(query_text: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def query_with_text(
-    collection_name: str,
-    query_text: str,
-    n_results: int = 5,
-    where: dict[str, Any] | None = None,
-) -> str:
-    """Query a collection using text (automatically generates embeddings).
+async def generate_embedding(query_text: str) -> dict[str, Any]:
+    """Generate a 768-dimensional embedding vector for a query text.
     
-    This tool generates 768-dim embeddings for the query text and then queries the collection.
-    Works with collections that use BAAI/bge-base-en embeddings.
+    This is useful for querying collections that use custom embeddings (BAAI/bge-base-en, 768-dim).
+    The embedding operation is offloaded to a thread pool to keep the event loop non-blocking.
     
     Args:
-        collection_name: The name of the collection to query.
-        query_text: The query text to search for.
-        n_results: Number of results to return. Defaults to 5.
-        where: Optional metadata filter dictionary.
+        query_text: The text to embed.
     
     Returns:
-        A formatted string with query results.
+        A dictionary with the embedding vector and metadata.
     """
-    print(
-        f"[debug-server] query_with_text(collection_name={collection_name}, "
-        f"query_text='{query_text[:50]}...', n_results={n_results})"
-    )
+    print(f"[debug-server] generate_embedding(query_text='{query_text[:50]}...')")
     
-    if not EMBEDDING_AVAILABLE or embedding_client is None:
-        return (
-            f"Error: Embedding client not available. Cannot generate embeddings for query. "
-            f"Please use query_collection with query_embeddings parameter instead."
-        )
-    
+    # Offload CPU-bound embedding operation to thread pool
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_embedding_executor, _generate_embedding_sync, query_text)
+
+
+def _query_with_text_sync(
+    collection_name: str,
+    query_text: str,
+    embedding: list[float],
+    n_results: int,
+    where: dict[str, Any] | None,
+) -> str:
+    """Synchronous query operation (runs in thread pool after embedding is generated)."""
     try:
-        # Generate embedding
-        embedding = embedding_client.embed_query(query_text)
-        
         # Query using the embedding
         collection = chroma_client.get_collection(name=collection_name)
         results = collection.query(
@@ -394,6 +381,67 @@ def query_with_text(
                 result_text += f"  Document: {documents[j][:200]}...\n" if len(documents[j]) > 200 else f"  Document: {documents[j]}\n"
             if metadatas[j]:
                 result_text += f"  Metadata: {metadatas[j]}\n"
+        
+        return result_text
+    except Exception as e:
+        return f"Error querying collection '{collection_name}': {str(e)}"
+
+
+@mcp.tool()
+async def query_with_text(
+    collection_name: str,
+    query_text: str,
+    n_results: int = 5,
+    where: dict[str, Any] | None = None,
+) -> str:
+    """Query a collection using text (automatically generates embeddings).
+    
+    This tool generates 768-dim embeddings for the query text and then queries the collection.
+    Works with collections that use BAAI/bge-base-en embeddings.
+    The embedding and query operations are offloaded to thread pools to keep the event loop non-blocking.
+    
+    Args:
+        collection_name: The name of the collection to query.
+        query_text: The query text to search for.
+        n_results: Number of results to return. Defaults to 5.
+        where: Optional metadata filter dictionary.
+    
+    Returns:
+        A formatted string with query results.
+    """
+    print(
+        f"[debug-server] query_with_text(collection_name={collection_name}, "
+        f"query_text='{query_text[:50]}...', n_results={n_results})"
+    )
+    
+    if not EMBEDDING_AVAILABLE or embedding_client is None:
+        return (
+            f"Error: Embedding client not available. Cannot generate embeddings for query. "
+            f"Please use query_collection with query_embeddings parameter instead."
+        )
+    
+    try:
+        # Generate embedding (offloaded to thread pool)
+        loop = asyncio.get_event_loop()
+        embedding_result = await loop.run_in_executor(
+            _embedding_executor, _generate_embedding_sync, query_text
+        )
+        
+        if embedding_result.get("error") or not embedding_result.get("embedding"):
+            return f"Error generating embedding: {embedding_result.get('error', 'Unknown error')}"
+        
+        embedding = embedding_result["embedding"]
+        
+        # Query using the embedding (also offloaded to thread pool)
+        result_text = await loop.run_in_executor(
+            _embedding_executor,
+            _query_with_text_sync,
+            collection_name,
+            query_text,
+            embedding,
+            n_results,
+            where,
+        )
         
         return result_text
     except Exception as e:

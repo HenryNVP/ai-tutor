@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import re
 import sys
 import tempfile
 import shutil
 import base64
+import asyncio
+import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from collections import Counter
+
+logger = logging.getLogger(__name__)
 
 # Add project root to Python path for absolute imports
 _project_root = Path(__file__).parent.parent
@@ -40,9 +45,216 @@ except ImportError:  # pragma: no cover
     PdfReader = None  # type: ignore[assignment]
 
 
+# Global MCP server manager
+_mcp_server_manager = None
+_mcp_server_lock = threading.Lock()
+
+
+class MCPServerManager:
+    """Manages MCP server lifecycle in a background thread for Streamlit.
+    
+    This class ensures:
+    - MCP server connection is initialized once and reused across all queries
+    - Tool list is cached to avoid redundant API calls
+    - Event loop stays non-blocking with async operations
+    """
+    
+    def __init__(self):
+        self.server = None
+        self.server_obj = None
+        self.loop = None
+        self.thread = None
+        self._initialized = False
+        self._connection_error = None  # Track connection errors
+        self._connection_event = threading.Event()  # Signal when connection is ready
+        self._connection_start_time = None  # Track when connection attempt started
+    
+    def initialize(self) -> Optional[Any]:
+        """Initialize MCP server connection in background thread.
+        
+        Returns the same server instance on subsequent calls to ensure
+        persistent connection and tool list caching.
+        """
+        if self._initialized and self.server_obj is not None:
+            return self.server_obj
+        
+        if self._connection_error:
+            # Connection previously failed, don't retry automatically
+            return None
+        
+        use_mcp = os.getenv("MCP_USE_SERVER", "false").lower() in ("true", "1", "yes")
+        if not use_mcp:
+            return None
+        
+        try:
+            from agents.mcp import MCPServerStreamableHttp
+            import requests
+            
+            port = int(os.getenv("MCP_PORT", "8000"))
+            server_url = f"http://localhost:{port}/mcp"
+            
+            # Check if server is reachable before attempting connection
+            # Note: Root URL returns 404, but /mcp endpoint exists (requires SSE format)
+            try:
+                # Try to reach the server (any response means it's running)
+                # We check root because /mcp requires specific headers
+                base_url = f"http://localhost:{port}"
+                response = requests.get(base_url, timeout=2)
+                # Any HTTP response (even 404) means server is running
+                logger.debug(f"[MCP] Server check: {response.status_code} from {base_url} (server is running)")
+            except requests.exceptions.ConnectionError:
+                self._connection_error = f"MCP server not running on port {port}. Start it with: cd chroma_data/chroma_example && python server.py"
+                logger.warning(f"[MCP] Connection refused on port {port} - server not running")
+                return None
+            except requests.exceptions.Timeout:
+                self._connection_error = f"MCP server timeout on port {port}"
+                logger.warning(f"[MCP] Timeout connecting to port {port}")
+                return None
+            except Exception as e:
+                # Other errors might be OK (server might be running but endpoint different)
+                logger.debug(f"[MCP] Server check exception (may be OK): {e}")
+                pass
+            
+            streamable_params = {
+                "url": server_url,
+                "timeout": int(os.getenv("MCP_TIMEOUT", "10")),
+            }
+            
+            mcp_token = os.getenv("MCP_SERVER_TOKEN")
+            if mcp_token:
+                streamable_params["headers"] = {"Authorization": f"Bearer {mcp_token}"}
+            
+            self.server = MCPServerStreamableHttp(
+                name="Chroma MCP Server",
+                params=streamable_params,
+                cache_tools_list=True,  # CRITICAL: Cache tool list to prevent redundant tools/list calls
+                max_retry_attempts=3,
+                # Add timeout to prevent hanging
+                client_session_timeout_seconds=int(os.getenv("MCP_TIMEOUT", "10")),
+            )
+            logger.info("[MCP] MCP server configured with tool list caching and timeout enabled")
+            
+            # Create event loop in background thread
+            def _run_server():
+                try:
+                    self.loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(self.loop)
+                    
+                    # Add timeout to connection attempt
+                    async def _connect_with_timeout():
+                        try:
+                            return await asyncio.wait_for(
+                                self.server.__aenter__(),
+                                timeout=10.0  # 10 second timeout for connection
+                            )
+                        except asyncio.TimeoutError:
+                            raise RuntimeError("MCP server connection timed out after 10 seconds")
+                    
+                    self.server_obj = self.loop.run_until_complete(_connect_with_timeout())
+                    self._connection_error = None
+                    self._connection_event.set()  # Signal connection ready
+                    logger.info("[MCP] Successfully connected to MCP server")
+                    
+                    # Keep connection alive with a periodic task
+                    async def _keep_alive():
+                        while True:
+                            await asyncio.sleep(60)  # Check every minute
+                    self.loop.create_task(_keep_alive())
+                    self.loop.run_forever()
+                except Exception as e:
+                    self._connection_error = str(e)
+                    self._connection_event.set()  # Signal even on error
+                    logger.error(f"[MCP] Server connection failed: {e}", exc_info=True)
+            
+            import time
+            self._connection_start_time = time.time()
+            self.thread = threading.Thread(target=_run_server, daemon=True)
+            self.thread.start()
+            
+            # Wait for initialization (up to 10 seconds)
+            if self._connection_event.wait(timeout=10.0):
+                # Connection attempt completed (success or failure)
+                if self._connection_error:
+                    # Connection failed
+                    self._initialized = True  # Mark as initialized so we don't retry
+                    return None
+                # Connection succeeded
+                self._initialized = True
+                return self.server_obj
+            else:
+                # Timeout - connection took too long, mark as failed
+                if not self._connection_error:
+                    # Check if thread is still alive (might have failed silently)
+                    if not self.thread.is_alive():
+                        self._connection_error = "Connection thread died unexpectedly"
+                    else:
+                        self._connection_error = f"Connection timeout after 10 seconds. Is the MCP server running on port {port}? Start it with: cd chroma_data/chroma_example && python server.py"
+                self._initialized = True  # Mark as initialized to prevent retries
+                return None
+            
+        except ImportError:
+            self._connection_error = "MCP library not available"
+            return None
+        except Exception as e:
+            self._connection_error = str(e)
+            return None
+    
+    def get_server(self) -> Optional[Any]:
+        """Get the MCP server object."""
+        return self.server_obj
+    
+    def get_status(self) -> str:
+        """Get connection status string."""
+        import time
+        
+        if self._connection_error:
+            return "🔴 Failed"
+        elif self.server_obj is not None:
+            return "🟢 Enabled"
+        elif self._initialized:
+            # Initialized but no server_obj means it failed or timed out
+            if self._connection_error:
+                return "🔴 Failed"
+            # Still connecting but initialized - check if it's been too long
+            if self._connection_start_time:
+                elapsed = time.time() - self._connection_start_time
+                if elapsed > 15.0:  # More than 15 seconds total
+                    if not self._connection_error:
+                        self._connection_error = "Connection taking too long. Is the MCP server running?"
+                    return "🔴 Failed"
+            return "🟡 Connecting..."
+        else:
+            # Not initialized yet - check if thread is running
+            if self.thread and self.thread.is_alive():
+                # Check how long we've been waiting
+                if self._connection_start_time:
+                    elapsed = time.time() - self._connection_start_time
+                    if elapsed > 15.0:
+                        if not self._connection_error:
+                            self._connection_error = "Connection taking too long. Is the MCP server running?"
+                        self._initialized = True
+                        return "🔴 Failed"
+                return "🟡 Connecting..."
+            else:
+                return "🟡 Connecting..."
+
+
+def _get_mcp_server() -> Optional[Any]:
+    """Get or create MCP server connection."""
+    global _mcp_server_manager
+    
+    with _mcp_server_lock:
+        if _mcp_server_manager is None:
+            _mcp_server_manager = MCPServerManager()
+        
+        return _mcp_server_manager.initialize()
+
+
 @st.cache_resource(show_spinner=False)
 def load_system(api_key: Optional[str]) -> TutorSystem:
-    return TutorSystem.from_config(api_key=api_key)
+    """Load TutorSystem with optional MCP server support."""
+    mcp_server = _get_mcp_server()
+    return TutorSystem.from_config(api_key=api_key, mcp_server=mcp_server)
 
 
 @st.cache_resource(show_spinner=False)
@@ -121,6 +333,27 @@ def render() -> None:
 
     system = load_system(api_key)
     viz_agent = load_visualization_agent(api_key)
+    
+    # Show MCP status if enabled
+    use_mcp = os.getenv("MCP_USE_SERVER", "false").lower() in ("true", "1", "yes")
+    if use_mcp:
+        if _mcp_server_manager:
+            mcp_status = _mcp_server_manager.get_status()
+            if "Failed" in mcp_status:
+                with st.sidebar:
+                    st.caption(f"MCP Server: {mcp_status}")
+                    if _mcp_server_manager._connection_error:
+                        st.error(_mcp_server_manager._connection_error)
+                    st.caption("To start the MCP server, run in a terminal:")
+                    port = os.getenv("MCP_PORT", "8000")
+                    st.code(f"cd chroma_data/chroma_example\npython server.py", language="bash")
+                    st.caption("Or set MCP_USE_SERVER=false to use direct vector store access.")
+            else:
+                with st.sidebar:
+                    st.caption(f"MCP Server: {mcp_status}")
+        else:
+            with st.sidebar:
+                st.caption("MCP Server: 🟡 Connecting...")
     
     # Create tabs
     tab1, tab2 = st.tabs(["💬 Chat & Learn", "📚 Corpus Management"])
@@ -654,13 +887,30 @@ Please answer based only on the provided context."""
                             enhanced_prompt = f"{prompt} (Note: User has uploaded documents about: {', '.join(doc_names)})"
                     
                     with st.spinner("Thinking..."):
-                        response = system.answer_question(
-                            learner_id=learner_id,
-                            question=enhanced_prompt,
-                            extra_context=combined_context,
-                        )
+                        try:
+                            response = system.answer_question(
+                                learner_id=learner_id,
+                                question=enhanced_prompt,
+                                extra_context=combined_context,
+                            )
+                        except Exception as e:
+                            error_msg = str(e)
+                            st.error(f"❌ Error generating answer: {error_msg}")
+                            logger.exception("Error in answer_question")
+                            # Create a minimal response so the UI doesn't break
+                            from ai_tutor.agents.tutor import TutorResponse
+                            response = TutorResponse(
+                                answer=f"I encountered an error while generating an answer: {error_msg}. Please try again or check the logs.",
+                                hits=[],
+                                citations=[],
+                                style="concise",
+                                source=None,
+                            )
                 
-                placeholder.markdown(format_answer(response.answer))
+                if response.answer:
+                    placeholder.markdown(format_answer(response.answer))
+                else:
+                    placeholder.error("No answer was generated. Please try again.")
                 if response.citations:
                     citations_container.markdown("**Citations:**\n" + "\n".join(f"- {c}" for c in response.citations))
                 else:

@@ -183,16 +183,33 @@ class Retriever:
             if "domain_filter" in sig.parameters:
                 search_kwargs["domain_filter"] = query.domain
         
+        logger.debug(f"[Retriever] Searching with query: '{query.text[:100]}...'")
+        logger.debug(
+            f"[Retriever] Search kwargs: top_k={search_kwargs['top_k']}, "
+            f"source_filter={search_kwargs.get('source_filter')}, "
+            f"domain_filter={search_kwargs.get('domain_filter')}"
+        )
+        
         hits = self.vector_store.search(**search_kwargs)
         
         # Log retrieval statistics for monitoring
         if query.source_filter:
             logger.info(
-                "Retrieved %s hits (filtered to sources: %s).", 
+                "[Retriever] Retrieved %s hits (filtered to sources: %s).", 
                 len(hits), 
                 query.source_filter
             )
         else:
-            logger.info("Retrieved %s hits.", len(hits))
+            logger.info("[Retriever] Retrieved %s hits.", len(hits))
+        
+        # Log score distribution
+        if hits:
+            scores = [hit.score for hit in hits]
+            logger.info(
+                f"[Retriever] Score range: min={min(scores):.4f}, max={max(scores):.4f}, "
+                f"mean={sum(scores)/len(scores):.4f}"
+            )
+        else:
+            logger.warning(f"[Retriever] No hits found for query: '{query.text}'")
         
         return hits

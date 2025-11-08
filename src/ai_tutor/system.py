@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 from ai_tutor.agents.llm_client import LLMClient
 from ai_tutor.agents.tutor import TutorAgent, TutorResponse
@@ -77,7 +77,7 @@ class TutorSystem:
     
     """
 
-    def __init__(self, settings: Settings, api_key: Optional[str] = None):
+    def __init__(self, settings: Settings, api_key: Optional[str] = None, mcp_server: Optional[Any] = None):
         """
         Initialize the tutoring system with all required components.
         
@@ -106,6 +106,10 @@ class TutorSystem:
 
         # Initialize core embedding and storage infrastructure
         self.embedder = EmbeddingClient(settings.embeddings, api_key=api_key)
+        # NOTE: Embedding model is loaded lazily on first use to avoid blocking startup
+        # This prevents CPU exhaustion during initialization that could starve the event loop
+        # The model will be loaded in a background thread when first needed
+        logger.info("Embedding model will be loaded on first use (lazy loading)")
         self.vector_store = create_vector_store(settings.paths.vector_store_dir)
         self.chunk_store = ChunkJsonlStore(settings.paths.chunks_index)
         
@@ -142,10 +146,16 @@ class TutorSystem:
             ingest_directory=self.ingest_directory,
             session_db_path=settings.paths.processed_data_dir / "sessions.sqlite",
             quiz_service=self.quiz_service,
+            mcp_server=mcp_server,  # Pass optional MCP server
         )
 
     @classmethod
-    def from_config(cls, config_path: str | Path | None = None, api_key: Optional[str] = None) -> "TutorSystem":
+    def from_config(
+        cls, 
+        config_path: str | Path | None = None, 
+        api_key: Optional[str] = None,
+        mcp_server: Optional[Any] = None,
+    ) -> "TutorSystem":
         """
         Factory method to construct a TutorSystem from configuration file.
         
@@ -160,6 +170,9 @@ class TutorSystem:
             in the project root. Can be absolute or relative to current directory.
         api_key : Optional[str], default=None
             OpenAI API key. If None, reads from OPENAI_API_KEY environment variable.
+        mcp_server : Optional[Any], default=None
+            Optional MCP server for Chroma. If None and MCP_USE_SERVER env var is set,
+            will attempt to connect to MCP server automatically.
         
         Returns
         -------
@@ -183,7 +196,42 @@ class TutorSystem:
         settings.paths.logs_dir.mkdir(parents=True, exist_ok=True)
         settings.paths.profiles_dir.mkdir(parents=True, exist_ok=True)
         
-        return cls(settings, api_key=api_key)
+        # Auto-connect to MCP server if enabled via environment variable
+        if mcp_server is None:
+            mcp_server = cls._get_mcp_server_from_env()
+        
+        return cls(settings, api_key=api_key, mcp_server=mcp_server)
+    
+    @staticmethod
+    def _get_mcp_server_from_env() -> Optional[Any]:
+        """
+        Attempt to connect to MCP server if configured via environment variables.
+        
+        Note: MCP servers are async context managers and work best in async contexts.
+        For synchronous apps (like Streamlit), the system will use direct vector store
+        access instead. To use MCP servers, pass them explicitly in async contexts.
+        
+        Environment Variables:
+            MCP_USE_SERVER: Set to "true" to enable (currently not supported in sync contexts)
+            MCP_PORT: Port number (default: 8000)
+            MCP_SERVER_TOKEN: Optional Bearer token for authentication
+            MCP_TIMEOUT: HTTP timeout in seconds (default: 10)
+        """
+        import os
+        
+        # Check if MCP server should be used
+        use_mcp = os.getenv("MCP_USE_SERVER", "false").lower() in ("true", "1", "yes")
+        if not use_mcp:
+            return None
+        
+        # MCP servers require async context management, which doesn't work well
+        # in synchronous contexts like Streamlit. Return None and log a message.
+        logger.info(
+            "MCP_USE_SERVER is enabled, but MCP servers require async context management. "
+            "The app will use direct vector store access. "
+            "For MCP support, use TutorSystem in async contexts (see examples/use_mcp_server.py)"
+        )
+        return None
 
     def ingest_directory(self, directory: Path):
         """
@@ -264,6 +312,57 @@ class TutorSystem:
 
         # Delegate to multi-agent orchestrator for answer generation
         response = self.tutor_agent.answer(
+            learner_id=learner_id,
+            question=question,
+            mode=mode,
+            style_hint=style_hint,
+            profile=profile,
+            extra_context=extra_context,
+            on_delta=on_delta,
+        )
+        
+        # Only update profile for local (RAG) answers, not web or quiz results
+        if response.source != "local":
+            return response
+        
+        # Infer subject domain from retrieval hits metadata
+        domain = self.personalizer.infer_domain(response.hits)
+        
+        # Record this interaction and get personalization recommendations
+        personalization = self.personalizer.record_interaction(
+            profile=profile,
+            question=question,
+            answer=response.answer,
+            domain=domain,
+            citations=response.citations,
+        )
+        
+        # Save updated profile to disk for persistence
+        self.personalizer.save_profile(profile)
+        
+        # Attach personalization hints to response
+        response.next_topic = personalization.get("next_topic")
+        response.difficulty = personalization.get("difficulty")
+        
+        return response
+    
+    async def answer_question_async(
+        self,
+        learner_id: str,
+        question: str,
+        mode: str = "learning",
+        extra_context: Optional[str] = None,
+        on_delta: Optional[Callable[[str], None]] = None,
+    ) -> TutorResponse:
+        """Asynchronously answer a learner's question (for use in async contexts)."""
+        # Load learner profile (creates new one if doesn't exist)
+        profile = self.personalizer.load_profile(learner_id)
+        
+        # Select explanation style based on learner's domain mastery
+        style_hint = self.personalizer.select_style(profile, None)
+        
+        # Delegate to multi-agent orchestrator for answer generation
+        response = await self.tutor_agent.answer_async(
             learner_id=learner_id,
             question=question,
             mode=mode,

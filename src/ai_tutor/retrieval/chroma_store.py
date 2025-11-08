@@ -229,32 +229,45 @@ class ChromaVectorStore(VectorStore):
         # Domain-based search
         if domain_filter:
             # Search specific domain
+            logger.info(f"[ChromaVectorStore] Searching in domain collection: {domain_filter}")
             collection = self._get_collection(domain_filter)
             return self._search_single_collection(
                 collection, embedding, top_k, source_filter
             )
         
-        if search_all_domains:
+        # Default behavior: when using domain collections and no domain_filter,
+        # search all domains to find the best matches across all collections
+        if search_all_domains or (not domain_filter):
             # Search all domain collections and merge results
             all_hits: List[RetrievalHit] = []
             
-            # Query each collection
+            # Query each collection (skip general if it's empty, but include it for completeness)
             for domain in ["math", "physics", "cs", "chemistry", "biology", "general"]:
                 try:
                     collection = self._get_collection(domain)
+                    collection_count = collection.count()
+                    
+                    # Skip empty collections
+                    if collection_count == 0:
+                        logger.debug(f"Skipping empty collection: {domain}")
+                        continue
+                    
+                    # Get more results per domain to ensure good coverage
                     hits = self._search_single_collection(
                         collection, embedding, top_k * 2, source_filter
                     )
                     all_hits.extend(hits)
+                    logger.debug(f"Found {len(hits)} hits in {domain} collection ({collection_count} total docs)")
                 except Exception as e:
                     logger.debug(f"Error searching domain {domain}: {e}")
                     continue
             
             # Sort by score and return top_k
             all_hits.sort(key=lambda x: x.score, reverse=True)
+            logger.info(f"Searched all domains, found {len(all_hits)} total hits, returning top {min(top_k, len(all_hits))}")
             return all_hits[:top_k]
         else:
-            # Default: search general collection (or first available)
+            # Only search general collection if explicitly requested
             collection = self._get_collection("general")
             return self._search_single_collection(
                 collection, embedding, top_k, source_filter

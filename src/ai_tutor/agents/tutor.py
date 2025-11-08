@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from openai.types.responses import ResponseContentPartDoneEvent, ResponseTextDeltaEvent
 
@@ -175,6 +176,7 @@ class TutorAgent:
         ingest_directory: Callable[[Path], object],
         session_db_path: Path,
         quiz_service: QuizService,
+        mcp_server: Optional[Any] = None,  # Optional MCP server for Chroma
     ):
         """
         Initialize the multi-agent system with all required dependencies.
@@ -200,11 +202,17 @@ class TutorAgent:
         self.retriever = Retriever(retrieval_config, embedder=embedder, vector_store=vector_store)
         self.search_tool = search_tool
         self.ingest_fn = ingest_directory
+        self.mcp_server = mcp_server  # Optional MCP server for Chroma (persistent across queries)
+        
+        if mcp_server:
+            logger.info("[TutorAgent] MCP server provided - agents will use MCP tools with cached tool list")
         
         # Session and state management
         self.sessions: Dict[str, SQLiteSession] = {}  # Learner ID → Active session
+        self.session_turn_counts: Dict[str, int] = {}  # Track turns per session for pruning
         self.state = AgentState()  # Shared state for agent communication
         self.session_db_path = session_db_path
+        self.max_turns_per_session = 3  # Prune history: create new session after 3 turns
         
         # Quiz and assessment infrastructure
         self.quiz_service = quiz_service
@@ -237,15 +245,19 @@ class TutorAgent:
         Additionally, a generate_quiz tool is defined inline to enable the
         orchestrator to create assessments without agent handoff overhead.
         """
-        # Build specialist agents
+        # Build specialist agents (built once, reused across all queries for persistent context)
+        # MCP server connection is shared and tool list is cached to avoid redundant API calls
+        logger.debug("[TutorAgent] Building agents with persistent MCP server context")
         self.ingestion_agent = build_ingestion_agent(self.ingest_fn)
         self.web_agent = build_web_agent(self.search_tool, self.state)
         self.qa_agent = build_qa_agent(
             self.retriever, 
             self.state, 
             self.MIN_CONFIDENCE, 
-            handoffs=[self.web_agent]  # Allow QA → Web fallback
+            handoffs=[self.web_agent],  # Allow QA → Web fallback
+            mcp_server=self.mcp_server,  # Pass persistent MCP server (tools cached per session)
         )
+        logger.info("[TutorAgent] Agents built - MCP tools will be cached and reused across queries")
 
         @function_tool
         def generate_quiz(topic: str, count: int = 4, difficulty: str | None = None) -> str:
@@ -314,80 +326,29 @@ class TutorAgent:
             name="tutor_orchestrator",
             model="gpt-4o-mini",
             instructions=(
-                "You are the orchestrator agent in a multi-agent tutoring system. Your job is to decide whether to answer a query yourself or delegate it to a specialist agent.\n\n"
-                "ROUTING RULES:\n\n"
+                "You are the Orchestrator Agent in a multi-agent tutoring system. Your PRIMARY job is routing queries to specialist agents and tools. "
+                "⚠️ ALWAYS check conversation history before routing. If a complete answer exists, return it; do not re-route. "
+                "Each question is routed ONCE per agent.\n\n"
+                
+                "ROUTING RULES:\n"
+                "- STEM questions (math, physics, engineering, CS, technical concepts) → qa_agent. Do NOT answer yourself.\n"
+                "- Current events, news, history, literature, arts → web_agent. Route only once.\n"
+                "- File uploads / ingestion → ingestion_agent.\n"
+                "- Quiz requests → ALWAYS call generate_quiz(topic, count) tool. Do NOT generate questions in text.\n\n"
 
-                "STEM Questions → qa_agent\n"
-                "If the question is about:\n"
-                "- Math (equations, formulas, calculations, proofs)\n"
-                "- Physics (laws, forces, energy, motion, thermodynamics, etc.)\n"
-                "- Chemistry (reactions, molecules, elements, bonds)\n"
-                "- Biology (cells, genetics, organisms, photosynthesis)\n"
-                "- Engineering (circuits, structures, systems)\n"
-                "- Computer Science (algorithms, data structures, programming)\n"
-                "- Any technical or scientific concept, definition, or explanation\n"
-                "→ IMMEDIATELY hand off to qa_agent\n\n"
+                "TOOL USAGE:\n"
+                "- generate_quiz has automatic access to uploaded documents.\n"
+                "- Extract topic and count from user query; default count=4 if unspecified.\n"
+                "- Never refuse quiz requests.\n\n"
 
-                "Current Events / Non-STEM → web_agent\n"
-                "- Recent news, current events, politics\n"
-                "- History, literature, arts\n"
-                "- Anything requiring up-to-date information\n"
-                "→ Hand off to web_agent\n\n"
+                "CONVERSATION HANDLING:\n"
+                "- Prevent loops: never route same agent twice for the same question.\n"
+                "- Cache domain classification per thread to avoid redundant LLM calls.\n"
+                "- Use previous agent responses to guide routing.\n"
+                "- Stop routing when an answer exists.\n\n"
 
-                "File Upload → ingestion_agent\n"
-                "- User wants to upload, ingest, or add documents\n"
-                "→ Hand off to ingestion_agent\n\n"
-
-                "Quiz Request → ⚠️ MANDATORY: USE generate_quiz TOOL - NEVER ANSWER WITH TEXT! ⚠️\n"
-                "- User asks for: quiz, test, practice questions, assessment, MCQ, 'create X quizzes'\n"
-                "- Natural language: 'gimme questions', 'test me', 'I need practice', 'create quizzes'\n"
-                "- ❌ FORBIDDEN: Generating quiz questions in your response text\n"
-                "- ❌ FORBIDDEN: Listing questions like 'Here are 20 quiz questions:'\n"
-                "- ✅ REQUIRED: Call generate_quiz(topic, count) tool\n"
-                "- ✅ REQUIRED: Let the tool handle quiz generation\n"
-                "- COUNT EXTRACTION (CRITICAL!):\n"
-                "  * 'create 20 quizzes' → count=20 (use EXACT number user says!)\n"
-                "  * 'create 10 quizzes' → count=10\n"
-                "  * 'create 5 questions' → count=5\n"
-                "  * 'quiz me' (no number) → count=4 (default)\n"
-                "  * Note: 'quizzes' = 'quiz questions', so '20 quizzes' means count=20\n"
-                "  * DO NOT use count=10 as default when user specifies a number!\n"
-                "- Extract topic: 'quiz on neural networks' → topic='neural networks'\n"
-                "- When user says 'from document/files/PDFs/uploaded':\n"
-                "  * Use BROAD, SEARCHABLE topic: 'computer science', 'machine learning', 'engineering', 'mathematics', 'physics', 'biology'\n"
-                "  * Check learner profile for recently studied topics\n"
-                "  * CRITICAL: NEVER use 'uploaded_documents', 'uploaded', 'document', or 'file' as topic!\n"
-                "  * These are NOT searchable topics - use actual subject names!\n"
-                "  * System automatically includes document content via extra_context\n"
-                "→ ⚠️ MANDATORY: Call generate_quiz(topic, count) tool - DO NOT generate questions yourself! ⚠️\n"
-                "Examples:\n"
-                "  'Create 20 comprehensive quizzes from the uploaded document'\n"
-                "    → ❌ WRONG: 'Here are 20 quiz questions: 1. What is...'\n"
-                "    → ✅ CORRECT: generate_quiz(topic='computer science', count=20)\n"
-                "  'quiz me on machine learning'\n"
-                "    → ❌ WRONG: 'Here is a quiz: Question 1:...'\n"
-                "    → ✅ CORRECT: generate_quiz(topic='machine learning', count=4)\n\n"
-
-                "ONLY Answer Directly:\n"
-                "- 'What can you help with?' or system capability questions\n"
-                "- 'What's my progress?' or profile questions\n"
-                "- 'Hello' or greetings\n\n"
-
-                "CRITICAL RULES:\n"
-                "- For QUIZ requests:\n"
-                "  ❌ DO NOT generate quiz questions in your response text\n"
-                "  ❌ DO NOT write 'Here are 20 quiz questions:' followed by questions\n"
-                "  ❌ DO NOT create a text-based quiz in your answer\n"
-                "  ✅ ALWAYS CALL the generate_quiz(topic, count) tool instead\n"
-                "  ✅ Let the tool create the interactive quiz interface\n"
-                "- The generate_quiz tool HAS ACCESS to uploaded documents automatically\n"
-                "- NEVER refuse quiz requests - just call the tool\n"
-                "- The system will display the quiz in an interactive interface\n"
-                "- Your job is ONLY to call the tool, not generate the questions yourself\n"
-                "- For STEM questions: Hand off to qa_agent\n"
-                "- DO NOT try to answer STEM questions yourself\n"
-                "- Your job is ROUTING and TOOL CALLING, not answering\n"
-                "- If unsure, hand off to qa_agent"
+                "PRIORITY:\n"
+                "- Routing and tool calls ONLY, no direct answering (except greetings, system questions, or general knwoledge)."
             ),
             tools=[generate_quiz],
             handoffs=handoffs,
@@ -419,16 +380,49 @@ class TutorAgent:
         on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
         """Synchronously orchestrate the multi-agent run and produce a TutorResponse."""
-        return asyncio.run(
-            self._answer_async(
-                learner_id=learner_id,
-                question=question,
-                mode=mode,
-                style_hint=style_hint,
-                profile=profile,
-                extra_context=extra_context,
-                on_delta=on_delta,
+        try:
+            # Check if we're already in an event loop
+            asyncio.get_running_loop()
+            # If we're in a loop, raise an error suggesting to use answer_async instead
+            raise RuntimeError(
+                "Cannot call answer() from within an async context. "
+                "Use answer_async() instead or call from a sync context."
             )
+        except RuntimeError as e:
+            if "Cannot call answer()" in str(e):
+                raise
+            # No running loop, safe to use asyncio.run()
+            return asyncio.run(
+                self._answer_async(
+                    learner_id=learner_id,
+                    question=question,
+                    mode=mode,
+                    style_hint=style_hint,
+                    profile=profile,
+                    extra_context=extra_context,
+                    on_delta=on_delta,
+                )
+            )
+    
+    async def answer_async(
+        self,
+        learner_id: str,
+        question: str,
+        mode: str,
+        style_hint: str,
+        profile: Optional[LearnerProfile] = None,
+        extra_context: Optional[str] = None,
+        on_delta: Optional[Callable[[str], None]] = None,
+    ) -> TutorResponse:
+        """Asynchronously orchestrate the multi-agent run and produce a TutorResponse."""
+        return await self._answer_async(
+            learner_id=learner_id,
+            question=question,
+            mode=mode,
+            style_hint=style_hint,
+            profile=profile,
+            extra_context=extra_context,
+            on_delta=on_delta,
         )
 
     async def _answer_async(
@@ -441,8 +435,24 @@ class TutorAgent:
         extra_context: Optional[str],
         on_delta: Optional[Callable[[str], None]],
     ) -> TutorResponse:
+        import time
+        answer_start = time.time()
+        logger.info(f"[TutorAgent] Starting answer generation for question: {question[:100]}...")
+        
+        # Check if we need to prune history before getting session
+        # This ensures we create a new session when we're about to exceed the turn limit
+        current_turn = self.session_turn_counts.get(learner_id, 0)
+        if current_turn > 0 and current_turn % self.max_turns_per_session == 0:
+            # We've reached the turn limit, create a new session (prune history)
+            logger.info(f"[TutorAgent] Pruning history: creating new session after {current_turn} turns (keeping only last {self.max_turns_per_session} turns)")
+            if learner_id in self.sessions:
+                del self.sessions[learner_id]
+        
         session = self._get_session(learner_id)
         self.state.reset()
+        
+        # Increment turn count for history pruning
+        self.session_turn_counts[learner_id] = current_turn + 1
 
         # For orchestrator: minimal prompt with just the question
         # The specialist agents will get the full context with style hints
@@ -530,6 +540,9 @@ class TutorAgent:
         citations = self.state.last_citations if not quiz_payload else []
         source = "quiz" if quiz_payload else self.state.last_source
 
+        total_answer_duration = time.time() - answer_start
+        logger.info(f"[TutorAgent] Answer generation complete in {total_answer_duration:.2f}s (answer length: {len(answer_text)} chars)")
+
         return TutorResponse(
             answer=answer_text,
             hits=hits,
@@ -541,18 +554,21 @@ class TutorAgent:
 
     def _get_session(self, learner_id: str) -> SQLiteSession:
         """
-        Get or create a conversation session with automatic daily rotation.
+        Get or create a conversation session with automatic daily rotation and history pruning.
         
-        This method implements token overflow prevention through date-based session
-        keys. Each day, a new session is created, limiting the conversation context
-        to same-day interactions. This prevents prompt length from growing unbounded
-        while maintaining coherent within-session context.
+        This method implements token overflow prevention through:
+        1. Date-based session keys (daily rotation)
+        2. Turn-based pruning (new session after max_turns_per_session turns)
+        
+        This prevents prompt length from growing unbounded while maintaining recent context
+        for anti-loop detection and conversation coherence.
         
         Session Key Format
         ------------------
-        ai_tutor_{learner_id}_{YYYYMMDD}
+        ai_tutor_{learner_id}_{YYYYMMDD}_{turn_batch}
         
-        Example: "ai_tutor_student123_20251023"
+        Example: "ai_tutor_student123_20251023_0" (first 3 turns)
+                 "ai_tutor_student123_20251023_1" (next 3 turns)
         
         Parameters
         ----------
@@ -562,26 +578,36 @@ class TutorAgent:
         Returns
         -------
         SQLiteSession
-            Active session object for this learner and date. Contains all conversation
-            history from today's interactions.
+            Active session object for this learner. History is pruned to last 3 turns
+            to prevent prompt poisoning and reduce synthesis time.
         
         Notes
         -----
         - Sessions are cached in memory for performance
         - Automatic rotation occurs at midnight (based on server timezone)
+        - History pruning: new session created after max_turns_per_session turns
         - Previous sessions remain in SQLite but are not loaded into context
         - Manual clearing available via clear_session() or clear_sessions.py script
         """
         # Use date-based session IDs to auto-rotate daily (prevents token accumulation)
-        # This limits context to same-day conversations
         today = datetime.now().strftime("%Y%m%d")
-        session_key = f"ai_tutor_{learner_id}_{today}"
+        
+        # Check current turn count for this learner
+        turn_count = self.session_turn_counts.get(learner_id, 0)
+        turn_batch = turn_count // self.max_turns_per_session
+        
+        # Create session key with turn batch to enable pruning
+        session_key = f"ai_tutor_{learner_id}_{today}_{turn_batch}"
         
         # Check if we have a cached session for this learner
         session = self.sessions.get(learner_id)
         
-        # Create new session if none exists or if session key changed (new day)
-        if session is None or getattr(session, '_session_key', None) != session_key:
+        # Create new session if:
+        # 1. None exists
+        # 2. Session key changed (new day or new turn batch)
+        if (session is None or 
+            getattr(session, '_session_key', None) != session_key):
+            
             session = SQLiteSession(
                 session_key,
                 db_path=str(self.session_db_path),
@@ -589,7 +615,7 @@ class TutorAgent:
             # Store session key for comparison on next access
             session._session_key = session_key  # type: ignore
             self.sessions[learner_id] = session
-            logger.debug(f"Created new session for {learner_id}: {session_key}")
+            logger.debug(f"Created new session for {learner_id}: {session_key} (turn batch {turn_batch})")
         
         return session
     
@@ -614,6 +640,8 @@ class TutorAgent:
         """
         if learner_id in self.sessions:
             del self.sessions[learner_id]
+        if learner_id in self.session_turn_counts:
+            del self.session_turn_counts[learner_id]
         # Note: This doesn't delete from SQLite, just removes from memory
         # The session will start fresh on next question
 
@@ -726,36 +754,140 @@ class TutorAgent:
         session: SQLiteSession,
         on_delta: Optional[Callable[[str], None]],
     ) -> str:
+        import time
+        start_time = time.time()
         final_tokens: List[str] = []
+        max_iterations = 3  # Prevent infinite routing loops
+        iteration = 0
 
         agent_to_run = self.orchestrator_agent or self.qa_agent
-        stream = Runner.run_streamed(agent_to_run, input=prompt, session=session)
-        async for event in stream.stream_events():
-            if not isinstance(event, RawResponsesStreamEvent):
-                continue
-            data = event.data
-            if isinstance(data, ResponseTextDeltaEvent):
-                final_tokens.append(data.delta)
-                if on_delta:
-                    on_delta(data.delta)
-            elif isinstance(data, ResponseContentPartDoneEvent) and on_delta:
-                on_delta("\n")
-
-        if self.orchestrator_agent is None and not self.state.last_source and self.web_agent is not None:
-            if on_delta:
-                on_delta("[info] No local evidence, searching the web...\n")
-            self.state.reset()
-            final_tokens.clear()
-            stream = Runner.run_streamed(self.web_agent, input=prompt, session=session)
-            async for event in stream.stream_events():
-                if not isinstance(event, RawResponsesStreamEvent):
+        
+        try:
+            while iteration < max_iterations:
+                iteration += 1
+                iteration_start = time.time()
+                logger.info(f"[TutorAgent] Running agent iteration {iteration}/{max_iterations}")
+                
+                try:
+                    # Use non-streaming for more reliable output capture
+                    # Streaming can miss final output in some cases
+                    # Add timeout to prevent hanging on MCP server calls
+                    logger.debug(f"[TutorAgent] Running agent (non-streaming) for iteration {iteration}")
+                    import asyncio
+                    try:
+                        result = await asyncio.wait_for(
+                            Runner.run(agent_to_run, input=prompt, session=session),
+                            timeout=60.0  # 60 second timeout to prevent infinite hangs
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(f"[TutorAgent] Agent run timed out after 60 seconds in iteration {iteration}")
+                        raise RuntimeError("Agent execution timed out - MCP server may be unresponsive")
+                    
+                    iteration_duration = time.time() - iteration_start
+                    logger.info(f"[TutorAgent] Iteration {iteration} completed in {iteration_duration:.2f}s")
+                    
+                    if result and result.final_output:
+                        response_text = result.final_output.strip()
+                        iteration_tokens = [response_text]
+                        final_tokens = [response_text]
+                        
+                        # Stream the output via callback if provided
+                        if on_delta:
+                            for char in response_text:
+                                on_delta(char)
+                        
+                        logger.info(f"[TutorAgent] Iteration {iteration} response length: {len(response_text)} chars (took {iteration_duration:.2f}s)")
+                        logger.debug(f"[TutorAgent] Response preview: {response_text[:200]}...")
+                    else:
+                        logger.warning(f"[TutorAgent] Iteration {iteration} returned no final_output (took {iteration_duration:.2f}s)")
+                        response_text = ""
+                        iteration_tokens = []
+                    
+                    # If we got a substantial answer (more than just routing instructions), return it
+                    if len(response_text) > 50 and not any(keyword in response_text.lower() for keyword in [
+                        "transfer_to_qa_agent", "transfer_to_web_agent", "handing off", "routing to"
+                    ]):
+                        total_duration = time.time() - start_time
+                        logger.info(f"[TutorAgent] Got substantial answer after {iteration} iteration(s) in {total_duration:.2f}s total, returning")
+                        break
+                    
+                    # If we got some response but it's short, check if it's a complete answer
+                    if len(response_text) > 20 and len(response_text) <= 50:
+                        # Might be a short but valid answer
+                        logger.info(f"[TutorAgent] Got short but potentially valid answer: {response_text[:100]}...")
+                        # Don't break, continue to see if we get more
+                    
+                    # If we've exhausted iterations, return what we have
+                    if iteration >= max_iterations:
+                        logger.warning(f"[TutorAgent] Reached max iterations ({max_iterations}), returning current response")
+                        break
+                        
+                except Exception as e:
+                    logger.error(f"[TutorAgent] Error in iteration {iteration}: {e}", exc_info=True)
+                    if iteration >= max_iterations:
+                        break
+                    # Continue to next iteration
                     continue
-                data = event.data
-                if isinstance(data, ResponseTextDeltaEvent):
-                    final_tokens.append(data.delta)
-                    if on_delta:
-                        on_delta(data.delta)
-                elif isinstance(data, ResponseContentPartDoneEvent) and on_delta:
-                    on_delta("\n")
 
-        return "".join(final_tokens).strip()
+            # Fallback: if orchestrator didn't work and no local source, try web agent
+            if self.orchestrator_agent is None and not self.state.last_source and self.web_agent is not None:
+                logger.info("[TutorAgent] No local source found, trying web agent")
+                if on_delta:
+                    on_delta("[info] No local evidence, searching the web...\n")
+                self.state.reset()
+                final_tokens.clear()
+                try:
+                    web_result = await Runner.run(self.web_agent, input=prompt, session=session)
+                    if web_result and web_result.final_output:
+                        web_text = web_result.final_output.strip()
+                        final_tokens.append(web_text)
+                        if on_delta:
+                            for char in web_text:
+                                on_delta(char)
+                        logger.info(f"[TutorAgent] Web agent returned {len(web_text)} chars")
+                    else:
+                        logger.warning("[TutorAgent] Web agent returned no output")
+                except Exception as e:
+                    logger.error(f"[TutorAgent] Error in web agent fallback: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"[TutorAgent] Critical error in _run_specialist: {e}", exc_info=True)
+            # Return error message instead of empty string
+            final_tokens.append(f"I encountered an error while processing your question: {str(e)}. Please try again.")
+
+        result = "".join(final_tokens).strip()
+        total_duration = time.time() - start_time
+        
+        # If result is empty or just routing instructions, try non-streaming fallback
+        if not result or len(result) < 20:
+            logger.warning(f"[TutorAgent] Empty or very short response ({len(result)} chars) after {total_duration:.2f}s, trying non-streaming fallback")
+            try:
+                # Try non-streaming run as fallback with timeout
+                import asyncio
+                fallback_start = time.time()
+                fallback_result = await asyncio.wait_for(
+                    Runner.run(agent_to_run, input=prompt, session=session),
+                    timeout=30.0  # Shorter timeout for fallback
+                )
+                fallback_duration = time.time() - fallback_start
+                if fallback_result and fallback_result.final_output:
+                    result = fallback_result.final_output.strip()
+                    logger.info(f"[TutorAgent] Got answer from non-streaming fallback: {len(result)} chars (took {fallback_duration:.2f}s)")
+            except asyncio.TimeoutError:
+                logger.error("[TutorAgent] Non-streaming fallback timed out after 30 seconds")
+            except Exception as e:
+                logger.error(f"[TutorAgent] Non-streaming fallback also failed: {e}")
+        
+        # If still empty, provide a helpful fallback message
+        if not result or len(result) < 20:
+            logger.warning(f"[TutorAgent] Still empty after fallback ({len(result)} chars) after {total_duration:.2f}s total, providing default message")
+            if self.state.last_source:
+                result = f"I found some information but couldn't generate a complete answer. Please try rephrasing your question."
+            elif self.state.last_hits:
+                result = "I found relevant materials but had trouble generating a complete answer. Please try rephrasing your question."
+            else:
+                result = "I apologize, but I'm having trouble generating a complete answer. Please try rephrasing your question or check if the MCP server is running properly."
+        
+        final_duration = time.time() - start_time
+        logger.info(f"[TutorAgent] Final answer length: {len(result)} chars, total time: {final_duration:.2f}s")
+        return result

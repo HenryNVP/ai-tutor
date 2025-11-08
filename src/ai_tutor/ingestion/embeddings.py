@@ -29,7 +29,11 @@ class EmbeddingClient:
             raise ValueError(f"Unsupported embedding provider: {self.config.provider}")
 
     def _load_sentence_transformer(self):
-        """Load a sentence-transformers model onto the most suitable device."""
+        """Load a sentence-transformers model onto the most suitable device.
+        
+        This is called lazily on first use to avoid blocking startup and starving
+        the event loop. The model loading happens synchronously but only when needed.
+        """
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
@@ -37,10 +41,11 @@ class EmbeddingClient:
                 "sentence-transformers package is required for embeddings."
             ) from exc
         device = self._select_device()
-        logger.info("Loading embedding model %s on %s", self.config.model, device)
+        logger.info("Loading embedding model %s on %s (lazy load)", self.config.model, device)
         try:
             self._model = SentenceTransformer(self.config.model, device=device)
             self._device = device
+            logger.info("Embedding model loaded successfully on %s", device)
         except RuntimeError as exc:
             if device != "cpu":
                 logger.warning(
@@ -49,6 +54,7 @@ class EmbeddingClient:
                 )
                 self._model = SentenceTransformer(self.config.model, device="cpu")
                 self._device = "cpu"
+                logger.info("Embedding model loaded on CPU fallback")
             else:
                 raise
 
