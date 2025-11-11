@@ -8,10 +8,12 @@ An intelligent tutoring system that ingests STEM course materials, answers quest
 - **🤖 Agent-First Architecture** – Intelligent orchestrator routes requests to specialized tools
 - **📝 Natural Language Quizzes** – "Create 20 questions from uploaded documents" (3-40 questions)
 - **💬 Interactive Quiz Interface** – Take quizzes in chat with immediate feedback
+- **🗂️ Generated Files Manager** – Rename, delete, preview & download charts/quizzes/code
 - **📊 Data Visualization** – Upload CSV, request plots: "plot revenue by month"
 - **🔍 Source-Filtered Retrieval** – Search specific documents only (320x faster)
 - **🎯 Adaptive Learning** – Track progress, adjust difficulty automatically
 - **🌐 Web Search** – Falls back to current information when needed
+- **⚡ FastAPI Backend** – REST API for questions, quizzes, ingestion, and session resets
 
 ## 🚀 Quick Start
 
@@ -25,15 +27,28 @@ pip install -r requirements.txt
 export OPENAI_API_KEY=your_key_here
 ```
 
-### Launch the App
+### Launch the Streamlit App
 
 ```bash
 streamlit run apps/ui.py
 ```
 
 The app opens at `http://localhost:8501` with two tabs:
-- **💬 Chat & Learn** – Q&A, quizzes, visualizations
+- **💬 Chat & Learn** – Q&A, quizzes, visualizations, generated files manager
 - **📚 Corpus Management** – Browse and manage documents
+
+### Launch the FastAPI Backend
+
+```bash
+uvicorn apps.api:app --reload --port 8080
+```
+
+Endpoints (see [`docs/backend_api.md`](docs/backend_api.md) for details):
+- `POST /answer` — answer questions with citations
+- `POST /quiz` — create quizzes
+- `POST /ingest` — upload & ingest documents
+- `POST /sessions/{learner_id}/reset` — clear history
+- `GET /health` — health check
 
 ## 💬 How to Use
 
@@ -51,7 +66,7 @@ AI: [Provides answer with citations from local documents]
 2. System auto-ingests when you ask first question
 3. Say: "create 20 questions from the uploaded documents"
 4. Take the quiz interactively!
-5. Click "Edit and Download Quiz" for markdown export
+5. Click "Edit and Download Quiz" for markdown export (changes sync to Generated Files Manager)
 ```
 
 ### 3. Data Visualization
@@ -61,7 +76,7 @@ AI: [Provides answer with citations from local documents]
 2. System shows preview (columns, shape, first 5 rows)
 3. Say: "plot revenue by month"
 4. System generates matplotlib code and displays chart
-5. Click "View generated code" to see Python code
+5. Click "View generated code" to see Python code (also saved in Generated Files Manager)
 ```
 
 ### Example Requests
@@ -135,6 +150,11 @@ User Message → Orchestrator Agent → Specialized Tools/Agents
 - Code display in UI
 
 **6. Adaptive Learning**
+
+**7. Tutor Service Layer**
+- Shared backend API used by Streamlit and FastAPI
+- Manages retrieval, ingestion, quiz creation, and error handling
+- Ensures UI stays presentation-only
 - Learner profiling by domain
 - Performance tracking
 - Difficulty adjustment
@@ -307,6 +327,8 @@ pytest tests/test_quiz_generation.py
 - **[Demo Guide](docs/demo.md)** – Use cases and workflows
 - **[Technical Report](docs/presentation_report.md)** – System architecture
 - **[Architecture Diagrams](docs/architecture.puml)** – PlantUML diagrams
+- **[Backend API](docs/backend_api.md)** – FastAPI endpoints & payloads
+- **[Generated Files Manager](docs/generated_files_manager.md)** – UI behaviors and session state
 
 ## 🔧 Advanced Usage
 

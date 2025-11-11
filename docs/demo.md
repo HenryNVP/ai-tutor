@@ -5,10 +5,13 @@
 ```bash
 # Start the application
 streamlit run apps/ui.py
+
+# Optional: start REST API
+uvicorn apps.api:app --reload --port 8080
 ```
 
 The app opens with two tabs:
-- **💬 Chat & Learn**: Interactive Q&A, quizzes, and visualizations
+- **💬 Chat & Learn**: Interactive Q&A, quizzes, visualizations, and generated file manager
 - **📚 Corpus Management**: Manage your knowledge base
 
 ---
@@ -90,14 +93,14 @@ Teacher wants to create a quiz from uploaded course materials.
 
 4. **Download Quiz** (Markdown format)
    - Click "Edit and Download Quiz"
-   - Edit questions if needed
-   - Download as `.md` file
+   - Edit questions if needed (changes sync to Generated Files Manager automatically)
+   - Download as `.md` file from either the editor or the Generated Files panel
 
 ### Features Demonstrated
 - ✅ Dynamic quiz generation (3-40 questions)
 - ✅ Topic extraction from documents
 - ✅ Interactive quiz interface
-- ✅ Markdown export for sharing
+- ✅ Markdown export for sharing (tracked in Generated Files Manager)
 
 ---
 
@@ -137,13 +140,26 @@ Student wants to visualize sales data for a business analytics assignment.
    - Expand "📝 View generated code"
    - See Python code (matplotlib/seaborn)
    - Copy for reuse in own projects
+   - Both PNG and Python source appear in the Generated Files Manager with per-file downloads
 
 ### Features Demonstrated
 - ✅ CSV upload & preview
 - ✅ Natural language plotting
 - ✅ Multiple chart types (line, bar, scatter, histogram, etc.)
 - ✅ Code generation & display
-- ✅ Plot persistence in chat history
+- ✅ Plot persistence in chat history and Generated Files Manager
+
+---
+
+## Generated Files Manager Overview
+
+- Located in the sidebar under **🗂️ Generated Files**
+- Tracks artifacts produced during the session:
+  - Visualizations (PNG + Python code)
+  - Quizzes (Markdown)
+  - Future generated assets added via `_add_generated_file`
+- Supports rename, preview, delete, per-file download, and “Download All (ZIP)”
+- Editing quiz Markdown in the chat updates the stored file automatically
 
 ---
 

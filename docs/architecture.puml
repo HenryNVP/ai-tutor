@@ -1,4 +1,4 @@
-@startuml
+@startuml AI_Tutor_Architecture
 skinparam componentStyle rectangle
 skinparam wrapWidth 200
 skinparam maxMessageSize 200
@@ -8,9 +8,12 @@ actor User
 
 package "Entry Points" {
   component "Streamlit UI\n(apps/ui.py)" as UI
+  component "FastAPI Backend\n(apps/api.py)" as API
   component "CLI (`ai-tutor`)" as CLI
   component "Python API" as PythonAPI
 }
+
+component "TutorService\n(shared backend)" as TutorService
 
 node "TutorSystem" as TutorSystem {
   component "Settings Loader\n& Logging" as Settings
@@ -22,7 +25,6 @@ node "TutorSystem" as TutorSystem {
   component "Ingestion Agent\n(ingestion_agent)" as IngestionAgent
   component "Retriever" as Retriever
   component "EmbeddingClient" as EmbeddingClient
-  component "SearchTool" as SearchTool
   component "VectorStore\n(with source filtering)" as VectorStore
   component "ChunkJsonlStore" as ChunkStore
   component "QuizService" as QuizService
@@ -42,15 +44,19 @@ cloud "OpenAI API\n(gpt-4o-mini)" as OpenAI
 cloud "Embedding Provider\n(sentence-transformers)" as EmbeddingProvider
 
 User --> UI : Chat interface
+User --> API : REST requests
 User --> CLI
 User --> PythonAPI
 
-UI --> Orchestrator : Natural language\n"create 20 quizzes"\n"plot revenue by month"
+UI --> TutorService : Natural language\n"create 20 quizzes"\n"plot revenue by month"
+API --> TutorService : JSON payloads\n/answer, /quiz, /ingest
+CLI --> TutorService : `ingest`, `ask`
+PythonAPI --> TutorService : programmatic calls
+
+TutorService --> TutorSystem : orchestrated operations
+
 UI --> Ingestion : Upload PDFs
 UI --> VizAgent : Upload CSV
-CLI --> Ingestion : `ingest` command
-CLI --> Orchestrator : `ask` command
-PythonAPI --> TutorSystem : all operations
 
 Ingestion --> Parsers : parse PDFs/Markdown
 Parsers --> RawDocs : read documents
@@ -72,7 +78,6 @@ Orchestrator --> SessionFS : maintain context
 QA --> Retriever : retrieve_local_context
 Retriever --> EmbeddingClient : embed query
 Retriever --> VectorStore : cosine search\n+ source filter
-Web --> SearchTool : web_search
 
 QuizService --> Retriever : find relevant content\n(with source filtering)
 QuizService --> OpenAI : generate questions\n(dynamic max_tokens)
@@ -98,6 +103,13 @@ note right of Orchestrator
   • Supports "plot revenue by month"
   
   Daily session rotation prevents token overflow
+end note
+
+note bottom of TutorService
+  Shared Backend Layer:
+  • Caches MCP connections & tool lists
+  • Reused by Streamlit, FastAPI, CLI, and Python API
+  • Handles retrieval, quizzes, ingestion, and errors
 end note
 
 note right of QuizService
@@ -139,18 +151,16 @@ note left of VectorStore
 end note
 
 note bottom of UI
-  Two Tabs:
-  1. Chat & Learn
-     - Document upload (PDF/TXT/MD)
-     - CSV upload for visualization
-     - Interactive Q&A
-     - Quiz generation & taking
-     - Data visualization
+  Chat & Learn Tab:
+  • Document upload (PDF/TXT/MD)
+  • CSV upload for visualization
+  • Interactive Q&A + quizzes
+  • Generated Files Manager\n    - Rename / delete / per-file download\n    - ZIP export for all artifacts\n    - Syncs quiz markdown edits
   
-  2. Corpus Management
-     - Bulk ingestion
-     - Corpus statistics
-     - Search testing
+  Corpus Management Tab:
+  • Bulk ingestion & indexing
+  • Corpus statistics
+  • Search testing
 end note
 
 @enduml
