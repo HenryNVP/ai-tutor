@@ -1152,6 +1152,16 @@ def render() -> None:
                     key="pre_submit_quiz_editor"
                 )
                 st.session_state.pre_submit_quiz_markdown = edited_quiz
+                current_file_prefix = f"quiz_{quiz.topic.replace(' ', '_')}_"
+                for file in st.session_state.generated_files:
+                    if file.get("deleted"):
+                        continue
+                    if (
+                        file.get("kind") == "text"
+                        and file.get("language") == "markdown"
+                        and file.get("name", "").startswith(current_file_prefix)
+                    ):
+                        file["content"] = edited_quiz
                 
                 col_download, col_close = st.columns([1, 1])
                 with col_download:
