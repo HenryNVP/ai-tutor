@@ -12,7 +12,10 @@ import shutil
 import base64
 import asyncio
 import threading
+import uuid
+import zipfile
 from pathlib import Path
+from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 from collections import Counter
 
@@ -309,6 +312,157 @@ def load_visualization_agent(_api_key: Optional[str]) -> VisualizationAgent:
     return VisualizationAgent(llm_client, upload_dir)
 
 
+def _ensure_generated_files_state() -> None:
+    """Initialize generated files tracking in session state."""
+    if "generated_files" not in st.session_state:
+        st.session_state.generated_files = []
+    if "generated_files_preview_id" not in st.session_state:
+        st.session_state.generated_files_preview_id = None
+
+
+def _add_generated_file(
+    name: str,
+    content: Any,
+    *,
+    kind: str,
+    mime: str,
+    binary: bool,
+    language: Optional[str] = None,
+    set_preview: bool = True,
+) -> None:
+    """Register a newly generated file in session state."""
+    _ensure_generated_files_state()
+    file_entry = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "kind": kind,
+        "mime": mime,
+        "content": content,
+        "binary": binary,
+        "language": language,
+        "selected": True,
+        "deleted": False,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    st.session_state.generated_files.append(file_entry)
+    if set_preview:
+        st.session_state.generated_files_preview_id = file_entry["id"]
+
+
+def _visible_generated_files() -> List[Dict[str, Any]]:
+    """Return non-deleted generated files."""
+    _ensure_generated_files_state()
+    return [file for file in st.session_state.generated_files if not file.get("deleted")]
+
+
+def _build_zip_archive(files: List[Dict[str, Any]]) -> bytes:
+    """Create a ZIP archive containing the provided files."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        for file in files:
+            data = file["content"]
+            if not file.get("binary", False):
+                if isinstance(data, str):
+                    data = data.encode("utf-8")
+                else:
+                    data = str(data).encode("utf-8")
+            zf.writestr(file["name"], data)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def render_generated_files_manager() -> None:
+    """Render the generated files manager UI components."""
+    _ensure_generated_files_state()
+    visible_files = _visible_generated_files()
+
+    if not visible_files:
+        st.caption("No generated files yet. Visualizations and other outputs will appear here.")
+        return
+
+    valid_ids = {file["id"] for file in visible_files}
+    preview_id = st.session_state.get("generated_files_preview_id")
+    if preview_id not in valid_ids:
+        st.session_state.generated_files_preview_id = next(iter(valid_ids), None)
+
+    for file in visible_files:
+        cols = st.columns([0.15, 0.5, 0.15, 0.2], gap="small")
+        file["selected"] = cols[0].checkbox(
+            "",
+            value=file.get("selected", True),
+            key=f"generated_file_select_{file['id']}",
+            help="Include this file when downloading selected items.",
+        )
+        new_name = cols[1].text_input(
+            "Filename",
+            value=file["name"],
+            key=f"generated_file_name_{file['id']}",
+            label_visibility="collapsed",
+        )
+        if new_name and new_name != file["name"]:
+            file["name"] = new_name
+
+        if cols[2].button("👁️", key=f"generated_file_preview_{file['id']}", help="Preview this file"):
+            st.session_state.generated_files_preview_id = file["id"]
+
+        if cols[3].button("🗑️", key=f"generated_file_delete_{file['id']}", help="Remove this file from the list"):
+            file["deleted"] = True
+            if st.session_state.generated_files_preview_id == file["id"]:
+                st.session_state.generated_files_preview_id = None
+            st.rerun()
+
+        size_bytes = len(file["content"]) if file.get("binary") else len(str(file["content"]).encode("utf-8"))
+        size_kb = size_bytes / 1024
+        st.caption(f"{file['kind'].title()} • {size_kb:.1f} KB")
+
+    st.markdown("---")
+
+    selected_files = [file for file in visible_files if file.get("selected")]
+    col_sel, col_all = st.columns(2)
+    with col_sel:
+        if selected_files:
+            selected_zip = _build_zip_archive(selected_files)
+            st.download_button(
+                "⬇️ Download Selected (ZIP)",
+                data=selected_zip,
+                file_name="generated_selected.zip",
+                mime="application/zip",
+                key="download_selected_generated_files",
+            )
+        else:
+            st.download_button(
+                "⬇️ Download Selected (ZIP)",
+                data=b"",
+                file_name="generated_selected.zip",
+                mime="application/zip",
+                key="download_selected_generated_files_disabled",
+                disabled=True,
+            )
+    with col_all:
+        all_zip = _build_zip_archive(visible_files)
+        st.download_button(
+            "📦 Download All (ZIP)",
+            data=all_zip,
+            file_name="generated_all.zip",
+            mime="application/zip",
+            key="download_all_generated_files",
+        )
+
+    preview_file = next(
+        (file for file in visible_files if file["id"] == st.session_state.generated_files_preview_id),
+        None,
+    )
+    if preview_file:
+        st.markdown("---")
+        st.markdown(f"**Preview: {preview_file['name']}**")
+        if preview_file["kind"] == "image":
+            st.image(preview_file["content"], use_container_width=True)
+        elif preview_file["kind"] == "code":
+            st.code(preview_file["content"], language=preview_file.get("language", "text"))
+        else:
+            st.write(preview_file["content"])
+
+
  
 
 
@@ -427,6 +581,7 @@ def render() -> None:
             st.session_state.uploaded_csv = None
         if "csv_filename" not in st.session_state:
             st.session_state.csv_filename = None
+        _ensure_generated_files_state()
 
         with st.sidebar:
             st.header("Session Settings")
@@ -477,6 +632,9 @@ def render() -> None:
                 st.session_state.chat_files_ingested = False
                 st.rerun()
             
+            st.subheader("🗂️ Generated Files")
+            with st.expander("Manage generated files", expanded=False):
+                render_generated_files_manager()
             st.divider()
             
             # CSV Upload for Visualization
@@ -601,6 +759,24 @@ def render() -> None:
                                 
                                 # Display the plot
                                 img_data = base64.b64decode(viz_result["image_base64"])
+                                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                                _add_generated_file(
+                                    name=f"visualization_{timestamp}.png",
+                                    content=img_data,
+                                    kind="image",
+                                    mime="image/png",
+                                    binary=True,
+                                    set_preview=True,
+                                )
+                                _add_generated_file(
+                                    name=f"visualization_{timestamp}.py",
+                                    content=viz_result["code"],
+                                    kind="code",
+                                    mime="text/x-python",
+                                    binary=False,
+                                    language="python",
+                                    set_preview=False,
+                                )
                                 st.image(img_data, use_container_width=True)
                                 
                                 # Show generated code in expander
@@ -763,6 +939,17 @@ def render() -> None:
                     st.session_state.quiz = quiz_obj.model_dump(mode="json")
                     st.session_state.quiz_answers = {}
                     st.session_state.quiz_result = None
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                    quiz_markdown = service.system.quiz_to_markdown(quiz_obj)
+                    _add_generated_file(
+                        name=f"quiz_{effective_topic.replace(' ', '_')}_{timestamp}.md",
+                        content=quiz_markdown,
+                        kind="text",
+                        mime="text/markdown",
+                        binary=False,
+                        language="markdown",
+                        set_preview=False,
+                    )
                     st.rerun()
                 
                 # Check if question is specifically about uploaded documents (but not a quiz request)
@@ -939,6 +1126,16 @@ def render() -> None:
                         st.session_state.quiz_answers = {}
                         # Initialize markdown for download
                         st.session_state.quiz_markdown = system.quiz_to_markdown(quiz)
+                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                        _add_generated_file(
+                            name=f"quiz_{quiz.topic.replace(' ', '_')}_{timestamp}.md",
+                            content=st.session_state.quiz_markdown,
+                            kind="text",
+                            mime="text/markdown",
+                            binary=False,
+                            language="markdown",
+                            set_preview=False,
+                        )
                         st.session_state.quiz_edit_mode = False
                         st.success(
                             f"Quiz scored {evaluation.correct_count}/{evaluation.total_questions} "
