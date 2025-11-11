@@ -615,12 +615,6 @@ def render() -> None:
                         file_size_mb = len(file.getvalue()) / (1024 * 1024)
                         st.write(f"• {file.name} ({file_size_mb:.2f} MB)")
             
-            if st.button("🗑️ Clear uploaded documents"):
-                st.session_state.chat_uploaded_files = []
-                st.session_state.chat_uploaded_filenames = []
-                st.session_state.chat_files_ingested = False
-                st.rerun()
-            
             st.subheader("🗂️ Generated Files")
             with st.expander("Manage generated files", expanded=False):
                 render_generated_files_manager()
