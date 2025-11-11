@@ -163,15 +163,11 @@ examples/
 chroma-mcp/
 
 # Chroma database files
-chroma_data/*.sqlite3
-chroma_data/*.sqlite3-journal
-chroma_data/*/data_level*.bin
-chroma_data/*/header.bin
-chroma_data/*/length.bin
-chroma_data/*/link_lists.bin
-chroma_data/*/embeddings.npy
-chroma_data/*/metadata.json
-# Keep chroma_example directory but ignore database files
-!chroma_data/chroma_example/
-!chroma_data/chroma_example/**/*.py
-!chroma_data/chroma_example/**/*.md
+chroma_mcp_server/*.sqlite3
+chroma_mcp_server/*.sqlite3-journal
+chroma_mcp_server/*/data_level*.bin
+chroma_mcp_server/*/header.bin
+chroma_mcp_server/*/length.bin
+chroma_mcp_server/*/link_lists.bin
+chroma_mcp_server/*/embeddings.npy
+chroma_mcp_server/*/metadata.json
