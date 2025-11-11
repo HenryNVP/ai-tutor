@@ -48,12 +48,12 @@ mcp = FastMCP("Chroma MCP Server")
 
 # Initialize Chroma client using the new API
 # Using PersistentClient for local persistence
-# Point to the chroma_data directory which contains chroma.sqlite3
+# Point to the chroma_mcp_server directory which contains chroma.sqlite3
 this_dir = Path(__file__).parent
-chroma_data_dir = this_dir.parent  # Go up one level to chroma_data directory
+chroma_data_dir = this_dir  # Use chroma_mcp_server directory
 
 chroma_client = chromadb.PersistentClient(
-    path=str(chroma_data_dir),  # Use chroma_data directory containing chroma.sqlite3
+    path=str(chroma_data_dir),  # Use chroma_mcp_server directory containing chroma.sqlite3
 )
 
 # Thread pool executor for offloading CPU-bound embedding operations

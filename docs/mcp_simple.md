@@ -11,7 +11,7 @@ MCP (Model Context Protocol) is a protocol that allows AI agents to interact wit
 The server exposes Chroma vector database operations as MCP tools.
 
 ```bash
-cd chroma_data/chroma_example
+cd chroma_mcp_server
 python server.py
 ```
 
@@ -22,7 +22,7 @@ Server will start at `http://localhost:8000/mcp`
 In a separate terminal:
 
 ```bash
-cd chroma_data/chroma_example
+cd chroma_mcp_server/chroma_example
 python main.py
 ```
 
@@ -105,7 +105,7 @@ async with MCPServerStreamableHttp(
 ## Database Location
 
 The server uses your existing Chroma database:
-- **Location**: `chroma_data/chroma.sqlite3`
+- **Location**: `chroma_mcp_server/chroma.sqlite3`
 - All collections and documents are preserved
 
 ## Troubleshooting
@@ -121,7 +121,7 @@ MCP_PORT=8001 python server.py
 
 - Check if port is available
 - Verify `chromadb` and `mcp` packages are installed
-- Check database exists at `chroma_data/chroma.sqlite3`
+- Check database exists at `chroma_mcp_server/chroma.sqlite3`
 
 ### Client Can't Connect
 

@@ -9,7 +9,7 @@ The AI Tutor system uses **ChromaDB** as its primary vector database for storing
 ### Storage Location
 
 - **Default Path**: `data/vector_store/` (configurable via `config/default.yaml`)
-- **Notebook Path**: `chroma_data/` (used in Google Colab notebooks)
+- **Notebook Path**: `chroma_mcp_server/` (used in Google Colab notebooks)
 - **Database File**: `chroma.sqlite3` (SQLite database)
 - **Collection Directories**: UUID-named directories for each collection's index files
 
@@ -167,7 +167,7 @@ if source_filter:
 ### Collection Directory Structure
 
 ```
-chroma_data/
+chroma_mcp_server/
 ├── chroma.sqlite3          # Main SQLite database
 └── <collection-uuid>/      # Collection index directory
     ├── data_level0.bin     # HNSW index data
@@ -255,7 +255,7 @@ embeddings:
 
 1. **Database File**: `chroma.sqlite3` contains all metadata
 2. **Collection Directories**: UUID directories contain index files
-3. **Backup**: Copy entire `chroma_data/` directory for full backup
+3. **Backup**: Copy entire `chroma_mcp_server/` directory for full backup
 
 ## Limitations & Considerations
 
@@ -307,8 +307,8 @@ embeddings:
 ### Common Issues
 
 1. **Collection Not Found**
-   - Collection auto-created on first use
-   - Check `chroma_data/` directory exists
+  - Collection auto-created on first use
+  - Check `chroma_mcp_server/` directory exists
 
 2. **Import Errors**
    - Ensure `chromadb` is installed: `pip install chromadb`

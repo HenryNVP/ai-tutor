@@ -107,7 +107,7 @@ class MCPServerManager:
                 # Any HTTP response (even 404) means server is running
                 logger.debug(f"[MCP] Server check: {response.status_code} from {base_url} (server is running)")
             except requests.exceptions.ConnectionError:
-                self._connection_error = f"MCP server not running on port {port}. Start it with: cd chroma_data/chroma_example && python server.py"
+                self._connection_error = f"MCP server not running on port {port}. Start it with: cd chroma_mcp_server && python server.py"
                 logger.warning(f"[MCP] Connection refused on port {port} - server not running")
                 return None
             except requests.exceptions.Timeout:
@@ -226,7 +226,7 @@ class MCPServerManager:
                     if not self.thread.is_alive():
                         self._connection_error = "Connection thread died unexpectedly"
                     else:
-                        self._connection_error = f"Connection timeout after 10 seconds. Is the MCP server running on port {port}? Start it with: cd chroma_data/chroma_example && python server.py"
+                        self._connection_error = f"Connection timeout after 10 seconds. Is the MCP server running on port {port}? Start it with: cd chroma_mcp_server && python server.py"
                 self._initialized = True  # Mark as initialized to prevent retries
                 return None
             
@@ -532,7 +532,7 @@ def render() -> None:
                         st.error(_mcp_server_manager._connection_error)
                     st.caption("To start the MCP server, run in a terminal:")
                     port = os.getenv("MCP_PORT", "8000")
-                    st.code(f"cd chroma_data/chroma_example\npython server.py", language="bash")
+                    st.code(f"cd chroma_mcp_server\npython server.py", language="bash")
                     st.caption("Or set MCP_USE_SERVER=false to use direct vector store access.")
             else:
                 with st.sidebar:
