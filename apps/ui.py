@@ -27,6 +27,7 @@ import streamlit as st
 from streamlit.runtime.secrets import StreamlitSecretNotFoundError
 
 from ai_tutor.system import TutorSystem
+from ai_tutor.services.tutor_service import TutorService
 from apps.chat_helpers import (
     format_answer,
     is_question_about_uploaded_docs,
@@ -292,6 +293,13 @@ def load_system(api_key: Optional[str]) -> TutorSystem:
 
 
 @st.cache_resource(show_spinner=False)
+def load_service(api_key: Optional[str]) -> TutorService:
+    """Load TutorService - the clean API layer for UI interactions."""
+    system = load_system(api_key)
+    return TutorService(system)
+
+
+@st.cache_resource(show_spinner=False)
 def load_visualization_agent(_api_key: Optional[str]) -> VisualizationAgent:
     """Initialize visualization agent with cached settings."""
     settings = load_settings()
@@ -365,7 +373,8 @@ def render() -> None:
         )
         st.stop()
 
-    system = load_system(api_key)
+    system = load_system(api_key)  # Keep for corpus management tab
+    service = load_service(api_key)  # Use service layer for chat operations
     viz_agent = load_visualization_agent(api_key)
     
     # Show MCP status if enabled
@@ -553,7 +562,7 @@ def render() -> None:
                     
                     # Ingest
                     try:
-                        result = system.ingest_directory(temp_path)
+                        result = service.ingest_directory(temp_path)
                         st.session_state.chat_files_ingested = True
                         st.session_state.chat_uploaded_filenames = uploaded_filenames  # Store for filtering
                     except Exception as e:
@@ -635,7 +644,7 @@ def render() -> None:
                 # Check for quiz context from previous interactions
                 if st.session_state.quiz_result:
                     quiz_result = QuizEvaluation.model_validate(st.session_state.quiz_result)
-                    quiz_context = system.format_quiz_context(quiz_result)
+                    quiz_context = service.format_quiz_context(quiz_result)
                 else:
                     quiz_context = ""
                 
@@ -643,116 +652,65 @@ def render() -> None:
                 # This provides context for both Q&A and quiz generation
                 uploaded_docs_context = None
                 if st.session_state.chat_files_ingested and st.session_state.chat_uploaded_filenames:
-                    from ai_tutor.data_models import Query
-                    from collections import defaultdict
-                    
                     with st.spinner("Retrieving content from your uploaded documents..."):
-                        # Strategy: Use source_filter to ONLY search uploaded files
-                        # This is MUCH more efficient than searching everything then filtering!
-                        all_hits = []
+                        # Build queries from filenames and user prompt
+                        queries = []
+                        for filename in st.session_state.chat_uploaded_filenames:
+                            # Extract meaningful terms from filename
+                            query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
+                            queries.append(query_text)
+                            # Also try the full filename without extension
+                            queries.append(Path(filename).stem)
                         
-                        # Increase top_k since we're only searching uploaded files (smaller pool)
-                        original_top_k = system.tutor_agent.retriever.config.top_k
-                        system.tutor_agent.retriever.config.top_k = 50  # More than default, but no need for 200
+                        # Add user's actual query
+                        queries.append(prompt)
                         
-                        try:
-                            # 1. Retrieve using filenames with SOURCE FILTER
-                            for filename in st.session_state.chat_uploaded_filenames:
-                                # Extract meaningful terms from filename
-                                query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
-                                file_hits = system.tutor_agent.retriever.retrieve(
-                                    Query(
-                                        text=query_text,
-                                        source_filter=st.session_state.chat_uploaded_filenames
-                                    )
-                                )
-                                all_hits.extend(file_hits)
-                                
-                                # Also try the full filename without extension
-                                full_name_query = Path(filename).stem
-                                more_hits = system.tutor_agent.retriever.retrieve(
-                                    Query(
-                                        text=full_name_query,
-                                        source_filter=st.session_state.chat_uploaded_filenames
-                                    )
-                                )
-                                all_hits.extend(more_hits)
-                            
-                            # 2. Also retrieve using the user's actual query with SOURCE FILTER
-                            query_hits = system.tutor_agent.retriever.retrieve(
-                                Query(
-                                    text=prompt,
-                                    source_filter=st.session_state.chat_uploaded_filenames
-                                )
-                            )
-                            all_hits.extend(query_hits)
-                            
-                            # 3. For newly uploaded files, also try broad subject queries with SOURCE FILTER
-                            if st.session_state.get('chat_files_just_ingested', False):
-                                # Try broad queries that might match the content
-                                broad_queries = ["computer science", "engineering", "mathematics", "lecture", "course material"]
-                                for broad_query in broad_queries:
-                                    broad_hits = system.tutor_agent.retriever.retrieve(
-                                        Query(
-                                            text=broad_query,
-                                            source_filter=st.session_state.chat_uploaded_filenames
-                                        )
-                                    )
-                                    all_hits.extend(broad_hits)
-                        finally:
-                            # ALWAYS restore original top_k
-                            system.tutor_agent.retriever.config.top_k = original_top_k
+                        # For newly uploaded files, also try broad subject queries
+                        if st.session_state.get('chat_files_just_ingested', False):
+                            broad_queries = ["computer science", "engineering", "mathematics", "lecture", "course material"]
+                            queries.extend(broad_queries)
                         
-                        # Remove duplicates - no need to filter since source_filter already did it!
-                        seen_chunk_ids = set()
-                        filtered_hits = []
-                        for hit in all_hits:
-                            if hit.chunk.metadata.chunk_id not in seen_chunk_ids:
-                                seen_chunk_ids.add(hit.chunk.metadata.chunk_id)
-                                filtered_hits.append(hit)
+                        # Use service layer for retrieval (handles config, filtering, deduplication)
+                        filtered_hits = service.retrieve_multiple_queries(
+                            queries=queries,
+                            filenames=st.session_state.chat_uploaded_filenames,
+                            top_k=50
+                        )
                         
                         # Show debug info about what we found
                         if filtered_hits:
                             st.caption(f"✅ Found {len(filtered_hits)} passages from your uploaded file(s)")
                         
                         if filtered_hits:
-                            # Group hits by document for balanced representation
+                            # Use service layer for formatting (handles grouping, balancing, citations)
+                            context, citations = service.format_context_from_hits(
+                                hits=filtered_hits,
+                                max_passages=15
+                            )
+                            
+                            # Get document titles for context header
+                            from collections import defaultdict
                             hits_by_doc = defaultdict(list)
                             for hit in filtered_hits:
                                 doc_title = hit.chunk.metadata.title or "Unknown"
                                 hits_by_doc[doc_title].append(hit)
                             
-                            # Take passages from each document proportionally
-                            passages_per_doc = max(3, 15 // len(hits_by_doc))
-                            context_parts = []
-                            idx = 1
-                            for doc_title, hits in hits_by_doc.items():
-                                for hit in hits[:passages_per_doc]:
-                                    context_parts.append(
-                                        f"[{idx}] {hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})\n"
-                                        f"{hit.chunk.text}"
-                                    )
-                                    idx += 1
-                            
-                            uploaded_docs_context = "\n\n".join(context_parts)
-                            st.caption(f"📚 Retrieved {len(context_parts)} passages from {len(hits_by_doc)} document(s): {', '.join(hits_by_doc.keys())}")
-                            
-                            # Add document titles to context to help agent understand topic
                             doc_titles_str = ", ".join(hits_by_doc.keys())
                             uploaded_docs_context = (
                                 f"Content from uploaded documents: {doc_titles_str}\n\n"
-                                f"{uploaded_docs_context}"
+                                f"{context}"
                             )
+                            st.caption(f"📚 Retrieved {len(citations)} passages from {len(hits_by_doc)} document(s): {', '.join(hits_by_doc.keys())}")
                         else:
                             st.info("ℹ️ No passages found in uploaded documents. Using general knowledge...")
                 
                 # Check for quiz requests FIRST (before other processing)
-                is_quiz_request = system.detect_quiz_request(prompt)
+                is_quiz_request = service.detect_quiz_request(prompt)
                 
                 if is_quiz_request:
                     # Handle quiz creation
-                    num_questions = system.extract_quiz_num_questions(prompt)
-                    topic = system.extract_quiz_topic(prompt)
+                    num_questions = service.extract_quiz_num_questions(prompt)
+                    topic = service.extract_quiz_topic(prompt)
                     
                     # If quiz is about uploaded documents, use that context
                     effective_topic = topic
@@ -764,44 +722,38 @@ def render() -> None:
                             quiz_context = uploaded_docs_context
                             effective_topic = "Uploaded documents"
                         elif st.session_state.chat_files_ingested and st.session_state.chat_uploaded_filenames:
-                            # Retrieve content from uploaded documents for quiz
-                            from ai_tutor.data_models import Query
-                            from collections import defaultdict
-                            all_hits = []
+                            # Retrieve content from uploaded documents for quiz using service layer
+                            queries = []
                             for filename in st.session_state.chat_uploaded_filenames:
                                 query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
-                                file_hits = system.tutor_agent.retriever.retrieve(Query(text=query_text))
-                                all_hits.extend(file_hits)
+                                queries.append(query_text)
                             
-                            seen_chunk_ids = set()
-                            unique_hits = []
-                            for hit in all_hits:
-                                if hit.chunk.metadata.chunk_id not in seen_chunk_ids:
-                                    seen_chunk_ids.add(hit.chunk.metadata.chunk_id)
-                                    unique_hits.append(hit)
+                            # Use service layer for retrieval
+                            filtered_hits = service.retrieve_multiple_queries(
+                                queries=queries,
+                                filenames=st.session_state.chat_uploaded_filenames,
+                                top_k=50
+                            )
                             
-                            filtered_hits = filter_hits_by_filenames(unique_hits, st.session_state.chat_uploaded_filenames)
+                            # Additional filtering
+                            filtered_hits = filter_hits_by_filenames(
+                                filtered_hits,
+                                st.session_state.chat_uploaded_filenames
+                            )
                             
                             if filtered_hits:
-                                hits_by_doc = defaultdict(list)
-                                for hit in filtered_hits:
-                                    hits_by_doc[hit.chunk.metadata.title or "Unknown"].append(hit)
-                                
-                                passages_per_doc = max(3, 15 // len(hits_by_doc))
-                                context_parts = []
-                                for doc_title, hits in hits_by_doc.items():
-                                    for hit in hits[:passages_per_doc]:
-                                        context_parts.append(
-                                            f"{hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})\n{hit.chunk.text}"
-                                        )
-                                quiz_context = "\n\n".join(context_parts)
+                                # Use service layer for formatting
+                                quiz_context, _ = service.format_context_from_hits(
+                                    hits=filtered_hits,
+                                    max_passages=15
+                                )
                                 effective_topic = "Uploaded documents"
                     
                     # Use quiz context if available, otherwise uploaded docs context
                     extra_context = quiz_context or uploaded_docs_context
                     
                     with st.spinner("Creating quiz..."):
-                        quiz_obj = system.create_quiz(
+                        quiz_obj = service.create_quiz(
                             learner_id=learner_id,
                             topic=effective_topic,
                             num_questions=num_questions,
@@ -823,31 +775,24 @@ def render() -> None:
                 
                 if filter_to_uploaded:
                         # Do custom retrieval filtered to uploaded documents
-                        from ai_tutor.data_models import Query
                         with st.spinner("Searching uploaded documents..."):
-                            # Strategy: Search using FILENAMES as queries to force retrieval from uploaded docs
-                            # This ensures we get content from the specific files regardless of the user's question
-                            all_hits = []
+                            # Build queries from filenames and user question
+                            queries = []
                             for filename in st.session_state.chat_uploaded_filenames:
-                                # Use filename (without extension) as query to get relevant chunks
                                 query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
-                                file_hits = system.tutor_agent.retriever.retrieve(Query(text=query_text))
-                                all_hits.extend(file_hits)
+                                queries.append(query_text)
+                            queries.append(prompt)  # Add user's question
                             
-                            # Also try the user's actual question
-                            question_hits = system.tutor_agent.retriever.retrieve(Query(text=prompt))
-                            all_hits.extend(question_hits)
+                            # Use service layer for retrieval (handles filtering, deduplication)
+                            filtered_hits = service.retrieve_multiple_queries(
+                                queries=queries,
+                                filenames=st.session_state.chat_uploaded_filenames,
+                                top_k=50
+                            )
                             
-                            # Remove duplicates and filter to only uploaded documents
-                            seen_chunk_ids = set()
-                            unique_hits = []
-                            for hit in all_hits:
-                                if hit.chunk.metadata.chunk_id not in seen_chunk_ids:
-                                    seen_chunk_ids.add(hit.chunk.metadata.chunk_id)
-                                    unique_hits.append(hit)
-                            
+                            # Additional filtering by filenames (service handles source_filter, but double-check)
                             filtered_hits = filter_hits_by_filenames(
-                                unique_hits,
+                                filtered_hits,
                                 st.session_state.chat_uploaded_filenames
                             )
                             
@@ -857,50 +802,22 @@ def render() -> None:
                             else:
                                 st.warning("No relevant passages found in uploaded documents. Using general knowledge...")
                             
-                            # Format context from filtered hits
-                            context_parts = []
-                            citations = []
-                            for idx, hit in enumerate(filtered_hits[:5], 1):
-                                context_parts.append(
-                                    f"[{idx}] {hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})\n"
-                                    f"{hit.chunk.text}"
-                                )
-                                citations.append(f"{hit.chunk.metadata.title} (Page {hit.chunk.metadata.page or 'N/A'})")
-                            custom_context = "\n\n".join(context_parts)
-                        
-                        # Answer with ONLY filtered context (bypass agent's own retrieval)
-                        with st.spinner("Generating answer..."):
-                            # Use LLM directly to avoid the agent doing its own retrieval
-                            messages = [
-                                {
-                                    "role": "system",
-                                    "content": "You are a helpful AI tutor. Answer the student's question using ONLY the provided context from their uploaded documents. Be clear and educational. If the context doesn't contain enough information, say so."
-                                },
-                                {
-                                    "role": "user",
-                                    "content": f"""Context from uploaded documents:
-{custom_context}
-
-Student's question: {prompt}
-
-Please answer based only on the provided context."""
-                                }
-                            ]
-                            
-                            llm_response = system.llm_client.generate(messages)
-                            
-                            # Create response object to match expected format
-                            from ai_tutor.agents.tutor import TutorResponse
-                            response = TutorResponse(
-                                answer=llm_response,
-                                hits=filtered_hits[:5],  # Include the hits we used
-                                citations=citations,
-                                style="concise",  # Default style for direct LLM calls
-                                next_topic=None,
-                                difficulty=None,
-                                source="local",  # From uploaded documents
-                                quiz=None
+                            # Format context using service layer
+                            custom_context, citations = service.format_context_from_hits(
+                                hits=filtered_hits[:5],
+                                max_passages=5
                             )
+                        
+                        # Answer with ONLY filtered context using service layer
+                        with st.spinner("Generating answer..."):
+                            response = service.answer_with_context(
+                                learner_id=learner_id,
+                                question=prompt,
+                                context=custom_context
+                            )
+                            # Add hits to response for display
+                            response.hits = filtered_hits[:5]
+                            response.citations = citations
                 else:
                     # Regular Q&A - let agent handle it
                     # Combine quiz context and uploaded docs context
@@ -922,7 +839,8 @@ Please answer based only on the provided context."""
                     
                     with st.spinner("Thinking..."):
                         try:
-                            response = system.answer_question(
+                            # Use service layer for Q&A
+                            response = service.answer_question(
                                 learner_id=learner_id,
                                 question=enhanced_prompt,
                                 extra_context=combined_context,
@@ -931,15 +849,8 @@ Please answer based only on the provided context."""
                             error_msg = str(e)
                             st.error(f"❌ Error generating answer: {error_msg}")
                             logger.exception("Error in answer_question")
-                            # Create a minimal response so the UI doesn't break
-                            from ai_tutor.agents.tutor import TutorResponse
-                            response = TutorResponse(
-                                answer=f"I encountered an error while generating an answer: {error_msg}. Please try again or check the logs.",
-                                hits=[],
-                                citations=[],
-                                style="concise",
-                                source=None,
-                            )
+                            # Use service layer to create error response
+                            response = service.create_error_response(error_msg)
                 
                 if response.answer:
                     placeholder.markdown(format_answer(response.answer))
