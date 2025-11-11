@@ -386,14 +386,8 @@ def render_generated_files_manager() -> None:
         st.session_state.generated_files_preview_id = next(iter(valid_ids), None)
 
     for file in visible_files:
-        cols = st.columns([0.15, 0.5, 0.15, 0.2], gap="small")
-        file["selected"] = cols[0].checkbox(
-            "",
-            value=file.get("selected", True),
-            key=f"generated_file_select_{file['id']}",
-            help="Include this file when downloading selected items.",
-        )
-        new_name = cols[1].text_input(
+        cols = st.columns([0.55, 0.15, 0.15, 0.15], gap="small")
+        new_name = cols[0].text_input(
             "Filename",
             value=file["name"],
             key=f"generated_file_name_{file['id']}",
@@ -401,6 +395,21 @@ def render_generated_files_manager() -> None:
         )
         if new_name and new_name != file["name"]:
             file["name"] = new_name
+
+        data = file["content"]
+        if file.get("binary", False):
+            download_data = data
+        else:
+            download_data = data if isinstance(data, str) else str(data)
+        cols[1].download_button(
+            "⬇️",
+            data=download_data,
+            file_name=file["name"],
+            mime=file["mime"],
+            key=f"generated_file_download_{file['id']}",
+            use_container_width=True,
+            help="Download this file",
+        )
 
         if cols[2].button("👁️", key=f"generated_file_preview_{file['id']}", help="Preview this file"):
             st.session_state.generated_files_preview_id = file["id"]
@@ -417,28 +426,7 @@ def render_generated_files_manager() -> None:
 
     st.markdown("---")
 
-    selected_files = [file for file in visible_files if file.get("selected")]
-    col_sel, col_all = st.columns(2)
-    with col_sel:
-        if selected_files:
-            selected_zip = _build_zip_archive(selected_files)
-            st.download_button(
-                "⬇️ Download Selected (ZIP)",
-                data=selected_zip,
-                file_name="generated_selected.zip",
-                mime="application/zip",
-                key="download_selected_generated_files",
-            )
-        else:
-            st.download_button(
-                "⬇️ Download Selected (ZIP)",
-                data=b"",
-                file_name="generated_selected.zip",
-                mime="application/zip",
-                key="download_selected_generated_files_disabled",
-                disabled=True,
-            )
-    with col_all:
+    if visible_files:
         all_zip = _build_zip_archive(visible_files)
         st.download_button(
             "📦 Download All (ZIP)",
@@ -446,6 +434,7 @@ def render_generated_files_manager() -> None:
             file_name="generated_all.zip",
             mime="application/zip",
             key="download_all_generated_files",
+            use_container_width=True,
         )
 
     preview_file = next(
