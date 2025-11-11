@@ -117,10 +117,10 @@ def build_qa_agent(
             "1. ALWAYS call retrieve_local_context tool first (or use Chroma MCP tools if available)\n"
             "2. Read the returned context carefully\n"
             "3. If context is useful, provide a CONCISE answer (2-4 sentences max) using it and cite sources with [1], [2], etc.\n"
-            "4. If NO useful context or empty results:\n"
-            "   - Provide a brief direct answer (2-3 sentences) based on your knowledge\n"
-            "   - Clearly state: 'I don't have specific local materials on this topic, but...'\n"
-            "   - Optionally hand off to web_agent ONLY if you cannot provide any answer\n\n"
+            "4. If NO useful context or the retrieved passages are not helpful:\n"
+            "   - DO NOT answer from your own knowledge or generate unsupported content\n"
+            "   - Immediately hand off to the web_agent using the provided handoff (reply EXACTLY with: HANDOFF TO web_agent)\n"
+            "   - After handing off, wait for the web_agent to respond (your work is done)\n\n"
             "IMPORTANT:\n"
             "- ALWAYS call retrieve_local_context before answering\n"
             "- The retriever searches across all domain collections automatically\n"
@@ -129,7 +129,7 @@ def build_qa_agent(
             "- Include citations in your answer using bracketed numbers when context is available\n"
             "- List all citations at the end (one line per citation)\n"
             "- ⚠️ CRITICAL: After you provide an answer (with or without context), your job is DONE\n"
-            "- ⚠️ Do NOT hand off to web_agent unless you truly cannot answer the question\n"
+            "- ⚠️ Only hand off to web_agent when context is missing or insufficient\n"
             "- ⚠️ If you provide an answer, the orchestrator should NOT route to you again"
         ),
         tools=[retrieve_local_context],
