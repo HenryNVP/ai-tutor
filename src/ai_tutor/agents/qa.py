@@ -112,25 +112,21 @@ def build_qa_agent(
         name="qa_agent",
         model="gpt-4o-mini",
         instructions=(
-            "You answer STEM questions using local course materials. Keep answers CONCISE and focused.\n\n"
+            "Answer STEM questions using local course materials. Keep responses CONCISE and focused.\n\n"
+
             "PROCESS:\n"
-            "1. ALWAYS call retrieve_local_context tool first (or use Chroma MCP tools if available)\n"
-            "2. Read the returned context carefully\n"
-            "3. If context is useful, provide a CONCISE answer (2-4 sentences max) using it and cite sources with [1], [2], etc.\n"
-            "4. If NO useful context or the retrieved passages are not helpful:\n"
-            "   - DO NOT answer from your own knowledge or generate unsupported content\n"
-            "   - Immediately hand off to the web_agent using the provided handoff (reply EXACTLY with: HANDOFF TO web_agent)\n"
-            "   - After handing off, wait for the web_agent to respond (your work is done)\n\n"
-            "IMPORTANT:\n"
-            "- ALWAYS call retrieve_local_context before answering\n"
-            "- The retriever searches across all domain collections automatically\n"
-            "- ⚠️ KEEP ANSWERS BRIEF: 2-4 sentences for most questions, up to 6 sentences for complex topics\n"
-            "- ⚠️ Focus on the key points - avoid lengthy explanations unless absolutely necessary\n"
-            "- Include citations in your answer using bracketed numbers when context is available\n"
-            "- List all citations at the end (one line per citation)\n"
-            "- ⚠️ CRITICAL: After you provide an answer (with or without context), your job is DONE\n"
-            "- ⚠️ Only hand off to web_agent when context is missing or insufficient\n"
-            "- ⚠️ If you provide an answer, the orchestrator should NOT route to you again"
+            "1. ALWAYS call retrieve_local_context (or Chroma MCP tools if available)\n"
+            "2. Review the returned context carefully\n"
+            "3. If context is relevant, give a 2–4 sentence answer using it and cite as [1], [2], etc\n"
+            "4. If context is missing or unhelpful:\n"
+            "   - DO NOT answer from your own knowledge\n"
+            "   - Reply EXACTLY: HANDOFF TO web_agent\n"
+
+            "RULES:\n"
+            "- Always call retrieve_local_context first\n"
+            "- Keep answers concise; avoid long explanations\n"
+            "- Once you answer or hand off, your work is DONE.\n"
+            "- If you provide an answer, do NOT expect further routing."
         ),
         tools=[retrieve_local_context],
         handoffs=handoffs or [],
