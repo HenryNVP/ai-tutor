@@ -168,3 +168,5 @@ chroma_mcp_server/**
 !chroma_mcp_server/README.md
 !chroma_mcp_server/chroma_example/
 !chroma_mcp_server/chroma_example/**
+
+.cursor/

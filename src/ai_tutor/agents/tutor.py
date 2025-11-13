@@ -174,7 +174,7 @@ class TutorAgent:
         ingest_directory: Callable[[Path], object],
         session_db_path: Path,
         quiz_service: QuizService,
-        mcp_server: Optional[Any] = None,  # Optional MCP server for Chroma
+        mcp_servers: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the multi-agent system with all required dependencies.
@@ -198,10 +198,12 @@ class TutorAgent:
         # Core retrieval infrastructure
         self.retriever = Retriever(retrieval_config, embedder=embedder, vector_store=vector_store)
         self.ingest_fn = ingest_directory
-        self.mcp_server = mcp_server  # Optional MCP server for Chroma (persistent across queries)
+        self.mcp_servers = mcp_servers or {}
+        self.mcp_server = self.mcp_servers.get("chroma") or next(iter(self.mcp_servers.values()), None)
         
-        if mcp_server:
-            logger.info("[TutorAgent] MCP server provided - agents will use MCP tools with cached tool list")
+        if self.mcp_servers:
+            server_names = ", ".join(self.mcp_servers.keys())
+            logger.info("[TutorAgent] MCP servers provided (%s) - agents will use MCP tools with cached lists", server_names)
         
         # Session and state management
         self.sessions: Dict[str, SQLiteSession] = {}  # Learner ID → Active session
@@ -252,9 +254,12 @@ class TutorAgent:
             self.state, 
             self.MIN_CONFIDENCE, 
             handoffs=[self.web_agent],  # Allow QA → Web fallback
-            mcp_server=self.mcp_server,  # Pass persistent MCP server (tools cached per session)
+            mcp_servers=list(self.mcp_servers.values()),  # Pass persistent MCP connections (tools cached per session)
         )
-        logger.info("[TutorAgent] Agents built - MCP tools will be cached and reused across queries")
+        if self.mcp_servers:
+            logger.info("[TutorAgent] Agents built with MCP tool access (%d server(s))", len(self.mcp_servers))
+        else:
+            logger.info("[TutorAgent] Agents built without MCP servers (direct vector store access)")
 
         @function_tool
         def generate_quiz(topic: str, count: int = 4, difficulty: str | None = None) -> str:
@@ -319,6 +324,8 @@ class TutorAgent:
             )
 
         handoffs = [agent for agent in (self.ingestion_agent, self.qa_agent, self.web_agent) if agent is not None]
+        # Pass MCP servers to orchestrator so it can use filesystem tools if needed
+        orchestrator_mcp_servers = list(self.mcp_servers.values()) if self.mcp_servers else []
         self.orchestrator_agent = Agent(
             name="tutor_orchestrator",
             model="gpt-4o-mini",
@@ -336,7 +343,8 @@ class TutorAgent:
                 "TOOL USAGE:\n"
                 "- generate_quiz has automatic access to uploaded documents.\n"
                 "- Extract topic and count from user query; default count=4 if unspecified.\n"
-                "- Never refuse quiz requests.\n\n"
+                "- Never refuse quiz requests.\n"
+                "- You have access to filesystem tools (list_directory, read_file, write_text_file) if needed for file operations.\n\n"
 
                 "CONVERSATION HANDLING:\n"
                 "- Prevent loops: never route same agent twice for the same question.\n"
@@ -349,6 +357,7 @@ class TutorAgent:
             ),
             tools=[generate_quiz],
             handoffs=handoffs,
+            mcp_servers=orchestrator_mcp_servers,  # Give orchestrator access to filesystem MCP tools
         )
 
 
@@ -824,7 +833,7 @@ class TutorAgent:
                     if iteration >= max_iterations:
                         break
                     # Continue to next iteration
-                    continue
+                continue
 
             # Fallback: if orchestrator didn't work and no local source, try web agent
             if self.orchestrator_agent is None and not self.state.last_source and self.web_agent is not None:

@@ -107,7 +107,7 @@ end note
 
 note bottom of TutorService
   Shared Backend Layer:
-  • Caches MCP connections & tool lists
+  • Caches MCP connections (Chroma retrieval + Filesystem workspace) & tool lists
   • Reused by Streamlit, FastAPI, CLI, and Python API
   • Handles retrieval, quizzes, ingestion, and errors
 end note

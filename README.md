@@ -50,6 +50,31 @@ Endpoints (see [`docs/backend_api.md`](docs/backend_api.md) for details):
 - `POST /sessions/{learner_id}/reset` — clear history
 - `GET /health` — health check
 
+### (Optional) Start MCP Servers
+
+Enable richer tool access by launching the MCP servers before opening the UI:
+
+```bash
+# Terminal 1 — Chroma retrieval tools (collections, queries, etc.)
+cd chroma_mcp_server
+python server.py
+```
+
+```bash
+# Terminal 2 — Filesystem workspace tools (list/read/write project files)
+cd filesystem_mcp_server
+python server.py
+```
+
+Then set the environment flags so Streamlit connects automatically:
+
+```bash
+export MCP_USE_SERVER=true            # Chroma MCP (port 8000 by default)
+export FS_MCP_USE_SERVER=true         # Filesystem MCP (port 8100 by default)
+```
+
+You can customise ports and root directories via `MCP_PORT`, `FS_MCP_PORT`, and `FS_MCP_ROOT`. The sidebar shows connection status and restart hints if a server is unavailable.
+
 ## 💬 How to Use
 
 ### 1. Ask Questions

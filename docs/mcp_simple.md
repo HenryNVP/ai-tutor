@@ -6,16 +6,27 @@ MCP (Model Context Protocol) is a protocol that allows AI agents to interact wit
 
 ## Quick Start
 
-### 1. Start the MCP Server
+### 1. Start the MCP Servers (optional but recommended)
 
-The server exposes Chroma vector database operations as MCP tools.
+**Chroma tools** – vector-store operations (collections, queries, etc.)
 
 ```bash
 cd chroma_mcp_server
 python server.py
 ```
 
-Server will start at `http://localhost:8000/mcp`
+Server listens on `http://localhost:8000/mcp` by default.
+
+**Filesystem tools** – list, read, write, and delete project files safely
+
+```bash
+cd filesystem_mcp_server
+python server.py
+```
+
+Server listens on `http://localhost:8100/mcp` by default and respects `FS_MCP_ROOT`, `FS_MCP_PORT`, and `FS_MCP_ALLOW_HIDDEN`.
+
+Enable either server by exporting `MCP_USE_SERVER=true` (Chroma) and/or `FS_MCP_USE_SERVER=true` (Filesystem) before starting the Streamlit UI.
 
 ### 2. Run the Client
 

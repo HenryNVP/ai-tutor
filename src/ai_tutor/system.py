@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ai_tutor.agents.llm_client import LLMClient
 from ai_tutor.agents.tutor import TutorAgent, TutorResponse
@@ -76,7 +76,13 @@ class TutorSystem:
     
     """
 
-    def __init__(self, settings: Settings, api_key: Optional[str] = None, mcp_server: Optional[Any] = None):
+    def __init__(
+        self,
+        settings: Settings,
+        api_key: Optional[str] = None,
+        mcp_server: Optional[Any] = None,
+        mcp_servers: Optional[Dict[str, Any]] = None,
+    ):
         """
         Initialize the tutoring system with all required components.
         
@@ -92,6 +98,12 @@ class TutorSystem:
         api_key : Optional[str], default=None
             OpenAI API key for LLM access. If None, attempts to read from
             OPENAI_API_KEY environment variable.
+        mcp_server : Optional[Any], default=None
+            (Deprecated) Single MCP server connection. Use `mcp_servers` for multi-server
+            configurations. Retained for backward compatibility with earlier examples.
+        mcp_servers : Optional[Dict[str, Any]], default=None
+            Mapping of MCP server names to initialized connections. Pass servers such as
+            `{"chroma": <FastMCP>, "filesystem": <FastMCP>}` to share tool access across agents.
         
         Raises
         ------
@@ -136,6 +148,13 @@ class TutorSystem:
             chunk_store=self.chunk_store,
         )
         
+        # Normalize optional MCP servers (supports legacy single-server parameter)
+        if mcp_servers is None and mcp_server is not None:
+            mcp_servers = {"chroma": mcp_server}
+        self.mcp_servers = mcp_servers or {}
+        # Preserve legacy attribute for callers that expect `TutorSystem.mcp_server`
+        self.mcp_server = self.mcp_servers.get("chroma") or next(iter(self.mcp_servers.values()), None)
+
         # Build multi-agent tutor orchestrator
         self.tutor_agent = TutorAgent(
             retrieval_config=settings.retrieval,
@@ -144,7 +163,7 @@ class TutorSystem:
             ingest_directory=self.ingest_directory,
             session_db_path=settings.paths.processed_data_dir / "sessions.sqlite",
             quiz_service=self.quiz_service,
-            mcp_server=mcp_server,  # Pass optional MCP server
+            mcp_servers=self.mcp_servers,
         )
 
     @classmethod
@@ -153,6 +172,7 @@ class TutorSystem:
         config_path: str | Path | None = None, 
         api_key: Optional[str] = None,
         mcp_server: Optional[Any] = None,
+        mcp_servers: Optional[Dict[str, Any]] = None,
     ) -> "TutorSystem":
         """
         Factory method to construct a TutorSystem from configuration file.
@@ -169,8 +189,11 @@ class TutorSystem:
         api_key : Optional[str], default=None
             OpenAI API key. If None, reads from OPENAI_API_KEY environment variable.
         mcp_server : Optional[Any], default=None
-            Optional MCP server for Chroma. If None and MCP_USE_SERVER env var is set,
-            will attempt to connect to MCP server automatically.
+            (Deprecated) Single MCP server connection. Use `mcp_servers` for multiple
+            servers. If None and MCP_USE_SERVER env var is set, the system will attempt
+            to connect automatically.
+        mcp_servers : Optional[Dict[str, Any]], default=None
+            Mapping of MCP server names to initialized connections (e.g., {"chroma": ..., "filesystem": ...}).
         
         Returns
         -------
@@ -195,10 +218,15 @@ class TutorSystem:
         settings.paths.profiles_dir.mkdir(parents=True, exist_ok=True)
         
         # Auto-connect to MCP server if enabled via environment variable
-        if mcp_server is None:
-            mcp_server = cls._get_mcp_server_from_env()
+        merged_servers = mcp_servers
+        if merged_servers is None and mcp_server is not None:
+            merged_servers = {"chroma": mcp_server}
+        if merged_servers is None:
+            env_server = cls._get_mcp_server_from_env()
+            if env_server is not None:
+                merged_servers = {"chroma": env_server}
         
-        return cls(settings, api_key=api_key, mcp_server=mcp_server)
+        return cls(settings, api_key=api_key, mcp_servers=merged_servers)
     
     @staticmethod
     def _get_mcp_server_from_env() -> Optional[Any]:

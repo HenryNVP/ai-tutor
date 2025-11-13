@@ -49,8 +49,8 @@ except ImportError:  # pragma: no cover
     PdfReader = None  # type: ignore[assignment]
 
 
-# Global MCP server manager
-_mcp_server_manager = None
+# Global MCP server managers keyed by logical name
+_mcp_server_managers: Dict[str, MCPServerManager] = {}
 _mcp_server_lock = threading.Lock()
 
 
@@ -63,7 +63,14 @@ class MCPServerManager:
     - Event loop stays non-blocking with async operations
     """
     
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        name: str,
+        env_prefix: str,
+        default_port: int,
+        start_hint: str,
+    ):
         self.server = None
         self.server_obj = None
         self.loop = None
@@ -72,6 +79,10 @@ class MCPServerManager:
         self._connection_error = None  # Track connection errors
         self._connection_event = threading.Event()  # Signal when connection is ready
         self._connection_start_time = None  # Track when connection attempt started
+        self.name = name
+        self.env_prefix = env_prefix
+        self.default_port = default_port
+        self.start_hint = start_hint
     
     def initialize(self) -> Optional[Any]:
         """Initialize MCP server connection in background thread.
@@ -86,7 +97,8 @@ class MCPServerManager:
             # Connection previously failed, don't retry automatically
             return None
         
-        use_mcp = os.getenv("MCP_USE_SERVER", "false").lower() in ("true", "1", "yes")
+        use_flag = f"{self.env_prefix}_USE_SERVER"
+        use_mcp = os.getenv(use_flag, "false").lower() in ("true", "1", "yes")
         if not use_mcp:
             return None
         
@@ -94,49 +106,60 @@ class MCPServerManager:
             from agents.mcp import MCPServerStreamableHttp
             import requests
             
-            port = int(os.getenv("MCP_PORT", "8000"))
-            server_url = f"http://localhost:{port}/mcp"
+            port_env = f"{self.env_prefix}_PORT"
+            port = int(os.getenv(port_env, os.getenv("MCP_PORT", str(self.default_port))))
+            server_url = os.getenv(
+                f"{self.env_prefix}_URL",
+                f"http://localhost:{port}/mcp",
+            )
             
             # Check if server is reachable before attempting connection
             # Note: Root URL returns 404, but /mcp endpoint exists (requires SSE format)
             try:
                 # Try to reach the server (any response means it's running)
                 # We check root because /mcp requires specific headers
-                base_url = f"http://localhost:{port}"
+                base_url = server_url.rsplit("/mcp", 1)[0]
                 response = requests.get(base_url, timeout=2)
                 # Any HTTP response (even 404) means server is running
                 logger.debug(f"[MCP] Server check: {response.status_code} from {base_url} (server is running)")
             except requests.exceptions.ConnectionError:
-                self._connection_error = f"MCP server not running on port {port}. Start it with: cd chroma_mcp_server && python server.py"
-                logger.warning(f"[MCP] Connection refused on port {port} - server not running")
+                self._connection_error = (
+                    f"{self.name} not running on port {port}. "
+                    f"Start it with:\n{self.start_hint}"
+                )
+                logger.warning(f"[MCP] Connection refused on port {port} for {self.name}")
                 return None
             except requests.exceptions.Timeout:
-                self._connection_error = f"MCP server timeout on port {port}"
-                logger.warning(f"[MCP] Timeout connecting to port {port}")
+                self._connection_error = f"{self.name} timed out on port {port}"
+                logger.warning(f"[MCP] Timeout connecting to port {port} for {self.name}")
                 return None
             except Exception as e:
                 # Other errors might be OK (server might be running but endpoint different)
-                logger.debug(f"[MCP] Server check exception (may be OK): {e}")
+                logger.debug(f"[MCP] Server check exception for {self.name} (may be OK): {e}")
                 pass
             
             streamable_params = {
                 "url": server_url,
-                "timeout": int(os.getenv("MCP_TIMEOUT", "10")),
+                "timeout": int(
+                    os.getenv(f"{self.env_prefix}_TIMEOUT", os.getenv("MCP_TIMEOUT", "10"))
+                ),
             }
             
-            mcp_token = os.getenv("MCP_SERVER_TOKEN")
+            mcp_token = os.getenv(f"{self.env_prefix}_SERVER_TOKEN", os.getenv("MCP_SERVER_TOKEN"))
             if mcp_token:
                 streamable_params["headers"] = {"Authorization": f"Bearer {mcp_token}"}
             
             self.server = MCPServerStreamableHttp(
-                name="Chroma MCP Server",
+                name=self.name,
                 params=streamable_params,
                 cache_tools_list=True,  # CRITICAL: Cache tool list to prevent redundant tools/list calls
                 max_retry_attempts=3,
                 # Add timeout to prevent hanging
-                client_session_timeout_seconds=int(os.getenv("MCP_TIMEOUT", "10")),
+                client_session_timeout_seconds=int(
+                    os.getenv(f"{self.env_prefix}_TIMEOUT", os.getenv("MCP_TIMEOUT", "10"))
+                ),
             )
-            logger.info("[MCP] MCP server configured with tool list caching and timeout enabled")
+            logger.info(f"[MCP] {self.name} configured with tool list caching and timeout enabled")
             
             # Create event loop in background thread
             def _run_server():
@@ -156,7 +179,7 @@ class MCPServerManager:
                     
                     self.server_obj = self.loop.run_until_complete(_connect_with_timeout())
                     self._connection_error = None
-                    logger.info("[MCP] Successfully connected to MCP server")
+                    logger.info(f"[MCP] Successfully connected to {self.name}")
                     
                     # Pre-warm tool list in background to avoid blocking first query
                     # This fetches the tool list eagerly so the first agent query doesn't wait
@@ -169,23 +192,35 @@ class MCPServerManager:
                             if hasattr(self.server_obj, 'list_tools'):
                                 tools = await self.server_obj.list_tools()
                                 prewarm_duration = time.time() - prewarm_start
-                                logger.info(f"[MCP] Pre-warmed tool list: {len(tools) if tools else 0} tools cached in {prewarm_duration:.3f}s")
+                                logger.info(
+                                    f"[MCP] {self.name} pre-warmed tool list: "
+                                    f"{len(tools) if tools else 0} tools cached in {prewarm_duration:.3f}s"
+                                )
                             elif hasattr(self.server_obj, 'tools'):
                                 # Access tools property to trigger fetch
                                 tools = self.server_obj.tools
                                 prewarm_duration = time.time() - prewarm_start
-                                logger.info(f"[MCP] Pre-warmed tool list via property: {len(tools) if tools else 0} tools cached in {prewarm_duration:.3f}s")
+                                logger.info(
+                                    f"[MCP] {self.name} pre-warmed tool list via property: "
+                                    f"{len(tools) if tools else 0} tools cached in {prewarm_duration:.3f}s"
+                                )
                             elif hasattr(self.server, 'list_tools'):
                                 # Try on the server object itself
                                 tools = await self.server.list_tools()
                                 prewarm_duration = time.time() - prewarm_start
-                                logger.info(f"[MCP] Pre-warmed tool list via server: {len(tools) if tools else 0} tools cached in {prewarm_duration:.3f}s")
+                                logger.info(
+                                    f"[MCP] {self.name} pre-warmed tool list via server: "
+                                    f"{len(tools) if tools else 0} tools cached in {prewarm_duration:.3f}s"
+                                )
                             else:
                                 # Tool list will be fetched on first use (cached by cache_tools_list=True)
-                                logger.debug("[MCP] Tool list will be fetched on first use (will be cached)")
+                                logger.debug(f"[MCP] {self.name} will fetch tool list on first use (cached thereafter)")
                         except Exception as e:
                             # Non-critical - tool list will be fetched on first use anyway
-                            logger.debug(f"[MCP] Tool list pre-warming skipped (will fetch on first use): {e}")
+                            logger.debug(
+                                f"[MCP] {self.name} tool list pre-warming skipped "
+                                f"(will fetch on first use): {e}"
+                            )
                     
                     # Pre-warm tools in background (non-blocking)
                     # This happens after connection is established but before first query
@@ -226,7 +261,10 @@ class MCPServerManager:
                     if not self.thread.is_alive():
                         self._connection_error = "Connection thread died unexpectedly"
                     else:
-                        self._connection_error = f"Connection timeout after 10 seconds. Is the MCP server running on port {port}? Start it with: cd chroma_mcp_server && python server.py"
+                        self._connection_error = (
+                            f"Connection timeout after 10 seconds. "
+                            f"Is {self.name} running on port {port}? Start it with:\n{self.start_hint}"
+                        )
                 self._initialized = True  # Mark as initialized to prevent retries
                 return None
             
@@ -240,6 +278,11 @@ class MCPServerManager:
     def get_server(self) -> Optional[Any]:
         """Get the MCP server object."""
         return self.server_obj
+    
+    def is_enabled(self) -> bool:
+        """Return True if this server is enabled via environment variables."""
+        use_flag = f"{self.env_prefix}_USE_SERVER"
+        return os.getenv(use_flag, "false").lower() in ("true", "1", "yes")
     
     def get_status(self) -> str:
         """Get connection status string."""
@@ -277,22 +320,40 @@ class MCPServerManager:
                 return "🟡 Connecting..."
 
 
-def _get_mcp_server() -> Optional[Any]:
-    """Get or create MCP server connection."""
-    global _mcp_server_manager
+def _get_mcp_servers() -> Dict[str, Any]:
+    """Get or create MCP server connections keyed by server name."""
+    global _mcp_server_managers
     
     with _mcp_server_lock:
-        if _mcp_server_manager is None:
-            _mcp_server_manager = MCPServerManager()
+        if not _mcp_server_managers:
+            _mcp_server_managers = {
+                "chroma": MCPServerManager(
+                    name="Chroma MCP Server",
+                    env_prefix="MCP",
+                    default_port=8000,
+                    start_hint="cd chroma_mcp_server\npython server.py",
+                ),
+                "filesystem": MCPServerManager(
+                    name="Filesystem MCP Server",
+                    env_prefix="FS_MCP",
+                    default_port=8100,
+                    start_hint="cd filesystem_mcp_server\npython server.py",
+                ),
+            }
         
-        return _mcp_server_manager.initialize()
+        connections: Dict[str, Any] = {}
+        for name, manager in _mcp_server_managers.items():
+            server = manager.initialize()
+            if server is not None:
+                connections[name] = server
+        return connections
 
 
 @st.cache_resource(show_spinner=False)
 def load_system(api_key: Optional[str]) -> TutorSystem:
     """Load TutorSystem with optional MCP server support."""
-    mcp_server = _get_mcp_server()
-    return TutorSystem.from_config(api_key=api_key, mcp_server=mcp_server)
+    mcp_servers = _get_mcp_servers()
+    return TutorSystem.from_config(api_key=api_key, mcp_servers=mcp_servers)
 
 
 @st.cache_resource(show_spinner=False)
@@ -520,26 +581,25 @@ def render() -> None:
     service = load_service(api_key)  # Use service layer for chat operations
     viz_agent = load_visualization_agent(api_key)
     
-    # Show MCP status if enabled
-    use_mcp = os.getenv("MCP_USE_SERVER", "false").lower() in ("true", "1", "yes")
-    if use_mcp:
-        if _mcp_server_manager:
-            mcp_status = _mcp_server_manager.get_status()
-            if "Failed" in mcp_status:
-                with st.sidebar:
-                    st.caption(f"MCP Server: {mcp_status}")
-                    if _mcp_server_manager._connection_error:
-                        st.error(_mcp_server_manager._connection_error)
-                    st.caption("To start the MCP server, run in a terminal:")
-                    port = os.getenv("MCP_PORT", "8000")
-                    st.code(f"cd chroma_mcp_server\npython server.py", language="bash")
-                    st.caption("Or set MCP_USE_SERVER=false to use direct vector store access.")
-            else:
-                with st.sidebar:
-                    st.caption(f"MCP Server: {mcp_status}")
-        else:
-            with st.sidebar:
-                st.caption("MCP Server: 🟡 Connecting...")
+    # Show MCP status if any server is enabled
+    enabled_managers = [
+        manager for manager in _mcp_server_managers.values() if manager.is_enabled()
+    ]
+    if enabled_managers:
+        with st.sidebar:
+            st.subheader("🛠 MCP Servers")
+            for manager in enabled_managers:
+                status = manager.get_status()
+                st.caption(f"{manager.name}: {status}")
+                
+                if "Failed" in status:
+                    if manager._connection_error:
+                        st.error(manager._connection_error)
+                    st.caption("Start command:")
+                    st.code(manager.start_hint, language="bash")
+                elif status == "🟢 Enabled" and manager._connection_error:
+                    # Show any non-fatal warnings (e.g., earlier timeouts)
+                    st.info(manager._connection_error)
     
     # Create tabs
     tab1, tab2 = st.tabs(["💬 Chat & Learn", "📚 Corpus Management"])

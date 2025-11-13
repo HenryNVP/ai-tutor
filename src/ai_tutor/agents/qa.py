@@ -16,7 +16,7 @@ def build_qa_agent(
     state,
     min_confidence: float,
     handoffs: Optional[List[Agent]] = None,
-    mcp_server: Optional[Any] = None,  # Optional MCP server for Chroma
+    mcp_servers: Optional[List[Any]] = None,
 ) -> Agent:
     """Create the local QA agent that consults the vector store."""
 
@@ -105,8 +105,8 @@ def build_qa_agent(
         
         return result_json
 
-    # If MCP server is available, use it; otherwise use direct retriever
-    mcp_servers = [mcp_server] if mcp_server else []
+    # If MCP servers are available, use them; otherwise use direct retriever
+    active_mcp_servers = [server for server in (mcp_servers or []) if server]
     
     return Agent(
         name="qa_agent",
@@ -130,5 +130,5 @@ def build_qa_agent(
         ),
         tools=[retrieve_local_context],
         handoffs=handoffs or [],
-        mcp_servers=mcp_servers,  # Add MCP server if provided (shared connection, tools cached)
+        mcp_servers=active_mcp_servers,  # Add MCP servers if provided (shared connection, tools cached)
     )
