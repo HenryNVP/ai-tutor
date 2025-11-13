@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import chromadb
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 # Try to import embedding client for query generation
 try:
@@ -43,8 +43,16 @@ except ImportError:
     embedding_client = None
     EMBEDDING_AVAILABLE = False
 
-# Create server
-mcp = FastMCP("Chroma MCP Server")
+# Create FastMCP instance with name and instructions
+mcp = FastMCP(
+    name="Chroma MCP Server",
+    instructions="""
+        This server provides ChromaDB vector database operations for AI agents.
+        Use list_collections to see available collections, query_collection to search documents,
+        add_documents to add new documents, and get_collection_info to inspect collections.
+        All operations work with the persistent ChromaDB database.
+    """,
+)
 
 # Initialize Chroma client using the new API
 # Using PersistentClient for local persistence
@@ -468,18 +476,24 @@ def delete_collection(collection_name: str) -> str:
 
 
 if __name__ == "__main__":
-    # Run with Streamable HTTP transport (recommended for newer MCP servers)
-    # Change to "sse" if you need Server-Sent Events transport
-    transport_type = os.getenv("MCP_TRANSPORT", "streamable-http")
-    port = os.getenv("MCP_PORT", os.getenv("PORT", "8000"))
+    transport = os.getenv("MCP_TRANSPORT", "http")
+    # Get port (prioritize MCP_PORT, default to 8000)
+    port = int(os.getenv("MCP_PORT", "8000"))
     
-    # Configure port if specified (for HTTP/SSE transports)
-    if port != "8000":
-        os.environ["PORT"] = port
-    
-    print(f"Starting Chroma MCP server on port {port} with {transport_type} transport...")
+    print(f"Starting Chroma MCP server on port {port} with {transport} transport...")
     print(f"Connect to: http://localhost:{port}/mcp")
+    print(f"Database: {chroma_data_dir}")
     print("Press Ctrl+C to stop the server.\n")
     
-    mcp.run(transport=transport_type)
+    # Use http transport with explicit host and port
+    # streamable-http may not support host/port parameters
+    if transport == "http":
+        mcp.run(
+            transport="http",
+            port=port,
+        )
+    else:
+        # For streamable-http or other transports, set PORT env var
+        os.environ["PORT"] = str(port)
+        mcp.run(transport=transport)
 
