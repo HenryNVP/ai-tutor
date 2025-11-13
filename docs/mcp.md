@@ -74,6 +74,39 @@ self.qa_agent = build_qa_agent(
 # 3. Agent can call tools during execution
 ```
 
+## Hybrid Approach
+
+The AI Tutor uses a **hybrid approach** combining direct access and MCP tools:
+
+### Primary: Direct Retriever
+
+**For semantic search:**
+- Uses direct Python API to vector store (ChromaDB)
+- Fast (~10-50ms), reliable, no network calls
+- Searches all domain collections automatically
+- Automatic filtering and deduplication
+- Structured output (RetrievalHit objects)
+
+**Example:** `retrieve_local_context()` function tool uses direct retriever
+
+### Secondary: MCP Tools
+
+**For specialized use cases:**
+- **Chroma MCP**: Collection management, specific collection queries
+- **Filesystem MCP**: Full document access, file organization, reading specific sections
+
+**When agents use MCP:**
+- Need full document context (not just chunks)
+- Need specific document sections
+- Need to organize files (e.g., quiz organization)
+- Need collection management operations
+
+**Benefits:**
+- ✅ Fast primary retrieval (direct API)
+- ✅ Complete context when needed (MCP file access)
+- ✅ Flexible file organization (filesystem MCP)
+- ✅ Best of both worlds
+
 ## Available Tools
 
 ### Chroma MCP Tools

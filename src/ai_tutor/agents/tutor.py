@@ -341,10 +341,15 @@ class TutorAgent:
                 "- Quiz requests → ALWAYS call generate_quiz(topic, count) tool. Do NOT generate questions in text.\n\n"
 
                 "TOOL USAGE:\n"
-                "- generate_quiz has automatic access to uploaded documents.\n"
+                "- generate_quiz has automatic access to uploaded documents via vector store (primary method).\n"
                 "- Extract topic and count from user query; default count=4 if unspecified.\n"
                 "- Never refuse quiz requests.\n"
-                "- You have access to filesystem tools (list_directory, read_file, write_text_file) if needed for file operations.\n\n"
+                "- Filesystem MCP tools available:\n"
+                "  * read_file: Read specific document sections from data/uploads/ when full context needed\n"
+                "  * write_text_file: Organize quiz files (e.g., save to data/generated/quizzes/{topic}/)\n"
+                "  * list_directory: Check existing quizzes to avoid duplicates or reference previous ones\n"
+                "- Use vector store for semantic search (fast, primary method).\n"
+                "- Use filesystem MCP for complete document context or quiz organization when needed.\n\n"
 
                 "CONVERSATION HANDLING:\n"
                 "- Prevent loops: never route same agent twice for the same question.\n"

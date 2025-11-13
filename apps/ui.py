@@ -860,24 +860,24 @@ def render() -> None:
                 # Track filenames for filtering
                 uploaded_filenames = [f.name for f in st.session_state.chat_uploaded_files]
                 
-                # Create temp directory and ingest files
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    temp_path = Path(temp_dir)
-                    
-                    # Save uploaded files
-                    for uploaded_file in st.session_state.chat_uploaded_files:
-                        file_path = temp_path / uploaded_file.name
-                        with open(file_path, "wb") as f:
-                            f.write(uploaded_file.getvalue())
-                    
-                    # Ingest
-                    try:
-                        result = service.ingest_directory(temp_path)
-                        st.session_state.chat_files_ingested = True
-                        st.session_state.chat_uploaded_filenames = uploaded_filenames  # Store for filtering
-                    except Exception as e:
-                        st.error(f"❌ Ingestion failed: {str(e)}")
-                        st.stop()
+                # Persist uploaded files to disk (for filesystem MCP access)
+                upload_dir = Path("data/uploads")
+                upload_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Save uploaded files to persistent location
+                for uploaded_file in st.session_state.chat_uploaded_files:
+                    file_path = upload_dir / uploaded_file.name
+                    file_path.write_bytes(uploaded_file.getvalue())
+                    logger.info(f"Saved uploaded file: {file_path}")
+                
+                # Ingest from persistent location
+                try:
+                    result = service.ingest_directory(upload_dir)
+                    st.session_state.chat_files_ingested = True
+                    st.session_state.chat_uploaded_filenames = uploaded_filenames  # Store for filtering
+                except Exception as e:
+                    st.error(f"❌ Ingestion failed: {str(e)}")
+                    st.stop()
             
             # Now add user message to history
             st.session_state.messages.append({"role": "user", "content": prompt})
