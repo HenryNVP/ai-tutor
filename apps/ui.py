@@ -390,9 +390,57 @@ def _add_generated_file(
     binary: bool,
     language: Optional[str] = None,
     set_preview: bool = True,
+    auto_save: bool = True,
 ) -> None:
-    """Register a newly generated file in session state."""
+    """
+    Register a newly generated file in session state and optionally save to disk.
+    
+    Args:
+        name: Filename
+        content: File content (bytes for binary, str for text)
+        kind: File type ("image", "code", "text")
+        mime: MIME type
+        binary: Whether content is binary
+        language: Programming language (for code files)
+        set_preview: Whether to set this file as the preview
+        auto_save: Whether to automatically save to disk (default: True)
+    """
     _ensure_generated_files_state()
+    
+    # Determine save directory based on file kind
+    kind_to_dir = {
+        "image": "visualizations",
+        "code": "code",
+        "text": "quizzes",  # Quiz markdown files
+    }
+    save_subdir = kind_to_dir.get(kind, "other")
+    
+    # Auto-save to disk if enabled
+    file_path = None
+    if auto_save:
+        try:
+            # Create organized directory structure: data/generated/{kind}/
+            base_dir = Path("data/generated") / save_subdir
+            base_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save file
+            file_path = base_dir / name
+            if binary:
+                if isinstance(content, str):
+                    # If binary flag is set but content is string, encode it
+                    content = content.encode("utf-8")
+                file_path.write_bytes(content)
+            else:
+                # Text file
+                text_content = content if isinstance(content, str) else str(content)
+                file_path.write_text(text_content, encoding="utf-8")
+            
+            logger.info(f"Auto-saved generated file: {file_path} ({kind}, {len(content) if binary else len(str(content))} bytes)")
+        except Exception as e:
+            logger.error(f"Failed to auto-save generated file {name}: {e}", exc_info=True)
+            # Continue even if save fails - file is still in session state
+    
+    # Register in session state
     file_entry = {
         "id": str(uuid.uuid4()),
         "name": name,
@@ -404,10 +452,30 @@ def _add_generated_file(
         "selected": True,
         "deleted": False,
         "created_at": datetime.utcnow().isoformat(),
+        "file_path": str(file_path) if file_path else None,  # Store disk path
     }
     st.session_state.generated_files.append(file_entry)
     if set_preview:
         st.session_state.generated_files_preview_id = file_entry["id"]
+
+
+def _update_file_on_disk(file: Dict[str, Any], new_content: Any) -> None:
+    """Update a file's content on disk if it exists."""
+    file_path = file.get("file_path")
+    if file_path and Path(file_path).exists():
+        try:
+            if file.get("binary", False):
+                # Binary file
+                if isinstance(new_content, str):
+                    new_content = new_content.encode("utf-8")
+                Path(file_path).write_bytes(new_content)
+            else:
+                # Text file
+                text_content = new_content if isinstance(new_content, str) else str(new_content)
+                Path(file_path).write_text(text_content, encoding="utf-8")
+            logger.info(f"Updated file on disk: {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to update file on disk {file_path}: {e}", exc_info=True)
 
 
 def _visible_generated_files() -> List[Dict[str, Any]]:
@@ -455,6 +523,26 @@ def render_generated_files_manager() -> None:
             label_visibility="collapsed",
         )
         if new_name and new_name != file["name"]:
+            # Rename on disk if file exists
+            old_file_path = file.get("file_path")
+            if old_file_path and Path(old_file_path).exists():
+                try:
+                    # Determine new path based on file kind
+                    kind_to_dir = {
+                        "image": "visualizations",
+                        "code": "code",
+                        "text": "quizzes",
+                    }
+                    save_subdir = kind_to_dir.get(file["kind"], "other")
+                    base_dir = Path("data/generated") / save_subdir
+                    new_file_path = base_dir / new_name
+                    
+                    # Rename file on disk
+                    Path(old_file_path).rename(new_file_path)
+                    file["file_path"] = str(new_file_path)
+                    logger.info(f"Renamed file on disk: {old_file_path} -> {new_file_path}")
+                except Exception as e:
+                    logger.error(f"Failed to rename file on disk: {e}", exc_info=True)
             file["name"] = new_name
 
         data = file["content"]
@@ -476,6 +564,15 @@ def render_generated_files_manager() -> None:
             st.session_state.generated_files_preview_id = file["id"]
 
         if cols[3].button("🗑️", key=f"generated_file_delete_{file['id']}", help="Remove this file from the list"):
+            # Delete from disk if file exists
+            file_path = file.get("file_path")
+            if file_path and Path(file_path).exists():
+                try:
+                    Path(file_path).unlink()
+                    logger.info(f"Deleted file from disk: {file_path}")
+                except Exception as e:
+                    logger.error(f"Failed to delete file from disk: {e}", exc_info=True)
+            
             file["deleted"] = True
             if st.session_state.generated_files_preview_id == file["id"]:
                 st.session_state.generated_files_preview_id = None
@@ -483,7 +580,19 @@ def render_generated_files_manager() -> None:
 
         size_bytes = len(file["content"]) if file.get("binary") else len(str(file["content"]).encode("utf-8"))
         size_kb = size_bytes / 1024
-        st.caption(f"{file['kind'].title()} • {size_kb:.1f} KB")
+        
+        # Show file info with disk path if available
+        file_path = file.get("file_path")
+        if file_path:
+            # Show relative path for cleaner display
+            try:
+                rel_path = Path(file_path).relative_to(Path.cwd())
+                st.caption(f"{file['kind'].title()} • {size_kb:.1f} KB • 💾 {rel_path}")
+            except ValueError:
+                # If relative path fails, show full path
+                st.caption(f"{file['kind'].title()} • {size_kb:.1f} KB • 💾 {file_path}")
+        else:
+            st.caption(f"{file['kind'].title()} • {size_kb:.1f} KB • ⚠️ Not saved to disk")
 
     st.markdown("---")
 
@@ -1222,6 +1331,8 @@ def render() -> None:
                         and file.get("name", "").startswith(current_file_prefix)
                     ):
                         file["content"] = edited_quiz
+                        # Update file on disk
+                        _update_file_on_disk(file, edited_quiz)
                 
                 col_download, col_close = st.columns([1, 1])
                 with col_download:
@@ -1306,7 +1417,23 @@ def render() -> None:
                         height=400,
                         key="quiz_markdown_editor"
                     )
-                    st.session_state.quiz_markdown = edited_markdown
+                    if edited_markdown != st.session_state.quiz_markdown:
+                        st.session_state.quiz_markdown = edited_markdown
+                        # Update corresponding file in generated_files and on disk
+                        quiz_topic = Quiz.model_validate(st.session_state.quiz_completed).topic.replace(' ', '_')
+                        current_file_prefix = f"quiz_{quiz_topic}_"
+                        for file in st.session_state.generated_files:
+                            if file.get("deleted"):
+                                continue
+                            if (
+                                file.get("kind") == "text"
+                                and file.get("language") == "markdown"
+                                and file.get("name", "").startswith(current_file_prefix)
+                            ):
+                                file["content"] = edited_markdown
+                                # Update file on disk
+                                _update_file_on_disk(file, edited_markdown)
+                                break
             else:
                 st.markdown("### 👁️ Quiz Preview")
                 if "quiz_markdown" in st.session_state:
