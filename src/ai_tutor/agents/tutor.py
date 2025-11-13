@@ -260,6 +260,9 @@ class TutorAgent:
         else:
             logger.info("[TutorAgent] Agents built without MCP servers (direct vector store access)")
 
+        # Cache to prevent duplicate generate_quiz calls within the same execution
+        _quiz_call_cache: dict[str, str] = {}
+
         @function_tool
         def generate_quiz(topic: str, count: int = 4, difficulty: str | None = None) -> str:
             """
@@ -267,6 +270,11 @@ class TutorAgent:
             
             Creates a multiple-choice quiz and displays it in an interactive interface
             where students can select answers and get immediate feedback.
+            
+            ⚠️ CRITICAL: CALL THIS TOOL ONLY ONCE per quiz request.
+            - This tool automatically prevents duplicate calls - if called multiple times with the same topic, it returns the cached result.
+            - Do NOT call this tool multiple times "to be sure" - one call is sufficient.
+            - The tool checks for existing quizzes and prevents duplicate generation automatically.
             
             Parameters
             ----------
@@ -288,11 +296,33 @@ class TutorAgent:
             Examples
             --------
             User says: "create 20 quizzes from documents"
-            → Call: generate_quiz(topic='computer science', count=20)
+            → Call: generate_quiz(topic='computer science', count=20) ONCE
             
             User says: "quiz me on calculus"  
-            → Call: generate_quiz(topic='calculus', count=4)
+            → Call: generate_quiz(topic='calculus', count=4) ONCE
             """
+            # Create cache key for this call
+            cache_key = f"{topic.lower().strip()}:{count}"
+            
+            # Check per-call cache first (prevents multiple calls within same execution)
+            if cache_key in _quiz_call_cache:
+                logger.info(f"[TutorAgent] generate_quiz already called for '{topic}' in this execution, returning cached result")
+                return _quiz_call_cache[cache_key]
+            
+            # Check if quiz was already generated for this topic in this conversation
+            if self.state.last_quiz is not None:
+                existing_topic = self.state.last_quiz.topic.lower().strip()
+                requested_topic = topic.lower().strip()
+                # If topics match (fuzzy match - check if one contains the other)
+                if existing_topic == requested_topic or existing_topic in requested_topic or requested_topic in existing_topic:
+                    logger.info(f"[TutorAgent] Quiz already generated for topic '{topic}', returning existing quiz")
+                    result = (
+                        f"Quiz on {self.state.last_quiz.topic} was already prepared ({len(self.state.last_quiz.questions)} questions). "
+                        "The quiz is ready for the learner to take."
+                    )
+                    _quiz_call_cache[cache_key] = result
+                    return result
+            
             # Validate and clamp question count to reasonable range
             try:
                 question_count = int(count)
@@ -303,24 +333,35 @@ class TutorAgent:
             # Access the currently active learner profile (set by answer() method)
             profile = self._active_profile
             
+            logger.info(f"[TutorAgent] Generating quiz: topic='{topic}', count={question_count}, difficulty={difficulty}")
+            
             # Generate quiz using the quiz service with all available context
-            quiz = self.quiz_service.generate_quiz(
-                topic=topic,
-                profile=profile,
-                num_questions=question_count,
-                difficulty=difficulty,
-                extra_context=self._active_extra_context,  # Include uploaded docs
-            )
+            try:
+                quiz = self.quiz_service.generate_quiz(
+                    topic=topic,
+                    profile=profile,
+                    num_questions=question_count,
+                    difficulty=difficulty,
+                    extra_context=self._active_extra_context,  # Include uploaded docs
+                )
+            except Exception as e:
+                logger.error(f"[TutorAgent] Quiz generation failed: {e}", exc_info=True)
+                return f"Failed to generate quiz on '{topic}': {str(e)}. Please try again with a different topic or fewer questions."
             
             # Store in shared state for orchestrator collection
             self.state.last_quiz = quiz
             self.state.last_source = "quiz"
             
+            logger.info(f"[TutorAgent] Successfully generated quiz: {len(quiz.questions)} questions on '{quiz.topic}'")
+            
             # Return message for orchestrator to communicate quiz readiness
-            return (
+            result = (
                 f"Prepared a {len(quiz.questions)}-question quiz on {quiz.topic}. "
                 "Let the learner know the quiz is ready for them to take."
             )
+            # Cache the result to prevent duplicate calls
+            _quiz_call_cache[cache_key] = result
+            return result
 
         handoffs = [agent for agent in (self.ingestion_agent, self.qa_agent, self.web_agent) if agent is not None]
         # Pass MCP servers to orchestrator so it can use filesystem tools if needed
@@ -329,37 +370,22 @@ class TutorAgent:
             name="tutor_orchestrator",
             model="gpt-4o-mini",
             instructions=(
-                "You are the Orchestrator Agent in a multi-agent tutoring system. Your PRIMARY job is routing queries to specialist agents and tools. "
-                "⚠️ ALWAYS check conversation history before routing. If a complete answer exists, return it; do not re-route. "
-                "Each question is routed ONCE per agent.\n\n"
+                "You are the Orchestrator Agent. Route queries to agents or call tools.\n\n"
                 
                 "ROUTING RULES:\n"
-                "- STEM questions (math, physics, engineering, CS, technical concepts, data formats) → qa_agent. Do NOT answer yourself.\n"
-                "  * qa_agent uses retrieve_local_context which searches ALL collections automatically.\n"
-                "  * DO NOT use Chroma MCP tools yourself - you don't know collection names.\n"
-                "- Current events, news, history, literature, arts → web_agent. Route only once.\n"
-                "- File uploads / ingestion → ingestion_agent.\n"
-                "- Quiz requests → ALWAYS call generate_quiz(topic, count) tool. Do NOT generate questions in text.\n\n"
-
-                "TOOL USAGE:\n"
-                "- generate_quiz has automatic access to uploaded documents via vector store (primary method).\n"
-                "- Extract topic and count from user query; default count=4 if unspecified.\n"
-                "- Never refuse quiz requests.\n"
-                "- Filesystem MCP tools available:\n"
-                "  * read_file: Read specific document sections from data/uploads/ when full context needed\n"
-                "  * write_text_file: Organize quiz files (e.g., save to data/generated/quizzes/{topic}/)\n"
-                "  * list_directory: Check existing quizzes to avoid duplicates or reference previous ones\n"
-                "- For retrieval: Route to qa_agent (uses retrieve_local_context which searches all collections).\n"
-                "- For file operations: Use filesystem MCP tools when needed.\n\n"
-
-                "CONVERSATION HANDLING:\n"
-                "- Prevent loops: never route same agent twice for the same question.\n"
-                "- Cache domain classification per thread to avoid redundant LLM calls.\n"
-                "- Use previous agent responses to guide routing.\n"
-                "- Stop routing when an answer exists.\n\n"
-
-                "PRIORITY:\n"
-                "- Routing and tool calls ONLY, no direct answering (except greetings, system questions, or general knwoledge)."
+                "- 'summarize [document/file]' / 'summary of [document]' → hand off to qa_agent\n"
+                "  * qa_agent will retrieve document content, generate summary, and save to file\n"
+                "- 'create text file about [topic]' (no document mentioned) → call write_text_file() directly\n"
+                "- 'quiz' / 'questions' / 'test' → call generate_quiz(topic, count) ONCE\n"
+                "- STEM questions → hand off to qa_agent\n"
+                "- Current events/news → hand off to web_agent\n"
+                "- File uploads → hand off to ingestion_agent\n\n"
+                
+                "IMPORTANT:\n"
+                "- If user asks to summarize an uploaded document → hand off to qa_agent\n"
+                "- If user asks to create a file about a general topic (no document) → use write_text_file()\n"
+                "- 'summarize' is NOT a quiz - route to qa_agent for file creation\n"
+                "- Call each tool/handoff ONCE - then stop"
             ),
             tools=[generate_quiz],
             handoffs=handoffs,
@@ -404,16 +430,16 @@ class TutorAgent:
             if "Cannot call answer()" in str(e):
                 raise
             # No running loop, safe to use asyncio.run()
-            return asyncio.run(
-                self._answer_async(
-                    learner_id=learner_id,
-                    question=question,
-                    mode=mode,
-                    style_hint=style_hint,
-                    profile=profile,
-                    extra_context=extra_context,
-                    on_delta=on_delta,
-                )
+        return asyncio.run(
+            self._answer_async(
+                learner_id=learner_id,
+                question=question,
+                mode=mode,
+                style_hint=style_hint,
+                profile=profile,
+                extra_context=extra_context,
+                on_delta=on_delta,
+            )
             )
     
     async def answer_async(
@@ -769,7 +795,7 @@ class TutorAgent:
         import time
         start_time = time.time()
         final_tokens: List[str] = []
-        max_iterations = 3  # Prevent infinite routing loops
+        max_iterations = 5  # Increased to allow handoffs to complete (orchestrator → specialist agent)
         iteration = 0
 
         agent_to_run = self.orchestrator_agent or self.qa_agent
@@ -815,13 +841,25 @@ class TutorAgent:
                         response_text = ""
                         iteration_tokens = []
                     
+                    # Check if this is a handoff/routing message
+                    is_routing_message = any(keyword in response_text.lower() for keyword in [
+                        "transfer_to_qa_agent", "transfer_to_web_agent", "handing off", "routing to",
+                        "transferred", "i've transferred", "i've routed"
+                    ])
+                    
                     # If we got a substantial answer (more than just routing instructions), return it
-                    if len(response_text) > 50 and not any(keyword in response_text.lower() for keyword in [
-                        "transfer_to_qa_agent", "transfer_to_web_agent", "handing off", "routing to"
-                    ]):
+                    if len(response_text) > 50 and not is_routing_message:
                         total_duration = time.time() - start_time
                         logger.info(f"[TutorAgent] Got substantial answer after {iteration} iteration(s) in {total_duration:.2f}s total, returning")
                         break
+                    
+                    # If this is a routing message, continue to let the handoff complete
+                    if is_routing_message:
+                        logger.info(f"[TutorAgent] Detected routing message, continuing to let handoff complete: {response_text[:100]}...")
+                        # Clear the routing message from final_tokens - we want the actual agent response
+                        final_tokens.clear()
+                        # Continue the loop to get the handoff agent's response
+                        continue
                     
                     # If we got some response but it's short, check if it's a complete answer
                     if len(response_text) > 20 and len(response_text) <= 50:

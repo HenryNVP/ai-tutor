@@ -170,4 +170,3 @@ chroma_mcp_server/**
 !chroma_mcp_server/chroma_example/**
 
 .cursor/
-*.txt

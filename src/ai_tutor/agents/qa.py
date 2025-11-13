@@ -19,6 +19,9 @@ def build_qa_agent(
     mcp_servers: Optional[List[Any]] = None,
 ) -> Agent:
     """Create the local QA agent that consults the vector store."""
+    
+    # Cache to prevent redundant retrieval calls within the same agent execution
+    _retrieval_cache: dict[str, str] = {}
 
     def format_citation(hit: RetrievalHit, index: int) -> str:
         metadata = hit.chunk.metadata
@@ -26,6 +29,29 @@ def build_qa_agent(
 
     @function_tool
     def retrieve_local_context(question: str, top_k: int = 5) -> str:
+        """
+        Retrieve relevant context from local course materials.
+        
+        ⚠️ IMPORTANT: This tool is automatically cached - calling it multiple times with the same question returns the cached result.
+        Call this tool ONCE per question - do NOT call it multiple times.
+        
+        Parameters
+        ----------
+        question : str
+            The question to search for in local documents.
+        top_k : int, default=5
+            Maximum number of relevant chunks to return.
+            
+        Returns
+        -------
+        str
+            JSON string containing context items and citations.
+        """
+        # Check cache first to avoid redundant calls
+        cache_key = f"{question}:{top_k}"
+        if cache_key in _retrieval_cache:
+            logger.info(f"[QA Agent] Returning cached retrieval result for: {question}")
+            return _retrieval_cache[cache_key]
         import time
         start_time = time.time()
         logger.info(f"[QA Agent] Retrieving context for question: {question}")
@@ -103,6 +129,9 @@ def build_qa_agent(
                 f"Min confidence: {min_confidence} (took {total_duration:.3f}s)"
             )
         
+        # Cache the result to prevent redundant calls
+        _retrieval_cache[cache_key] = result_json
+        
         return result_json
 
     # If MCP servers are available, use them; otherwise use direct retriever
@@ -112,26 +141,33 @@ def build_qa_agent(
         name="qa_agent",
         model="gpt-4o-mini",
         instructions=(
-            "Answer STEM questions using local course materials. Keep responses CONCISE and focused.\n\n"
+            "You answer STEM questions and create summary files from local course materials.\n\n"
 
-            "PROCESS:\n"
-            "1. ALWAYS call retrieve_local_context (or Chroma MCP tools if available) for semantic search\n"
-            "2. Review the returned context carefully\n"
-            "3. If context is relevant, give a 2–4 sentence answer using it and cite as [1], [2], etc\n"
-            "4. If context is missing or unhelpful:\n"
-            "   - DO NOT answer from your own knowledge\n"
-            "   - Reply EXACTLY: HANDOFF TO web_agent\n"
-            "5. If you need specific document sections or full document context:\n"
-            "   - Use filesystem MCP tools (read_file) to read documents from data/uploads/\n"
-            "   - This is useful when you need complete document structure or specific sections\n"
-            "   - Combine vector store results (semantic search) with direct file access when needed\n"
+            "WHEN USER ASKS TO SUMMARIZE A DOCUMENT:\n"
+            "1. Identify the document name/topic from the user's request\n"
+            "   - If user says 'summarize the uploaded document' → document = 'uploaded document'\n"
+            "   - If user mentions a specific document (e.g., 'CMPE249 Lecture9') → use that name\n"
+            "2. Call retrieve_local_context with a simple question about the document:\n"
+            "   - For 'uploaded document': question='What is the main content and topics covered?'\n"
+            "   - For specific document: question='What is the content of [document name]?'\n"
+            "   - Use top_k=10 to get enough context for a summary\n"
+            "3. Generate a comprehensive 1-page summary (~500-800 words) from the retrieved context\n"
+            "4. Call write_text_file to save it:\n"
+            "   write_text_file(path='data/generated/{document_name}_summary.txt', content=<FULL_SUMMARY_TEXT>)\n"
+            "5. Confirm: 'I've saved the summary to data/generated/{filename}.txt'\n\n"
 
-            "RULES:\n"
-            "- Always call retrieve_local_context first (fast, semantic search)\n"
-            "- Use filesystem MCP read_file only when you need full document context or specific sections\n"
-            "- Keep answers concise; avoid long explanations\n"
-            "- Once you answer or hand off, your work is DONE.\n"
-            "- If you provide an answer, do NOT expect further routing."
+            "WHEN USER ASKS A REGULAR QUESTION:\n"
+            "1. Call retrieve_local_context ONCE with the user's exact question\n"
+            "2. If context found, give a 2–4 sentence answer with citations [1], [2], etc\n"
+            "3. If no context, reply EXACTLY: HANDOFF TO web_agent\n\n"
+
+            "CRITICAL RULES:\n"
+            "- For summaries: DO NOT use the full user instruction as the retrieve_local_context question\n"
+            "- For summaries: Extract the document name and ask about its content\n"
+            "- For summaries: You MUST call write_text_file - do NOT just provide text in chat\n"
+            "- For summaries: DO NOT hand off to web_agent - you handle file creation directly\n"
+            "- Call retrieve_local_context ONCE per request (it's cached)\n"
+            "- write_text_file is available in your tools - use it when creating files"
         ),
         tools=[retrieve_local_context],
         handoffs=handoffs or [],
