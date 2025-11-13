@@ -54,7 +54,6 @@ dev = [
 
 [project.scripts]
 ai-tutor = "ai_tutor.cli:app"
-ai-tutor-quiz = "apps.quiz:render"
 
 [tool.black]
 line-length = 88

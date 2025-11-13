@@ -23,7 +23,6 @@ from ai_tutor.config.schema import RetrievalConfig
 from ai_tutor.data_models import RetrievalHit
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.learning.models import LearnerProfile
-from ai_tutor.learning.quiz import Quiz, QuizService
 from ai_tutor.learning.quiz import Quiz, QuizEvaluation, QuizService
 from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.retrieval.vector_store import VectorStore
