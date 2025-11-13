@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Dict
 
 from fastmcp import FastMCP
 
@@ -49,6 +50,34 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ROOT_DIR = Path(os.getenv("FS_MCP_ROOT", PROJECT_ROOT)).resolve()
 ALLOW_HIDDEN = _truthy(os.getenv("FS_MCP_ALLOW_HIDDEN"))
 MAX_READ_BYTES = int(os.getenv("FS_MCP_MAX_READ_BYTES", "131072"))
+
+DEFAULT_WRITE_SUBDIR = os.getenv("FS_MCP_WRITE_ROOT", "data/generated")
+WRITE_ROOT = Path(DEFAULT_WRITE_SUBDIR)
+if not WRITE_ROOT.is_absolute():
+    WRITE_ROOT = (ROOT_DIR / WRITE_ROOT).resolve()
+if not str(WRITE_ROOT).startswith(str(ROOT_DIR)):
+    raise ValueError("FS_MCP_WRITE_ROOT must reside within the workspace root.")
+WRITE_ROOT.mkdir(parents=True, exist_ok=True)
+
+# Helper to generate a non-conflicting path when overwrite is False.
+def _generate_unique_path(path: Path) -> Path:
+    parent = path.parent
+    stem = path.stem
+    suffix = path.suffix
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    candidate = parent / f"{stem}_{timestamp}{suffix}"
+    counter = 1
+    while candidate.exists():
+        candidate = parent / f"{stem}_{timestamp}_{counter}{suffix}"
+        counter += 1
+    return candidate
+
+WRITE_HISTORY: Dict[str, Path] = {}
+
+
+def _canonical_request(path: str) -> str:
+    return str(Path(path)).replace("\\", "/")
+
 
 # Create FastMCP instance with name and instructions
 mcp = FastMCP(
@@ -171,7 +200,13 @@ def read_text_file(
     length : Optional[int]
         Maximum number of bytes to read. Defaults to FS_MCP_MAX_READ_BYTES.
     """
-    file_path = _resolve_path(path)
+    canonical = _canonical_request(path)
+    mapped_path = WRITE_HISTORY.get(canonical)
+    if mapped_path and mapped_path.exists():
+        file_path = mapped_path
+    else:
+        file_path = _resolve_path(path)
+
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
     if not file_path.is_file():
@@ -206,9 +241,31 @@ def write_text_file(
     overwrite : bool
         If False, writing to an existing file raises an error.
     """
-    file_path = _resolve_path(path)
-    if file_path.exists() and not overwrite:
-        raise FileExistsError(f"File already exists (set overwrite=True to replace): {file_path}")
+    canonical = _canonical_request(path)
+
+    candidate = _resolve_path(path)
+    try:
+        candidate.relative_to(WRITE_ROOT)
+        file_path = candidate
+    except ValueError:
+        file_path = (WRITE_ROOT / path).resolve()
+        try:
+            file_path.relative_to(WRITE_ROOT)
+        except ValueError as exc:
+            raise ValueError(
+                f"Write path {file_path} escapes the allowed directory {WRITE_ROOT}"
+            ) from exc
+
+    mapped_path = WRITE_HISTORY.get(canonical)
+    auto_renamed = False
+
+    if mapped_path and mapped_path.exists() and not overwrite:
+        file_path = mapped_path
+    elif file_path.exists() and not overwrite:
+        file_path = _generate_unique_path(file_path)
+        auto_renamed = True
+
+    WRITE_HISTORY[canonical] = file_path
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
     with file_path.open("w", encoding="utf-8") as fh:
@@ -219,6 +276,7 @@ def write_text_file(
             "path": str(file_path.relative_to(ROOT_DIR)),
             "bytes_written": len(content.encode("utf-8")),
             "overwrite": overwrite,
+            "auto_renamed": auto_renamed,
         },
         indent=2,
     )
@@ -227,7 +285,26 @@ def write_text_file(
 @mcp.tool()
 def append_text_file(path: str, content: str) -> str:
     """Append text to a file within the workspace."""
-    file_path = _resolve_path(path)
+    canonical = _canonical_request(path)
+    mapped_path = WRITE_HISTORY.get(canonical)
+
+    if mapped_path and mapped_path.exists():
+        file_path = mapped_path
+    else:
+        candidate = _resolve_path(path)
+        try:
+            candidate.relative_to(WRITE_ROOT)
+            file_path = candidate
+        except ValueError:
+            file_path = (WRITE_ROOT / path).resolve()
+            try:
+                file_path.relative_to(WRITE_ROOT)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Append path {file_path} escapes the allowed directory {WRITE_ROOT}"
+                ) from exc
+        WRITE_HISTORY[canonical] = file_path
+
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
     if not file_path.is_file():

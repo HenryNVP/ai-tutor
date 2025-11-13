@@ -23,7 +23,7 @@ streamlit run apps/ui.py
 
 - **`list_directory(path, recursive, max_entries)`** - List files and directories
 - **`read_file(path)`** - Read file contents (max 128 KB)
-- **`write_text_file(path, content)`** - Create or update text files
+- **`write_text_file(path, content)`** - Create or update text files (auto-generates a timestamped name if the file exists and `overwrite=False`)
 - **`delete_path(path)`** - Delete files or directories
 
 ## Configuration
@@ -40,6 +40,9 @@ export FS_MCP_ALLOW_HIDDEN=true
 
 # Change max read size
 export FS_MCP_MAX_READ_BYTES=262144  # 256 KB
+
+# Change default write directory (for write_text_file / append_text_file)
+export FS_MCP_WRITE_ROOT=data/generated
 ```
 
 ## Security
@@ -48,6 +51,7 @@ export FS_MCP_MAX_READ_BYTES=262144  # 256 KB
 - Path sanitization prevents directory traversal attacks
 - Hidden files excluded by default (set `FS_MCP_ALLOW_HIDDEN=true` to allow)
 - File read size limited (default: 128 KB)
+- All write operations are redirected to `FS_MCP_WRITE_ROOT` (default: `data/generated`)
 
 ## Example Usage
 
