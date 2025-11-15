@@ -1241,7 +1241,7 @@ def render() -> None:
                         options=display_options,
                         index=current + 1 if current >= 0 else 0,
                         key=f"quiz_q_{idx}",
-                        horizontal=True,
+                        horizontal=False,  # Display each option on a new line
                     )
                     # Update session state from selection
                     selected_index = display_options.index(selection) - 1

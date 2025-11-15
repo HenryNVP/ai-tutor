@@ -183,12 +183,11 @@ class TutorService:
                 if len(context_parts) >= max_passages:
                     break
                 
-                page = hit.chunk.metadata.page or "N/A"
                 context_parts.append(
-                    f"[{idx}] {hit.chunk.metadata.title} (Page {page})\n"
+                    f"[{idx}] {hit.chunk.metadata.title}\n"
                     f"{hit.chunk.text}"
                 )
-                citations.append(f"{hit.chunk.metadata.title} (Page {page})")
+                citations.append(f"{hit.chunk.metadata.title}")
                 idx += 1
             
             if len(context_parts) >= max_passages:

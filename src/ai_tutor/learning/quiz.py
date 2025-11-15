@@ -72,9 +72,8 @@ def _format_references(hits: Sequence[RetrievalHit], limit: int = 5) -> List[str
     formatted: List[str] = []
     for idx, hit in enumerate(hits[:limit], start=1):
         metadata = hit.chunk.metadata
-        page = metadata.page or "N/A"
         formatted.append(
-            f"[{idx}] {metadata.title} (Doc: {metadata.doc_id}, Page: {page})"
+            f"[{idx}] {metadata.title} (Doc: {metadata.doc_id})"
         )
     return formatted
 
@@ -83,9 +82,8 @@ def _render_hit_context(hits: Sequence[RetrievalHit]) -> str:
     blocks: List[str] = []
     for idx, hit in enumerate(hits, start=1):
         metadata = hit.chunk.metadata
-        page = metadata.page or "N/A"
         blocks.append(
-            f"[{idx}] Title: {metadata.title} (Doc: {metadata.doc_id}, Page: {page}, Score: {hit.score:.2f})\n"
+            f"[{idx}] Title: {metadata.title} (Doc: {metadata.doc_id}, Score: {hit.score:.2f})\n"
             f"{hit.chunk.text}"
         )
     return "\n\n".join(blocks)
@@ -153,10 +151,13 @@ class QuizService:
         references = []
         
         # If we have substantial extra_context (e.g., from uploaded documents), prioritize it
+        # For uploaded documents, skip vector store retrieval to avoid external sources
+        is_uploaded_doc_request = topic and any(x in topic.lower() for x in ['uploaded', 'document', 'file', 'upload'])
+        
         if extra_context and len(extra_context) > 500:
             context_sections.append("Document content:\n" + extra_context.strip())
-            # Still do retrieval but treat it as supplementary
-            if topic and not any(x in topic.lower() for x in ['uploaded', 'document', 'file']):
+            # Only do retrieval if NOT an uploaded document request (to avoid external sources)
+            if topic and not is_uploaded_doc_request:
                 hits = list(self.retriever.retrieve(Query(text=topic)))
                 references = _format_references(hits)
                 if hits:
@@ -208,7 +209,10 @@ class QuizService:
             "- Each question must have exactly four answer choices.\n"
             "- Provide the zero-based index of the correct option.\n"
             "- Include a short explanation and cite relevant references when possible.\n"
-            "- Prefer the supplied context for grounding.\n\n"
+            "- Prefer the supplied context for grounding.\n"
+            "- CRITICAL: If 'Document content' is provided, use ONLY that content for questions and references.\n"
+            "- Do NOT cite external sources (like research papers) unless they appear in the provided document content.\n"
+            "- For uploaded documents, all questions and references must come from the provided document content.\n\n"
             f"Context:\n{context_block}"
         )
         

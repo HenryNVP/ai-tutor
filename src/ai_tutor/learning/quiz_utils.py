@@ -20,6 +20,7 @@ def quiz_to_markdown(quiz: Quiz) -> str:
         for choice_idx, choice in enumerate(question.choices):
             prefix = chr(65 + choice_idx)
             lines.append(f"{prefix}. {choice}")
+            lines.append("")  # Add blank line between options
         lines.append("")
         
         # Add correct answer

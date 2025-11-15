@@ -378,6 +378,8 @@ class TutorAgent:
                 "  * qa_agent will retrieve document content, generate summary, and save to file\n"
                 "- 'create text file about [topic]' (no document mentioned) → call write_text_file() directly\n"
                 "- 'quiz' / 'questions' / 'test' → call generate_quiz(topic, count) ONCE\n"
+                "  * IMPORTANT: If user asks for quiz from uploaded documents, use topic='uploaded documents'\n"
+                "  * The generate_quiz tool will use the uploaded document content automatically\n"
                 "- STEM questions → hand off to qa_agent\n"
                 "- Current events/news → hand off to web_agent\n"
                 "- File uploads → hand off to ingestion_agent\n\n"
@@ -386,6 +388,7 @@ class TutorAgent:
                 "- If user asks to summarize an uploaded document → hand off to qa_agent\n"
                 "- If user asks to create a file about a general topic (no document) → use write_text_file()\n"
                 "- 'summarize' is NOT a quiz - route to qa_agent for file creation\n"
+                "- For quiz requests about uploaded documents, call generate_quiz(topic='uploaded documents', count=N)\n"
                 "- Call each tool/handoff ONCE - then stop"
             ),
             tools=[generate_quiz],
