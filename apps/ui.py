@@ -1086,76 +1086,15 @@ def render() -> None:
                 # Check for quiz requests FIRST (before other processing)
                 is_quiz_request = service.detect_quiz_request(prompt)
                 
-                if is_quiz_request:
-                    # Handle quiz creation
-                    num_questions = service.extract_quiz_num_questions(prompt)
-                    topic = service.extract_quiz_topic(prompt)
-                    
-                    # If quiz is about uploaded documents, use that context
-                    effective_topic = topic
-                    quiz_context = None
-                    
-                    if topic == "uploaded documents" or is_question_about_uploaded_docs(prompt):
-                        # Use uploaded documents context
-                        if uploaded_docs_context:
-                            quiz_context = uploaded_docs_context
-                            effective_topic = "Uploaded documents"
-                        elif st.session_state.chat_files_ingested and st.session_state.chat_uploaded_filenames:
-                            # Retrieve content from uploaded documents for quiz using service layer
-                            queries = []
-                            for filename in st.session_state.chat_uploaded_filenames:
-                                query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
-                                queries.append(query_text)
-                            
-                            # Use service layer for retrieval
-                            filtered_hits = service.retrieve_multiple_queries(
-                                queries=queries,
-                                filenames=st.session_state.chat_uploaded_filenames,
-                                top_k=50
-                            )
-                            
-                            # Additional filtering
-                            filtered_hits = filter_hits_by_filenames(
-                                filtered_hits,
-                                st.session_state.chat_uploaded_filenames
-                            )
-                            
-                            if filtered_hits:
-                                # Use service layer for formatting
-                                quiz_context, _ = service.format_context_from_hits(
-                                    hits=filtered_hits,
-                                    max_passages=15
-                                )
-                                effective_topic = "Uploaded documents"
-                    
-                    # Use quiz context if available, otherwise uploaded docs context
-                    extra_context = quiz_context or uploaded_docs_context
-                    
-                    with st.spinner("Creating quiz..."):
-                        quiz_obj = service.create_quiz(
-                            learner_id=learner_id,
-                            topic=effective_topic,
-                            num_questions=num_questions,
-                            difficulty=None,
-                            extra_context=extra_context,
-                        )
-                    st.session_state.quiz = quiz_obj.model_dump(mode="json")
-                    st.session_state.quiz_answers = {}
-                    st.session_state.quiz_result = None
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                    quiz_markdown = service.system.quiz_to_markdown(quiz_obj)
-                    _add_generated_file(
-                        name=f"quiz_{effective_topic.replace(' ', '_')}_{timestamp}.md",
-                        content=quiz_markdown,
-                        kind="text",
-                        mime="text/markdown",
-                        binary=False,
-                        language="markdown",
-                        set_preview=False,
-                    )
-                    st.rerun()
+                # NOTE: All requests (including quiz and summary requests) now go through
+                # TutorAgent (orchestrator) to ensure proper routing and tool access.
+                # The orchestrator will:
+                # - Route quiz requests → call generate_quiz tool
+                # - Route summary requests → hand off to QA agent (which can use write_text_file)
+                # - Route regular Q&A → hand off to QA agent or web agent
                 
-                # Check if question is specifically about uploaded documents (but not a quiz request)
+                # We still prepare context for uploaded documents to pass as extra_context,
+                # but let the agent system handle the actual routing and tool calls.
                 filter_to_uploaded = (
                     is_question_about_uploaded_docs(prompt) and
                     st.session_state.chat_files_ingested and
@@ -1163,84 +1102,71 @@ def render() -> None:
                     not is_quiz_request
                 )
                 
+                # Prepare context from uploaded documents if available
+                uploaded_docs_context_for_agent = None
                 if filter_to_uploaded:
-                        # Do custom retrieval filtered to uploaded documents
-                        with st.spinner("Searching uploaded documents..."):
-                            # Build queries from filenames and user question
-                            queries = []
-                            for filename in st.session_state.chat_uploaded_filenames:
-                                query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
-                                queries.append(query_text)
-                            queries.append(prompt)  # Add user's question
-                            
-                            # Use service layer for retrieval (handles filtering, deduplication)
-                            filtered_hits = service.retrieve_multiple_queries(
-                                queries=queries,
-                                filenames=st.session_state.chat_uploaded_filenames,
-                                top_k=50
-                            )
-                            
-                            # Additional filtering by filenames (service handles source_filter, but double-check)
-                            filtered_hits = filter_hits_by_filenames(
-                                filtered_hits,
-                                st.session_state.chat_uploaded_filenames
-                            )
-                            
-                            # Show feedback
-                            if filtered_hits:
-                                st.caption(f"📚 Found {len(filtered_hits)} passages from your uploaded documents")
-                            else:
-                                st.warning("No relevant passages found in uploaded documents. Using general knowledge...")
-                            
-                            # Format context using service layer
-                            custom_context, citations = service.format_context_from_hits(
-                                hits=filtered_hits[:5],
-                                max_passages=5
-                            )
+                    # Retrieve context from uploaded documents to pass as extra_context
+                    # The agent will use this context but still route through proper agents
+                    with st.spinner("Searching uploaded documents..."):
+                        queries = []
+                        for filename in st.session_state.chat_uploaded_filenames:
+                            query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
+                            queries.append(query_text)
+                        queries.append(prompt)
                         
-                        # Answer with ONLY filtered context using service layer
-                        with st.spinner("Generating answer..."):
-                            response = service.answer_with_context(
-                                learner_id=learner_id,
-                                question=prompt,
-                                context=custom_context
+                        filtered_hits = service.retrieve_multiple_queries(
+                            queries=queries,
+                            filenames=st.session_state.chat_uploaded_filenames,
+                            top_k=50
+                        )
+                        
+                        filtered_hits = filter_hits_by_filenames(
+                            filtered_hits,
+                            st.session_state.chat_uploaded_filenames
+                        )
+                        
+                        if filtered_hits:
+                            st.caption(f"📚 Found {len(filtered_hits)} passages from your uploaded documents")
+                            uploaded_docs_context_for_agent, _ = service.format_context_from_hits(
+                                hits=filtered_hits[:15],
+                                max_passages=15
                             )
-                            # Add hits to response for display
-                            response.hits = filtered_hits[:5]
-                            response.citations = citations
-                else:
-                    # Regular Q&A - let agent handle it
-                    # Combine quiz context and uploaded docs context
-                    combined_context = None
-                    if uploaded_docs_context and quiz_context:
-                        combined_context = f"{uploaded_docs_context}\n\n{quiz_context}"
-                    elif uploaded_docs_context:
-                        combined_context = uploaded_docs_context
-                    elif quiz_context:
-                        combined_context = quiz_context
-                    
-                    # If user mentions "documents" and we have uploaded files, enhance the prompt
-                    enhanced_prompt = prompt
-                    if uploaded_docs_context and ("document" in prompt.lower() or "file" in prompt.lower() or "pdf" in prompt.lower()):
-                        # Extract document titles from context
-                        if st.session_state.chat_uploaded_filenames:
-                            doc_names = [Path(f).stem.replace('_', ' ').replace('-', ' ') for f in st.session_state.chat_uploaded_filenames]
-                            enhanced_prompt = f"{prompt} (Note: User has uploaded documents about: {', '.join(doc_names)})"
-                    
-                    with st.spinner("Thinking..."):
-                        try:
-                            # Use service layer for Q&A
-                            response = service.answer_question(
-                                learner_id=learner_id,
-                                question=enhanced_prompt,
-                                extra_context=combined_context,
-                            )
-                        except Exception as e:
-                            error_msg = str(e)
-                            st.error(f"❌ Error generating answer: {error_msg}")
-                            logger.exception("Error in answer_question")
-                            # Use service layer to create error response
-                            response = service.create_error_response(error_msg)
+                        else:
+                            st.warning("No relevant passages found in uploaded documents. Using general knowledge...")
+                
+                # Always route through TutorAgent for proper agent orchestration
+                # Combine all available context (uploaded docs, quiz context, etc.)
+                combined_context = None
+                if uploaded_docs_context_for_agent:
+                    combined_context = uploaded_docs_context_for_agent
+                elif uploaded_docs_context:
+                    combined_context = uploaded_docs_context
+                elif quiz_context:
+                    combined_context = quiz_context
+                
+                # If user mentions "documents" and we have uploaded files, enhance the prompt
+                enhanced_prompt = prompt
+                if uploaded_docs_context and ("document" in prompt.lower() or "file" in prompt.lower() or "pdf" in prompt.lower()):
+                    # Extract document titles from context
+                    if st.session_state.chat_uploaded_filenames:
+                        doc_names = [Path(f).stem.replace('_', ' ').replace('-', ' ') for f in st.session_state.chat_uploaded_filenames]
+                        enhanced_prompt = f"{prompt} (Note: User has uploaded documents about: {', '.join(doc_names)})"
+                
+                with st.spinner("Thinking..."):
+                    try:
+                        # Route ALL requests through TutorAgent (orchestrator)
+                        # This ensures proper agent routing and tool access (e.g., write_text_file for summaries)
+                        response = service.answer_question(
+                            learner_id=learner_id,
+                            question=enhanced_prompt,
+                            extra_context=combined_context,
+                        )
+                    except Exception as e:
+                        error_msg = str(e)
+                        st.error(f"❌ Error generating answer: {error_msg}")
+                        logger.exception("Error in answer_question")
+                        # Use service layer to create error response
+                        response = service.create_error_response(error_msg)
                 
                 if response.answer:
                     placeholder.markdown(format_answer(response.answer))
@@ -1255,6 +1181,18 @@ def render() -> None:
                     st.session_state.quiz = response.quiz.model_dump(mode="json")
                     st.session_state.quiz_answers = {}
                     st.session_state.quiz_result = None
+                    # Generate quiz markdown file (similar to old behavior)
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                    quiz_markdown = service.system.quiz_to_markdown(response.quiz)
+                    _add_generated_file(
+                        name=f"quiz_{response.quiz.topic.replace(' ', '_')}_{timestamp}.md",
+                        content=quiz_markdown,
+                        kind="text",
+                        mime="text/markdown",
+                        binary=False,
+                        language="markdown",
+                        set_preview=False,
+                    )
 
                 st.session_state.messages.append(
                     {

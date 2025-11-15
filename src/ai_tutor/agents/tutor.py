@@ -254,6 +254,7 @@ class TutorAgent:
             self.MIN_CONFIDENCE, 
             handoffs=[self.web_agent],  # Allow QA → Web fallback
             mcp_servers=list(self.mcp_servers.values()),  # Pass persistent MCP connections (tools cached per session)
+            mcp_server_names=list(self.mcp_servers.keys()),  # Pass server names for proper detection
         )
         if self.mcp_servers:
             logger.info("[TutorAgent] Agents built with MCP tool access (%d server(s))", len(self.mcp_servers))
@@ -804,13 +805,14 @@ class TutorAgent:
             while iteration < max_iterations:
                 iteration += 1
                 iteration_start = time.time()
-                logger.info(f"[TutorAgent] Running agent iteration {iteration}/{max_iterations}")
+                agent_name = agent_to_run.name if hasattr(agent_to_run, 'name') else 'unknown'
+                logger.info(f"[TutorAgent] Running agent iteration {iteration}/{max_iterations} with agent: {agent_name}")
                 
                 try:
                     # Use non-streaming for more reliable output capture
                     # Streaming can miss final output in some cases
                     # Add timeout to prevent hanging on MCP server calls
-                    logger.debug(f"[TutorAgent] Running agent (non-streaming) for iteration {iteration}")
+                    logger.debug(f"[TutorAgent] Running agent (non-streaming) for iteration {iteration}: {agent_name}")
                     import asyncio
                     try:
                         result = await asyncio.wait_for(
@@ -823,6 +825,32 @@ class TutorAgent:
                     
                     iteration_duration = time.time() - iteration_start
                     logger.info(f"[TutorAgent] Iteration {iteration} completed in {iteration_duration:.2f}s")
+                    
+                    # Log tool calls for debugging
+                    if result:
+                        tool_calls_found = False
+                        # Check if result has tool call information
+                        if hasattr(result, 'steps') and result.steps:
+                            for step in result.steps:
+                                if hasattr(step, 'tool_calls') and step.tool_calls:
+                                    for tool_call in step.tool_calls:
+                                        tool_name = getattr(tool_call, 'name', 'unknown')
+                                        logger.info(f"[TutorAgent] 🔧 Tool called: {tool_name}")
+                                        tool_calls_found = True
+                                if hasattr(step, 'function_call') and step.function_call:
+                                    func_name = getattr(step.function_call, 'name', 'unknown')
+                                    logger.info(f"[TutorAgent] 🔧 Function called: {func_name}")
+                                    tool_calls_found = True
+                        # Check for MCP tool calls in events
+                        if hasattr(result, 'events') and result.events:
+                            for event in result.events:
+                                if hasattr(event, 'type') and 'tool' in str(event.type).lower():
+                                    logger.info(f"[TutorAgent] 🔧 Tool event detected: {event.type}")
+                                    tool_calls_found = True
+                        # Log if no tools were called (for debugging file creation issues)
+                        if not tool_calls_found and ('summary' in prompt.lower() or 'file' in prompt.lower() or 'save' in prompt.lower()):
+                            logger.warning(f"[TutorAgent] ⚠️  No tool calls detected for request that might need file creation: {prompt[:100]}...")
+                            logger.warning(f"[TutorAgent] ⚠️  Agent may have generated text instead of calling write_text_file tool")
                     
                     if result and result.final_output:
                         response_text = result.final_output.strip()
@@ -844,8 +872,12 @@ class TutorAgent:
                     # Check if this is a handoff/routing message
                     is_routing_message = any(keyword in response_text.lower() for keyword in [
                         "transfer_to_qa_agent", "transfer_to_web_agent", "handing off", "routing to",
-                        "transferred", "i've transferred", "i've routed"
+                        "transferred", "i've transferred", "i've routed", "handoff", "hand off"
                     ])
+                    
+                    # Log handoff detection for debugging
+                    if is_routing_message:
+                        logger.info(f"[TutorAgent] 🔀 Detected handoff/routing message from {agent_name}: {response_text[:150]}...")
                     
                     # If we got a substantial answer (more than just routing instructions), return it
                     if len(response_text) > 50 and not is_routing_message:
@@ -855,10 +887,11 @@ class TutorAgent:
                     
                     # If this is a routing message, continue to let the handoff complete
                     if is_routing_message:
-                        logger.info(f"[TutorAgent] Detected routing message, continuing to let handoff complete: {response_text[:100]}...")
+                        logger.info(f"[TutorAgent] 🔀 Handoff detected, continuing to let handoff complete: {response_text[:100]}...")
                         # Clear the routing message from final_tokens - we want the actual agent response
                         final_tokens.clear()
                         # Continue the loop to get the handoff agent's response
+                        # Note: The agents SDK handles handoffs internally, so we just need to continue
                         continue
                     
                     # If we got some response but it's short, check if it's a complete answer

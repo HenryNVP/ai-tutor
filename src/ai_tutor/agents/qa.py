@@ -17,6 +17,7 @@ def build_qa_agent(
     min_confidence: float,
     handoffs: Optional[List[Agent]] = None,
     mcp_servers: Optional[List[Any]] = None,
+    mcp_server_names: Optional[List[str]] = None,
 ) -> Agent:
     """Create the local QA agent that consults the vector store."""
     
@@ -137,13 +138,47 @@ def build_qa_agent(
     # If MCP servers are available, use them; otherwise use direct retriever
     active_mcp_servers = [server for server in (mcp_servers or []) if server]
     
+    if active_mcp_servers:
+        logger.info(f"[QA Agent] Building with {len(active_mcp_servers)} MCP server(s) - tools will be automatically available")
+        # Check if filesystem MCP server is present (for write_text_file)
+        # Use server names if provided (more reliable than string matching)
+        has_filesystem = False
+        if mcp_server_names:
+            # Check server names for filesystem indicator
+            has_filesystem = any(
+                "filesystem" in name.lower() or "fs" in name.lower() or name.lower() == "filesystem"
+                for name in mcp_server_names
+            )
+        else:
+            # Fallback: try to detect from server object (less reliable)
+            # Check if server has write_text_file tool or if name contains filesystem
+            for server in active_mcp_servers:
+                server_str = str(server).lower()
+                if "filesystem" in server_str or "fs" in server_str:
+                    has_filesystem = True
+                    break
+                # Try checking server name attribute if available
+                if hasattr(server, 'name') and server.name:
+                    if "filesystem" in server.name.lower() or "fs" in server.name.lower():
+                        has_filesystem = True
+                        break
+        
+        if has_filesystem:
+            logger.info("[QA Agent] ✅ Filesystem MCP server detected - write_text_file tool should be available")
+        else:
+            logger.warning("[QA Agent] ⚠️  No filesystem MCP server detected - write_text_file may not be available")
+            if mcp_server_names:
+                logger.debug(f"[QA Agent] Available MCP server names: {', '.join(mcp_server_names)}")
+    
     return Agent(
         name="qa_agent",
         model="gpt-4o-mini",
         instructions=(
             "You answer STEM questions and create summary files from local course materials.\n\n"
 
-            "WHEN USER ASKS TO SUMMARIZE A DOCUMENT:\n"
+            "WHEN USER ASKS TO SUMMARIZE A DOCUMENT AND SAVE TO FILE:\n"
+            "**CRITICAL: You MUST use the write_text_file tool - DO NOT just write text in your response!**\n\n"
+            "Step-by-step process:\n"
             "1. Identify the document name/topic from the user's request\n"
             "   - If user says 'summarize the uploaded document' → document = 'uploaded document'\n"
             "   - If user mentions a specific document (e.g., 'CMPE249 Lecture9') → use that name\n"
@@ -152,9 +187,16 @@ def build_qa_agent(
             "   - For specific document: question='What is the content of [document name]?'\n"
             "   - Use top_k=10 to get enough context for a summary\n"
             "3. Generate a comprehensive 1-page summary (~500-800 words) from the retrieved context\n"
-            "4. Call write_text_file to save it:\n"
-            "   write_text_file(path='data/generated/{document_name}_summary.txt', content=<FULL_SUMMARY_TEXT>)\n"
-            "5. Confirm: 'I've saved the summary to data/generated/{filename}.txt'\n\n"
+            "4. **MANDATORY: Call write_text_file tool to save the file**\n"
+            "   - You MUST call the write_text_file function/tool - this is NOT optional\n"
+            "   - Tool name: write_text_file\n"
+            "   - Required parameters:\n"
+            "     * path: 'data/generated/{document_name}_summary.txt' (sanitize document_name for filename)\n"
+            "     * content: The FULL summary text you generated in step 3\n"
+            "   - Do NOT include the summary text in your chat response - ONLY call the tool\n"
+            "   - The tool will create the file - you don't need to write it manually\n"
+            "5. After successfully calling write_text_file, respond with ONLY: 'I've saved the summary to data/generated/{filename}.txt'\n\n"
+            "**REMINDER: If write_text_file is not in your available tools list, respond with: 'Error: write_text_file tool not available. Please check MCP server connection.'**\n\n"
 
             "WHEN USER ASKS A REGULAR QUESTION:\n"
             "1. Call retrieve_local_context ONCE with the user's exact question\n"
@@ -164,10 +206,11 @@ def build_qa_agent(
             "CRITICAL RULES:\n"
             "- For summaries: DO NOT use the full user instruction as the retrieve_local_context question\n"
             "- For summaries: Extract the document name and ask about its content\n"
-            "- For summaries: You MUST call write_text_file - do NOT just provide text in chat\n"
+            "- For summaries: You MUST call write_text_file TOOL - do NOT just provide text in chat\n"
+            "- For summaries: If write_text_file is not in your available tools, say 'write_text_file tool not available'\n"
             "- For summaries: DO NOT hand off to web_agent - you handle file creation directly\n"
             "- Call retrieve_local_context ONCE per request (it's cached)\n"
-            "- write_text_file is available in your tools - use it when creating files"
+            "- write_text_file is a MCP tool that should be available if filesystem MCP server is connected"
         ),
         tools=[retrieve_local_context],
         handoffs=handoffs or [],

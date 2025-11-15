@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -114,6 +115,21 @@ class TutorSystem:
         """
         self.settings = settings
         configure_logging(settings.logging.level, settings.logging.use_json)
+        
+        # Enable OpenAI tracing if available (for debugging agent tool calls)
+        try:
+            from agents import set_trace_processors, set_tracing_disabled
+            from agents.tracing.processors import default_processor
+            # Only enable if not explicitly disabled
+            tracing_disabled = os.getenv("OPENAI_TRACING_DISABLED", "false").lower() in ("true", "1", "yes")
+            if not tracing_disabled:
+                set_tracing_disabled(disabled=False)
+                set_trace_processors([default_processor()])
+                logger.info("OpenAI tracing enabled for agent tool calls")
+        except ImportError:
+            logger.debug("OpenAI tracing not available (optional dependency)")
+        except Exception as e:
+            logger.warning(f"Failed to enable tracing: {e}")
 
         # Initialize core embedding and storage infrastructure
         self.embedder = EmbeddingClient(settings.embeddings, api_key=api_key)

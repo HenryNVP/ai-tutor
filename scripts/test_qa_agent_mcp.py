@@ -146,12 +146,19 @@ async def test_qa_agent_mcp_tools():
     try:
         # Build QA agent with MCP servers
         print("\n4. Building QA agent with MCP servers...")
+        # Extract server names for proper detection
+        server_names = []
+        if chroma_server_obj:
+            server_names.append("chroma")
+        if fs_server_obj:
+            server_names.append("filesystem")
         qa_agent = build_qa_agent(
             retriever=retriever,
             state=state,
             min_confidence=0.2,
             handoffs=[],
             mcp_servers=mcp_servers,
+            mcp_server_names=server_names,
         )
         print(f"   ✅ QA agent built")
         
