@@ -12,11 +12,19 @@ from typing import Any, Callable, Dict, List, Optional
 
 from openai.types.responses import ResponseContentPartDoneEvent, ResponseTextDeltaEvent
 
-from agents import Agent, RawResponsesStreamEvent, Runner, function_tool
+from agents import Agent, Runner
 from agents import SQLiteSession
 
 from .ingestion import build_ingestion_agent
+from .note import build_note_agent
 from .qa import build_qa_agent
+from .quiz_agent import build_quiz_agent
+from .routing import (
+    RoutingDecision,
+    apply_deterministic_routing,
+    extract_source_mentions,
+    should_use_source_filter,
+)
 from .web import build_web_agent
 
 from ai_tutor.config.schema import RetrievalConfig
@@ -123,25 +131,23 @@ class AgentState:
 
 class TutorAgent:
     """
-    Multi-agent tutoring orchestrator using the OpenAI Agents SDK.
+    Multi-agent tutoring coordinator using the OpenAI Agents SDK.
     
-    This class implements a hierarchical agent architecture where an orchestrator
-    routes student queries to specialist agents based on query type and content.
-    The system supports:
-    - STEM Q&A with retrieval-augmented generation (QA Agent)
-    - Current events and web searches (Web Agent)
-    - Document ingestion and corpus management (Ingestion Agent)
-    - Interactive quiz generation and evaluation (Quiz Service)
+    This class implements an agent-first architecture with a thin router that
+    applies deterministic rules (document references, quizzes, ingestion, news)
+    before delegating to specialist agents. When heuristics are inconclusive,
+    a lightweight routing agent produces structured JSON to guide delegation.
     
-    The orchestrator maintains conversation context through SQLite sessions that
-    automatically rotate daily to prevent token overflow. All specialist results
-    are collected via a shared AgentState object and formatted into structured
-    TutorResponse objects.
+    Supported capabilities:
+    - STEM Q&A with retrieval-augmented generation (qa_agent)
+    - Current events and web searches (web_agent)
+    - Document ingestion and corpus management (ingestion_agent)
+    - Summaries and note files (note_agent)
+    - Quiz generation/evaluation (quiz_agent + QuizService)
     
-    Architecture
-    ------------
-    Student Query → Orchestrator Agent → [QA | Web | Ingestion] Agent → Response
-                                       ↘ Quiz Service → Interactive Assessment
+    Conversation context is maintained via SQLite sessions that rotate
+    automatically to prevent prompt bloat. Specialist results are stored in
+    AgentState and formatted into TutorResponse objects.
     
     Attributes
     ----------
@@ -221,179 +227,71 @@ class TutorAgent:
         # Agent instances (initialized in _build_agents)
         self.ingestion_agent: Agent | None = None
         self.qa_agent: Agent | None = None
+        self.note_agent: Agent | None = None
         self.web_agent: Agent | None = None
-        self.orchestrator_agent: Agent | None = None
+        self.quiz_agent: Agent | None = None
+        self.routing_agent: Agent | None = None
+        self._routing_session: SQLiteSession | None = None
 
         self._build_agents()
 
     def _build_agents(self) -> None:
         """
-        Construct the multi-agent hierarchy with proper handoff configuration.
+        Construct the specialist agents for the agent-first architecture.
         
-        This method builds three specialist agents and one orchestrator:
-        1. Ingestion Agent: Handles document upload and processing requests
-        2. Web Agent: Performs web searches for non-local knowledge
-        3. QA Agent: Answers STEM questions using RAG over course materials
-        4. Orchestrator: Routes queries to appropriate specialists
-        
-        The QA Agent is configured with a handoff to the Web Agent, allowing
-        automatic fallback when local retrieval yields insufficient results.
-        
-        Additionally, a generate_quiz tool is defined inline to enable the
-        orchestrator to create assessments without agent handoff overhead.
+        Each agent owns a single responsibility:
+        - ingestion_agent: handles new document ingestion
+        - qa_agent: retrieval-augmented Q&A
+        - note_agent: summaries and note files
+        - web_agent: current events via web search
+        - quiz_agent: quiz generation via QuizService
+        - routing_agent: LLM fallback router that emits structured JSON
         """
-        # Build specialist agents (built once, reused across all queries for persistent context)
-        # MCP server connection is shared and tool list is cached to avoid redundant API calls
-        logger.debug("[TutorAgent] Building agents with persistent MCP server context")
+        logger.debug("[TutorAgent] Building specialist agents with persistent MCP context")
         self.ingestion_agent = build_ingestion_agent(self.ingest_fn)
-        # Web agent uses WebSearchTool directly - no SearchTool wrapper needed
         self.web_agent = build_web_agent(state=self.state)
         self.qa_agent = build_qa_agent(
             self.retriever, 
             self.state, 
             self.MIN_CONFIDENCE, 
-            handoffs=[self.web_agent],  # Allow QA → Web fallback
             mcp_servers=list(self.mcp_servers.values()),  # Pass persistent MCP connections (tools cached per session)
             mcp_server_names=list(self.mcp_servers.keys()),  # Pass server names for proper detection
+        )
+        self.note_agent = build_note_agent(
+            self.retriever,
+            self.state,
+            self.MIN_CONFIDENCE,
+            mcp_servers=list(self.mcp_servers.values()),
+            mcp_server_names=list(self.mcp_servers.keys()),
+        )
+        self.quiz_agent = build_quiz_agent(
+            self.quiz_service,
+            self.state,
+            get_profile=lambda: self._active_profile,
+            get_extra_context=lambda: self._active_extra_context,
         )
         if self.mcp_servers:
             logger.info("[TutorAgent] Agents built with MCP tool access (%d server(s))", len(self.mcp_servers))
         else:
             logger.info("[TutorAgent] Agents built without MCP servers (direct vector store access)")
-
-        # Cache to prevent duplicate generate_quiz calls within the same execution
-        _quiz_call_cache: dict[str, str] = {}
-
-        @function_tool
-        def generate_quiz(topic: str, count: int = 4, difficulty: str | None = None) -> str:
-            """
-            Generate an interactive quiz on a given topic.
-            
-            Creates a multiple-choice quiz and displays it in an interactive interface
-            where students can select answers and get immediate feedback.
-            
-            ⚠️ CRITICAL: CALL THIS TOOL ONLY ONCE per quiz request.
-            - This tool automatically prevents duplicate calls - if called multiple times with the same topic, it returns the cached result.
-            - Do NOT call this tool multiple times "to be sure" - one call is sufficient.
-            - The tool checks for existing quizzes and prevents duplicate generation automatically.
-            
-            Parameters
-            ----------
-            topic : str
-                Subject matter for the quiz (e.g., "machine learning", "physics", "calculus").
-                Should be a broad, searchable topic, NOT "documents" or "uploaded files".
-            count : int, default=4
-                Number of questions to generate. Valid range: 3 to 40.
-                IMPORTANT: If user says "create 20 quizzes", use count=20 (their exact number).
-                Only use default (4) if user doesn't specify a number.
-            difficulty : str | None, optional
-                Explicit difficulty level. If None, inferred from learner profile.
-            
-            Returns
-            -------
-            str
-                Confirmation message for the orchestrator to relay to the student.
-                
-            Examples
-            --------
-            User says: "create 20 quizzes from documents"
-            → Call: generate_quiz(topic='computer science', count=20) ONCE
-            
-            User says: "quiz me on calculus"  
-            → Call: generate_quiz(topic='calculus', count=4) ONCE
-            """
-            # Create cache key for this call
-            cache_key = f"{topic.lower().strip()}:{count}"
-            
-            # Check per-call cache first (prevents multiple calls within same execution)
-            if cache_key in _quiz_call_cache:
-                logger.info(f"[TutorAgent] generate_quiz already called for '{topic}' in this execution, returning cached result")
-                return _quiz_call_cache[cache_key]
-            
-            # Check if quiz was already generated for this topic in this conversation
-            if self.state.last_quiz is not None:
-                existing_topic = self.state.last_quiz.topic.lower().strip()
-                requested_topic = topic.lower().strip()
-                # If topics match (fuzzy match - check if one contains the other)
-                if existing_topic == requested_topic or existing_topic in requested_topic or requested_topic in existing_topic:
-                    logger.info(f"[TutorAgent] Quiz already generated for topic '{topic}', returning existing quiz")
-                    result = (
-                        f"Quiz on {self.state.last_quiz.topic} was already prepared ({len(self.state.last_quiz.questions)} questions). "
-                        "The quiz is ready for the learner to take."
-                    )
-                    _quiz_call_cache[cache_key] = result
-                    return result
-            
-            # Validate and clamp question count to reasonable range
-            try:
-                question_count = int(count)
-            except (TypeError, ValueError):
-                question_count = 4
-            question_count = max(3, min(question_count, 40))  # Enforce [3-40] range
-            
-            # Access the currently active learner profile (set by answer() method)
-            profile = self._active_profile
-            
-            logger.info(f"[TutorAgent] Generating quiz: topic='{topic}', count={question_count}, difficulty={difficulty}")
-            
-            # Generate quiz using the quiz service with all available context
-            try:
-                quiz = self.quiz_service.generate_quiz(
-                    topic=topic,
-                    profile=profile,
-                    num_questions=question_count,
-                    difficulty=difficulty,
-                    extra_context=self._active_extra_context,  # Include uploaded docs
-                )
-            except Exception as e:
-                logger.error(f"[TutorAgent] Quiz generation failed: {e}", exc_info=True)
-                return f"Failed to generate quiz on '{topic}': {str(e)}. Please try again with a different topic or fewer questions."
-            
-            # Store in shared state for orchestrator collection
-            self.state.last_quiz = quiz
-            self.state.last_source = "quiz"
-            
-            logger.info(f"[TutorAgent] Successfully generated quiz: {len(quiz.questions)} questions on '{quiz.topic}'")
-            
-            # Return message for orchestrator to communicate quiz readiness
-            result = (
-                f"Prepared a {len(quiz.questions)}-question quiz on {quiz.topic}. "
-                "Let the learner know the quiz is ready for them to take."
-            )
-            # Cache the result to prevent duplicate calls
-            _quiz_call_cache[cache_key] = result
-            return result
-
-        handoffs = [agent for agent in (self.ingestion_agent, self.qa_agent, self.web_agent) if agent is not None]
-        # Pass MCP servers to orchestrator so it can use filesystem tools if needed
-        orchestrator_mcp_servers = list(self.mcp_servers.values()) if self.mcp_servers else []
-        self.orchestrator_agent = Agent(
-            name="tutor_orchestrator",
+        routing_instructions = (
+            "You are the routing agent. You must decide which specialist agent should handle a learner request.\n"
+            "- Valid routes: qa, note, quiz, web, ingestion.\n"
+            "- Respond ONLY with compact JSON: "
+            '{"route": "...", "reason": "...", "source_mentions": [], "quiz_topic": null, "quiz_count": null, "confidence": 0-1}.\n'
+            "- Prefer deterministic rules: quizzes/tests -> quiz, summaries/notes/files -> note, news/current events -> web, ingestion/upload/indexing -> ingestion, "
+            "otherwise default to qa.\n"
+            "- Preserve exact document titles or filenames in source_mentions; never use placeholders like 'uploaded documents'.\n"
+            "- If unsure, pick the most likely route but lower confidence."
+        )
+        self.routing_agent = Agent(
+            name="routing_agent",
             model="gpt-4o-mini",
-            instructions=(
-                "You are the Orchestrator Agent. Route queries to agents or call tools.\n\n"
-                
-                "ROUTING RULES:\n"
-                "- 'summarize [document/file]' / 'summary of [document]' → hand off to qa_agent\n"
-                "  * qa_agent will retrieve document content, generate summary, and save to file\n"
-                "- 'create text file about [topic]' (no document mentioned) → call write_text_file() directly\n"
-                "- 'quiz' / 'questions' / 'test' → call generate_quiz(topic, count) ONCE\n"
-                "  * IMPORTANT: If user asks for quiz from uploaded documents, use topic='uploaded documents'\n"
-                "  * The generate_quiz tool will use the uploaded document content automatically\n"
-                "- STEM questions → hand off to qa_agent\n"
-                "- Current events/news → hand off to web_agent\n"
-                "- File uploads → hand off to ingestion_agent\n\n"
-                
-                "IMPORTANT:\n"
-                "- If user asks to summarize an uploaded document → hand off to qa_agent\n"
-                "- If user asks to create a file about a general topic (no document) → use write_text_file()\n"
-                "- 'summarize' is NOT a quiz - route to qa_agent for file creation\n"
-                "- For quiz requests about uploaded documents, call generate_quiz(topic='uploaded documents', count=N)\n"
-                "- Call each tool/handoff ONCE - then stop"
-            ),
-            tools=[generate_quiz],
-            handoffs=handoffs,
-            mcp_servers=orchestrator_mcp_servers,  # Give orchestrator access to filesystem MCP tools
+            instructions=routing_instructions,
+        )
+        self._routing_session = SQLiteSession(
+            "ai_tutor_router",
+            db_path=str(self.session_db_path),
         )
 
 
@@ -478,82 +376,70 @@ class TutorAgent:
         on_delta: Optional[Callable[[str], None]],
     ) -> TutorResponse:
         import time
+
         answer_start = time.time()
-        logger.info(f"[TutorAgent] Starting answer generation for question: {question[:100]}...")
-        
-        # Check if we need to prune history before getting session
-        # This ensures we create a new session when we're about to exceed the turn limit
+        logger.info("[TutorAgent] Starting answer generation for learner=%s", learner_id)
+
         current_turn = self.session_turn_counts.get(learner_id, 0)
         if current_turn > 0 and current_turn % self.max_turns_per_session == 0:
-            # We've reached the turn limit, create a new session (prune history)
-            logger.info(f"[TutorAgent] Pruning history: creating new session after {current_turn} turns (keeping only last {self.max_turns_per_session} turns)")
+            logger.info(
+                "[TutorAgent] Pruning history for %s after %s turns",
+                learner_id,
+                current_turn,
+            )
             if learner_id in self.sessions:
                 del self.sessions[learner_id]
-        
+
         session = self._get_session(learner_id)
         self.state.reset()
-        
-        # Increment turn count for history pruning
         self.session_turn_counts[learner_id] = current_turn + 1
 
-        # For orchestrator: minimal prompt with just the question
-        # The specialist agents will get the full context with style hints
-        if self.orchestrator_agent:
-            prompt_sections: List[str] = []
-            if profile:
-                prompt_sections.append("Learner profile summary:")
-                prompt_sections.append(self._render_profile_summary(profile))
-                prompt_sections.append("")
-            prompt_sections.append("Question:")
-            prompt_sections.append(question)
-            prompt = "\n".join(prompt_sections)
-        else:
-            # Fallback for when orchestrator is not used
-            system_preamble = (
-                f"Learner mode: {mode}. Preferred explanation style: {style_hint}. "
-                "Cite supporting evidence using bracketed indices or URLs when available."
-            )
-            prompt_sections: List[str] = [system_preamble, ""]
+        decision = await self._route_question(
+            question=question,
+            extra_context=extra_context,
+            profile=profile,
+        )
+        logger.info(
+            "[TutorAgent] Routing decision: route=%s reason=%s deterministic=%s source_filter=%s",
+            decision.target,
+            decision.reason,
+            decision.deterministic,
+            decision.source_filter,
+        )
 
-            if profile:
-                prompt_sections.append("Learner profile summary:")
-                prompt_sections.append(self._render_profile_summary(profile))
-                prompt_sections.append("")
+        if not decision.source_filter and should_use_source_filter(question):
+            decision.source_filter = extract_source_mentions(question)
 
-            if extra_context:
-                prompt_sections.append("Session documents:")
-                prompt_sections.append(extra_context)
-                prompt_sections.append("")
+        if decision.target == "quiz":
+            decision.quiz_topic = decision.quiz_topic or self._infer_topic_from_request(question)
+            decision.quiz_count = decision.quiz_count or self._infer_count_from_request(question)
 
-            prompt_sections.append("Question:")
-            prompt_sections.append(question)
-            prompt = "\n".join(prompt_sections)
+        prompt = self._build_agent_prompt(
+            question=question,
+            mode=mode,
+            style_hint=style_hint,
+            profile=profile,
+            extra_context=extra_context,
+            decision=decision,
+        )
 
         self._active_profile = profile
         self._active_extra_context = extra_context
         self.state.last_quiz = None
         try:
-            raw_answer = await self._run_specialist(
-                prompt,
-                session,
-                on_delta,
+            answer_text, quiz_payload = await self._execute_decision(
+                decision=decision,
+                prompt=prompt,
+                session=session,
+                on_delta=on_delta,
             )
         finally:
             self._active_profile = None
             self._active_extra_context = None
-        quiz_payload: Optional[Quiz] = None
-        answer_text = raw_answer
-        if raw_answer.strip().startswith("{"):
-            processed, computed_quiz = self._process_quiz_directive(
-                raw_answer,
-                profile=profile,
-                extra_context=extra_context,
-            )
-            if computed_quiz is not None:
-                quiz_payload = computed_quiz
-                answer_text = processed
+
         if quiz_payload is None and self.state.last_quiz is not None:
             quiz_payload = self.state.last_quiz
+
         if quiz_payload is None and self._should_force_quiz(question):
             quiz_payload = self.quiz_service.generate_quiz(
                 topic=self._infer_topic_from_request(question),
@@ -567,8 +453,10 @@ class TutorAgent:
                 f"I've prepared a {len(quiz_payload.questions)}-question quiz on {quiz_payload.topic} for you. "
                 "You can start taking the quiz now!"
             )
-        if not quiz_payload and not self.state.last_citations:
+
+        if quiz_payload is None and not self.state.last_citations:
             answer_text = self._strip_citation_markers(answer_text)
+
         if quiz_payload is None:
             processed, computed_quiz = self._process_quiz_directive(
                 answer_text,
@@ -578,12 +466,23 @@ class TutorAgent:
             if computed_quiz is not None:
                 quiz_payload = computed_quiz
                 answer_text = processed
+
         hits = self.state.last_hits if not quiz_payload else []
         citations = self.state.last_citations if not quiz_payload else []
-        source = "quiz" if quiz_payload else self.state.last_source
+
+        if decision.target == "quiz":
+            source = "quiz"
+        elif decision.target == "web":
+            source = "web"
+        elif decision.target == "note":
+            source = "notes"
+        elif decision.target == "ingestion":
+            source = "ingestion"
+        else:
+            source = self.state.last_source
 
         total_answer_duration = time.time() - answer_start
-        logger.info(f"[TutorAgent] Answer generation complete in {total_answer_duration:.2f}s (answer length: {len(answer_text)} chars)")
+        logger.info("[TutorAgent] Answer generation complete in %.2fs", total_answer_duration)
 
         return TutorResponse(
             answer=answer_text,
@@ -593,6 +492,294 @@ class TutorAgent:
             source=source,
             quiz=quiz_payload,
         )
+
+    async def _route_question(
+        self,
+        question: str,
+        extra_context: Optional[str],
+        profile: Optional[LearnerProfile],
+    ) -> RoutingDecision:
+        decision = apply_deterministic_routing(question, extra_context)
+        if decision:
+            return decision
+        return await self._route_with_llm(question, extra_context, profile)
+
+    async def _route_with_llm(
+        self,
+        question: str,
+        extra_context: Optional[str],
+        profile: Optional[LearnerProfile],
+    ) -> RoutingDecision:
+        if not self.routing_agent:
+            return RoutingDecision(
+                target="qa",
+                reason="Routing agent unavailable; defaulting to QA",
+                deterministic=False,
+                confidence=0.0,
+            )
+
+        routing_prompt = self._build_routing_prompt(
+            question=question,
+            extra_context=extra_context,
+            profile=profile,
+        )
+        session = self._get_routing_session()
+
+        try:
+            result = await Runner.run(self.routing_agent, input=routing_prompt, session=session)
+        except Exception as exc:
+            logger.error("[TutorAgent] Routing agent failed: %s", exc, exc_info=True)
+            return RoutingDecision(
+                target="qa",
+                reason="Routing agent failure; default to QA",
+                deterministic=False,
+                confidence=0.0,
+            )
+
+        payload_text = result.final_output.strip() if result and result.final_output else ""
+        decision = self._parse_routing_response(payload_text)
+        if decision is None:
+            logger.warning("[TutorAgent] Failed to parse routing response: %s", payload_text)
+            return RoutingDecision(
+                target="qa",
+                reason="Routing response unreadable; default to QA",
+                deterministic=False,
+                confidence=0.0,
+            )
+        decision.deterministic = False
+        return decision
+
+    def _build_routing_prompt(
+        self,
+        question: str,
+        extra_context: Optional[str],
+        profile: Optional[LearnerProfile],
+    ) -> str:
+        sections = [
+            "Decide the best agent route for the learner request. Remember to output compact JSON.",
+            "",
+            "Learner request:",
+            question,
+            "",
+        ]
+        if profile:
+            sections.append("Learner profile summary:")
+            sections.append(self._render_profile_summary(profile))
+            sections.append("")
+        if extra_context:
+            sections.append("Session uploads summary:")
+            sections.append(extra_context[:1000])
+            sections.append("")
+        sections.append("Return JSON with keys route, reason, source_mentions, quiz_topic, quiz_count, confidence.")
+        return "\n".join(sections)
+
+    def _parse_routing_response(self, text: str) -> Optional[RoutingDecision]:
+        if not text:
+            return None
+        try:
+            start = text.index("{")
+            end = text.rindex("}") + 1
+            payload = json.loads(text[start:end])
+        except (ValueError, json.JSONDecodeError):
+            logger.debug("[TutorAgent] Unable to parse routing JSON: %s", text)
+            return None
+
+        route = str(payload.get("route", "qa")).strip().lower()
+        if route not in {"qa", "note", "quiz", "web", "ingestion"}:
+            route = "qa"
+
+        reason = str(payload.get("reason") or "LLM routing fallback")
+        source_mentions_raw = payload.get("source_mentions") or []
+        source_mentions = [
+            str(item).strip()
+            for item in source_mentions_raw
+            if isinstance(item, str) and item.strip()
+        ] or None
+
+        quiz_topic = payload.get("quiz_topic")
+        if isinstance(quiz_topic, str):
+            quiz_topic = quiz_topic.strip()
+        else:
+            quiz_topic = None
+        quiz_count = payload.get("quiz_count")
+        try:
+            quiz_count_int = int(quiz_count) if quiz_count is not None else None
+        except (TypeError, ValueError):
+            quiz_count_int = None
+
+        confidence = payload.get("confidence")
+        try:
+            confidence_value = float(confidence)
+        except (TypeError, ValueError):
+            confidence_value = 0.5
+
+        return RoutingDecision(
+            target=route,  # type: ignore[arg-type]
+            reason=reason,
+            source_filter=source_mentions,
+            quiz_topic=quiz_topic or None,
+            quiz_count=quiz_count_int,
+            deterministic=False,
+            confidence=confidence_value,
+        )
+
+    def _build_agent_prompt(
+        self,
+        *,
+        question: str,
+        mode: str,
+        style_hint: str,
+        profile: Optional[LearnerProfile],
+        extra_context: Optional[str],
+        decision: RoutingDecision,
+    ) -> str:
+        sections: List[str] = [
+            f"Learner mode: {mode}",
+            f"Preferred explanation style: {style_hint}",
+            f"Routing reason: {decision.reason}",
+            "",
+        ]
+        if profile:
+            sections.append("Learner profile summary:")
+            sections.append(self._render_profile_summary(profile))
+            sections.append("")
+        if extra_context and decision.target != "quiz":
+            sections.append("Session-provided context (verbatim, do not leak sensitive info):")
+            sections.append(extra_context[:2000])
+            sections.append("")
+        if decision.source_filter:
+            sections.append(
+                "Source filter hints (pass via `source_filter` when calling retrieve_local_context): "
+                + ", ".join(decision.source_filter)
+            )
+            sections.append("")
+        if decision.target == "quiz":
+            sections.append("Quiz metadata:")
+            sections.append(f"topic: {decision.quiz_topic or 'general review'}")
+            sections.append(f"count: {decision.quiz_count or 4}")
+            sections.append("")
+            sections.append("Use generate_quiz exactly once.")
+        sections.append("Learner request:")
+        sections.append(question)
+        return "\n".join(sections)
+
+    async def _execute_decision(
+        self,
+        *,
+        decision: RoutingDecision,
+        prompt: str,
+        session: SQLiteSession,
+        on_delta: Optional[Callable[[str], None]],
+    ) -> tuple[str, Optional[Quiz]]:
+        if decision.target == "quiz":
+            answer = await self._run_quiz_agent(prompt, session, on_delta)
+            return answer, self.state.last_quiz
+
+        if decision.target == "web":
+            answer = await self._run_web_agent(prompt, session, on_delta)
+            self.state.last_source = "web"
+            return answer, None
+
+        if decision.target == "ingestion":
+            answer = await self._run_domain_agent(self.ingestion_agent, prompt, session, on_delta)
+            return answer, None
+
+        if decision.target == "note":
+            answer = await self._run_domain_agent(self.note_agent, prompt, session, on_delta)
+            if self.state.last_source is None:
+                self.state.last_source = "notes"
+            return answer, None
+
+        answer = await self._run_domain_agent(
+            self.qa_agent,
+            prompt,
+            session,
+            on_delta,
+            allow_web_fallback=True,
+        )
+        return answer, None
+
+    async def _run_domain_agent(
+        self,
+        agent: Agent | None,
+        prompt: str,
+        session: SQLiteSession,
+        on_delta: Optional[Callable[[str], None]],
+        *,
+        allow_web_fallback: bool = False,
+    ) -> str:
+        if agent is None:
+            return "I could not complete that request because the required agent is unavailable."
+        try:
+            result = await Runner.run(agent, input=prompt, session=session)
+        except Exception as exc:
+            logger.error("[TutorAgent] Agent %s failed: %s", agent.name, exc, exc_info=True)
+            return f"I encountered an error while delegating to {agent.name}: {exc}"
+
+        text = result.final_output.strip() if result and result.final_output else ""
+        if allow_web_fallback and self._should_web_fallback(text):
+            logger.info("[TutorAgent] QA requested web fallback")
+            return await self._run_web_agent(prompt, session, on_delta)
+
+        if on_delta and text:
+            for char in text:
+                on_delta(char)
+
+        if text:
+            return text
+        return "I could not generate a response. Please try rephrasing your request."
+
+    async def _run_web_agent(
+        self,
+        prompt: str,
+        session: SQLiteSession,
+        on_delta: Optional[Callable[[str], None]],
+    ) -> str:
+        if self.web_agent is None:
+            return "Web search is unavailable at the moment."
+        try:
+            result = await Runner.run(self.web_agent, input=prompt, session=session)
+        except Exception as exc:
+            logger.error("[TutorAgent] Web agent failed: %s", exc, exc_info=True)
+            return f"I attempted to search the web but encountered an error: {exc}"
+
+        text = result.final_output.strip() if result and result.final_output else ""
+        if on_delta and text:
+            for char in text:
+                on_delta(char)
+        return text or "I could not find relevant current information."
+
+    async def _run_quiz_agent(
+        self,
+        prompt: str,
+        session: SQLiteSession,
+        on_delta: Optional[Callable[[str], None]],
+    ) -> str:
+        if self.quiz_agent is None:
+            return "Quiz generation is currently unavailable."
+        try:
+            result = await Runner.run(self.quiz_agent, input=prompt, session=session)
+        except Exception as exc:
+            logger.error("[TutorAgent] Quiz agent failed: %s", exc, exc_info=True)
+            return f"Quiz generation failed: {exc}"
+
+        text = result.final_output.strip() if result and result.final_output else ""
+        if on_delta and text:
+            for char in text:
+                on_delta(char)
+        return text or "Prepared the requested quiz."
+
+    def _should_web_fallback(self, answer: str) -> bool:
+        normalized = answer.strip().lower()
+        return normalized.startswith("handoff to web_agent") or normalized.startswith("handoff to web agent")
+
+    def _get_routing_session(self) -> SQLiteSession:
+        if self._routing_session is None:
+            self._routing_session = SQLiteSession(
+                "ai_tutor_router",
+                db_path=str(self.session_db_path),
+            )
+        return self._routing_session
 
     def _get_session(self, learner_id: str) -> SQLiteSession:
         """
@@ -790,190 +977,3 @@ class TutorAgent:
                 pass
         return 4
 
-    async def _run_specialist(
-        self,
-        prompt: str,
-        session: SQLiteSession,
-        on_delta: Optional[Callable[[str], None]],
-    ) -> str:
-        import time
-        start_time = time.time()
-        final_tokens: List[str] = []
-        max_iterations = 5  # Increased to allow handoffs to complete (orchestrator → specialist agent)
-        iteration = 0
-
-        agent_to_run = self.orchestrator_agent or self.qa_agent
-        
-        try:
-            while iteration < max_iterations:
-                iteration += 1
-                iteration_start = time.time()
-                agent_name = agent_to_run.name if hasattr(agent_to_run, 'name') else 'unknown'
-                logger.info(f"[TutorAgent] Running agent iteration {iteration}/{max_iterations} with agent: {agent_name}")
-                
-                try:
-                    # Use non-streaming for more reliable output capture
-                    # Streaming can miss final output in some cases
-                    # Add timeout to prevent hanging on MCP server calls
-                    logger.debug(f"[TutorAgent] Running agent (non-streaming) for iteration {iteration}: {agent_name}")
-                    import asyncio
-                    try:
-                        result = await asyncio.wait_for(
-                            Runner.run(agent_to_run, input=prompt, session=session),
-                            timeout=60.0  # 60 second timeout to prevent infinite hangs
-                        )
-                    except asyncio.TimeoutError:
-                        logger.error(f"[TutorAgent] Agent run timed out after 60 seconds in iteration {iteration}")
-                        raise RuntimeError("Agent execution timed out - MCP server may be unresponsive")
-                    
-                    iteration_duration = time.time() - iteration_start
-                    logger.info(f"[TutorAgent] Iteration {iteration} completed in {iteration_duration:.2f}s")
-                    
-                    # Log tool calls for debugging
-                    if result:
-                        tool_calls_found = False
-                        # Check if result has tool call information
-                        if hasattr(result, 'steps') and result.steps:
-                            for step in result.steps:
-                                if hasattr(step, 'tool_calls') and step.tool_calls:
-                                    for tool_call in step.tool_calls:
-                                        tool_name = getattr(tool_call, 'name', 'unknown')
-                                        logger.info(f"[TutorAgent] 🔧 Tool called: {tool_name}")
-                                        tool_calls_found = True
-                                if hasattr(step, 'function_call') and step.function_call:
-                                    func_name = getattr(step.function_call, 'name', 'unknown')
-                                    logger.info(f"[TutorAgent] 🔧 Function called: {func_name}")
-                                    tool_calls_found = True
-                        # Check for MCP tool calls in events
-                        if hasattr(result, 'events') and result.events:
-                            for event in result.events:
-                                if hasattr(event, 'type') and 'tool' in str(event.type).lower():
-                                    logger.info(f"[TutorAgent] 🔧 Tool event detected: {event.type}")
-                                    tool_calls_found = True
-                        # Log if no tools were called (for debugging file creation issues)
-                        if not tool_calls_found and ('summary' in prompt.lower() or 'file' in prompt.lower() or 'save' in prompt.lower()):
-                            logger.warning(f"[TutorAgent] ⚠️  No tool calls detected for request that might need file creation: {prompt[:100]}...")
-                            logger.warning(f"[TutorAgent] ⚠️  Agent may have generated text instead of calling write_text_file tool")
-                    
-                    if result and result.final_output:
-                        response_text = result.final_output.strip()
-                        iteration_tokens = [response_text]
-                        final_tokens = [response_text]
-                        
-                        # Stream the output via callback if provided
-                        if on_delta:
-                            for char in response_text:
-                                on_delta(char)
-                        
-                        logger.info(f"[TutorAgent] Iteration {iteration} response length: {len(response_text)} chars (took {iteration_duration:.2f}s)")
-                        logger.debug(f"[TutorAgent] Response preview: {response_text[:200]}...")
-                    else:
-                        logger.warning(f"[TutorAgent] Iteration {iteration} returned no final_output (took {iteration_duration:.2f}s)")
-                        response_text = ""
-                        iteration_tokens = []
-                    
-                    # Check if this is a handoff/routing message
-                    is_routing_message = any(keyword in response_text.lower() for keyword in [
-                        "transfer_to_qa_agent", "transfer_to_web_agent", "handing off", "routing to",
-                        "transferred", "i've transferred", "i've routed", "handoff", "hand off"
-                    ])
-                    
-                    # Log handoff detection for debugging
-                    if is_routing_message:
-                        logger.info(f"[TutorAgent] 🔀 Detected handoff/routing message from {agent_name}: {response_text[:150]}...")
-                    
-                    # If we got a substantial answer (more than just routing instructions), return it
-                    if len(response_text) > 50 and not is_routing_message:
-                        total_duration = time.time() - start_time
-                        logger.info(f"[TutorAgent] Got substantial answer after {iteration} iteration(s) in {total_duration:.2f}s total, returning")
-                        break
-                    
-                    # If this is a routing message, continue to let the handoff complete
-                    if is_routing_message:
-                        logger.info(f"[TutorAgent] 🔀 Handoff detected, continuing to let handoff complete: {response_text[:100]}...")
-                        # Clear the routing message from final_tokens - we want the actual agent response
-                        final_tokens.clear()
-                        # Continue the loop to get the handoff agent's response
-                        # Note: The agents SDK handles handoffs internally, so we just need to continue
-                        continue
-                    
-                    # If we got some response but it's short, check if it's a complete answer
-                    if len(response_text) > 20 and len(response_text) <= 50:
-                        # Might be a short but valid answer
-                        logger.info(f"[TutorAgent] Got short but potentially valid answer: {response_text[:100]}...")
-                        # Don't break, continue to see if we get more
-                    
-                    # If we've exhausted iterations, return what we have
-                    if iteration >= max_iterations:
-                        logger.warning(f"[TutorAgent] Reached max iterations ({max_iterations}), returning current response")
-                        break
-                        
-                except Exception as e:
-                    logger.error(f"[TutorAgent] Error in iteration {iteration}: {e}", exc_info=True)
-                    if iteration >= max_iterations:
-                        break
-                    # Continue to next iteration
-                continue
-
-            # Fallback: if orchestrator didn't work and no local source, try web agent
-            if self.orchestrator_agent is None and not self.state.last_source and self.web_agent is not None:
-                logger.info("[TutorAgent] No local source found, trying web agent")
-                if on_delta:
-                    on_delta("[info] No local evidence, searching the web...\n")
-                self.state.reset()
-                final_tokens.clear()
-                try:
-                    web_result = await Runner.run(self.web_agent, input=prompt, session=session)
-                    if web_result and web_result.final_output:
-                        web_text = web_result.final_output.strip()
-                        final_tokens.append(web_text)
-                        if on_delta:
-                            for char in web_text:
-                                on_delta(char)
-                        logger.info(f"[TutorAgent] Web agent returned {len(web_text)} chars")
-                    else:
-                        logger.warning("[TutorAgent] Web agent returned no output")
-                except Exception as e:
-                    logger.error(f"[TutorAgent] Error in web agent fallback: {e}", exc_info=True)
-
-        except Exception as e:
-            logger.error(f"[TutorAgent] Critical error in _run_specialist: {e}", exc_info=True)
-            # Return error message instead of empty string
-            final_tokens.append(f"I encountered an error while processing your question: {str(e)}. Please try again.")
-
-        result = "".join(final_tokens).strip()
-        total_duration = time.time() - start_time
-        
-        # If result is empty or just routing instructions, try non-streaming fallback
-        if not result or len(result) < 20:
-            logger.warning(f"[TutorAgent] Empty or very short response ({len(result)} chars) after {total_duration:.2f}s, trying non-streaming fallback")
-            try:
-                # Try non-streaming run as fallback with timeout
-                import asyncio
-                fallback_start = time.time()
-                fallback_result = await asyncio.wait_for(
-                    Runner.run(agent_to_run, input=prompt, session=session),
-                    timeout=30.0  # Shorter timeout for fallback
-                )
-                fallback_duration = time.time() - fallback_start
-                if fallback_result and fallback_result.final_output:
-                    result = fallback_result.final_output.strip()
-                    logger.info(f"[TutorAgent] Got answer from non-streaming fallback: {len(result)} chars (took {fallback_duration:.2f}s)")
-            except asyncio.TimeoutError:
-                logger.error("[TutorAgent] Non-streaming fallback timed out after 30 seconds")
-            except Exception as e:
-                logger.error(f"[TutorAgent] Non-streaming fallback also failed: {e}")
-        
-        # If still empty, provide a helpful fallback message
-        if not result or len(result) < 20:
-            logger.warning(f"[TutorAgent] Still empty after fallback ({len(result)} chars) after {total_duration:.2f}s total, providing default message")
-            if self.state.last_source:
-                result = f"I found some information but couldn't generate a complete answer. Please try rephrasing your question."
-            elif self.state.last_hits:
-                result = "I found relevant materials but had trouble generating a complete answer. Please try rephrasing your question."
-            else:
-                result = "I apologize, but I'm having trouble generating a complete answer. Please try rephrasing your question or check if the MCP server is running properly."
-        
-        final_duration = time.time() - start_time
-        logger.info(f"[TutorAgent] Final answer length: {len(result)} chars, total time: {final_duration:.2f}s")
-        return result
