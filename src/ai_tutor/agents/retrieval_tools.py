@@ -65,8 +65,21 @@ def build_retrieve_local_context_tool(
 
         logger.info("[%s Agent] Retrieving context (top_k=%s, filter=%s)", log_prefix, top_k, source_filter)
 
-        query = Query(text=question, source_filter=source_filter)
-        hits = retriever.retrieve(query)
+        def _run_query(filter_value):
+            local_query = Query(text=question, source_filter=filter_value)
+            return retriever.retrieve(local_query)
+
+        hits = _run_query(source_filter)
+        fallback_used = False
+
+        if source_filter and not hits:
+            logger.warning(
+                "[%s Agent] No hits found using source_filter=%s. Retrying without filter.",
+                log_prefix,
+                source_filter,
+            )
+            hits = _run_query(None)
+            fallback_used = True
 
         filtered: List[RetrievalHit] = []
         seen_docs: set[str] = set()
@@ -102,6 +115,7 @@ def build_retrieve_local_context_tool(
                 "context": context_items,
                 "citations": state.last_citations,
                 "source_filter": source_filter,
+                "filter_applied": bool(source_filter) and not fallback_used,
             }
         )
         _retrieval_cache[cache_key] = result_json

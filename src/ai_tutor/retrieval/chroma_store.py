@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -308,6 +309,13 @@ class ChromaVectorStore(VectorStore):
         metadatas = results["metadatas"][0]
         documents = results["documents"][0]
         
+        normalized_filter_names = (
+            {Path(name).name.lower() for name in source_filter} if source_filter else set()
+        )
+        normalized_filter_keys = (
+            {_normalize_filename(name) for name in source_filter} if source_filter else set()
+        )
+
         for idx, chunk_id in enumerate(ids):
             # Convert distance to similarity score
             # ChromaDB cosine distance: 0 = identical, 2 = opposite
@@ -319,8 +327,11 @@ class ChromaVectorStore(VectorStore):
             if source_filter:
                 source_path = metadatas[idx].get("source_path", "")
                 source_name = Path(source_path).name.lower()
-                normalized_filenames = {Path(f).name.lower() for f in source_filter}
-                if source_name not in normalized_filenames:
+                source_key = _normalize_filename(source_name)
+                if (
+                    source_name not in normalized_filter_names
+                    and source_key not in normalized_filter_keys
+                ):
                     continue
             
             # Reconstruct Chunk object
@@ -391,4 +402,12 @@ class ChromaVectorStore(VectorStore):
             Initialized vector store instance
         """
         return cls(path, use_domain_collections=use_domain_collections)
+
+
+def _normalize_filename(value: str) -> str:
+    """Normalize filenames by removing punctuation, spaces, and extensions."""
+    if not value:
+        return ""
+    stem = Path(value).stem.lower()
+    return re.sub(r"[^a-z0-9]", "", stem)
 

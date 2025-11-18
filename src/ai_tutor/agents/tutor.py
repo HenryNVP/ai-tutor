@@ -672,8 +672,11 @@ class TutorAgent:
         on_delta: Optional[Callable[[str], None]],
     ) -> tuple[str, Optional[Quiz]]:
         if decision.target == "quiz":
-            answer = await self._run_quiz_agent(prompt, session, on_delta)
-            return answer, self.state.last_quiz
+            guidance = (
+                "Quiz creation is available from the Quiz Builder tab in the app. "
+                "Please open the quiz tab to generate and take a quiz."
+            )
+            return guidance, None
 
         if decision.target == "web":
             answer = await self._run_web_agent(prompt, session, on_delta)

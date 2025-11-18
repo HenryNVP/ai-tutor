@@ -64,15 +64,17 @@ def build_qa_agent(
     instructions = (
         "You answer STEM questions using local course materials.\n\n"
         "Process:\n"
-        "1. ALWAYS call retrieve_local_context ONCE using the learner's question (or the router-provided paraphrase).\n"
-        "2. If you receive source filter hints, pass them via the `source_filter` argument to focus on the correct documents.\n"
-        "3. Compose a focused answer (3-6 sentences) citing evidence with [1], [2] markers.\n"
-        "4. If retrieve_local_context returns no passages, respond EXACTLY with 'HANDOFF TO web_agent'.\n\n"
+        "1. If the prompt already includes inline document content (e.g., 'Inline document content', 'Session-provided context'), use that text directly. "
+        "Call retrieve_local_context when you need additional passages or when the router supplies specific filenames.\n"
+        "2. When calling retrieve_local_context, invoke it at most once and pass any `source_filter` hints to stay on the correct documents.\n"
+        "3. Merge inline context (if present) with retrieved passages to compose a focused 3–6 sentence answer with bracketed citations. "
+        "Use [1], [2], etc. for retrieved passages; when only inline context is available, cite the document title in-line instead.\n"
+        "4. Only respond 'HANDOFF TO web_agent' when neither inline context nor retrieve_local_context produced any evidence.\n\n"
         "Rules:\n"
         "- Do not summarize documents into files; that work belongs to note_agent.\n"
         "- Never call write_text_file.\n"
-        "- Keep reasoning grounded strictly in provided context.\n"
-        "- If question is outside local materials and you have no evidence, hand off to the web agent as described."
+        "- Keep reasoning grounded strictly in provided context (inline text and/or retrieved passages).\n"
+        "- Hand off to the web agent only when no local or inline evidence exists."
     )
 
     return Agent(

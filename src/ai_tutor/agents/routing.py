@@ -79,8 +79,13 @@ def detect_note_request(message: str) -> bool:
         "save notes",
         "write a file",
         "create a file",
+        "lesson notes",
+        "study notes",
+        "make notes",
     ]
-    return any(keyword in lowered for keyword in keywords)
+    if any(keyword in lowered for keyword in keywords):
+        return True
+    return bool(re.search(r"\bnotes?\b", lowered) and "quiz" not in lowered)
 
 
 def detect_ingestion_request(message: str) -> bool:

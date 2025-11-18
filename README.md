@@ -88,7 +88,7 @@ AI: [Provides answer with citations from local documents]
 
 ```
 1. In sidebar, upload PDF(s) under "📤 Upload Documents"
-2. System auto-ingests when you ask first question
+2. Small files (<200 KB) are parsed immediately and passed to the agent as inline context; larger files auto-ingest the first time you ask about them
 3. Say: "create 20 questions from the uploaded documents"
 4. Take the quiz interactively!
 5. Click "Edit and Download Quiz" for markdown export (changes sync to Generated Files Manager)

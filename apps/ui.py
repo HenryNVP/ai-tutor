@@ -8,11 +8,11 @@ import os
 import re
 import sys
 import tempfile
+import uuid
 import shutil
 import base64
 import asyncio
 import threading
-import uuid
 import zipfile
 from pathlib import Path
 from datetime import datetime
@@ -52,6 +52,41 @@ except ImportError:  # pragma: no cover
 # Global MCP server managers keyed by logical name
 _mcp_server_managers: Dict[str, MCPServerManager] = {}
 _mcp_server_lock = threading.Lock()
+
+
+def _prepare_uploaded_files(
+    uploaded_files: List[Any],
+    service: TutorService,
+) -> tuple[List[str], Optional[Any]]:
+    """
+    Save uploaded files and ingest them immediately.
+    
+    Returns filenames that were ingested and the ingestion result.
+    """
+    upload_dir = Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths: List[Path] = []
+
+    for uploaded_file in uploaded_files:
+        if not uploaded_file.name:
+            continue
+        file_bytes = uploaded_file.getvalue()
+        file_path = upload_dir / uploaded_file.name
+        file_path.write_bytes(file_bytes)
+        saved_paths.append(file_path)
+
+    ingestion_result = None
+    if saved_paths:
+        ingest_dir = upload_dir / f"ingest_batch_{uuid.uuid4().hex[:8]}"
+        ingest_dir.mkdir(parents=True, exist_ok=True)
+        for source_path in saved_paths:
+            shutil.copy2(source_path, ingest_dir / source_path.name)
+        ingestion_result = service.ingest_directory(ingest_dir)
+        shutil.rmtree(ingest_dir, ignore_errors=True)
+
+    ingested_filenames = [path.name for path in saved_paths]
+    return ingested_filenames, ingestion_result
 
 
 class MCPServerManager:
@@ -776,9 +811,13 @@ def render() -> None:
         if "chat_uploaded_files" not in st.session_state:
             st.session_state.chat_uploaded_files = []
         if "chat_uploaded_filenames" not in st.session_state:
-            st.session_state.chat_uploaded_filenames = []  # Track filenames for filtering
+            st.session_state.chat_uploaded_filenames = []  # Track ingested filenames
         if "chat_files_ingested" not in st.session_state:
             st.session_state.chat_files_ingested = False
+        if "chat_upload_processing_done" not in st.session_state:
+            st.session_state.chat_upload_processing_done = False
+        if "chat_files_just_ingested" not in st.session_state:
+            st.session_state.chat_files_just_ingested = False
         if "quiz" not in st.session_state:
             st.session_state.quiz = None
         if "quiz_answers" not in st.session_state:
@@ -816,12 +855,17 @@ def render() -> None:
                     # New files uploaded - reset ingestion flag
                     st.session_state.chat_uploaded_files = uploaded_files
                     st.session_state.chat_files_ingested = False
+                    st.session_state.chat_uploaded_filenames = []
+                    st.session_state.chat_upload_processing_done = False
+                    st.session_state.chat_files_just_ingested = False
             else:
                 # No files in uploader - clear session state
                 if st.session_state.chat_uploaded_files:
                     st.session_state.chat_uploaded_files = []
                     st.session_state.chat_uploaded_filenames = []
                     st.session_state.chat_files_ingested = False
+                    st.session_state.chat_upload_processing_done = False
+                    st.session_state.chat_files_just_ingested = False
             
             # Show status
             if st.session_state.chat_uploaded_files:
@@ -903,32 +947,26 @@ def render() -> None:
 
         prompt = st.chat_input("Ask the tutor a question...")
         if prompt:
-            # Check if files need ingestion - do it BEFORE processing the question
+            # Prepare uploaded files before answering
             ingestion_happened = False
-            if st.session_state.chat_uploaded_files and not st.session_state.chat_files_ingested:
-                ingestion_happened = True
-                
-                # Track filenames for filtering
-                uploaded_filenames = [f.name for f in st.session_state.chat_uploaded_files]
-                
-                # Persist uploaded files to disk (for filesystem MCP access)
-                upload_dir = Path("data/uploads")
-                upload_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Save uploaded files to persistent location
-                for uploaded_file in st.session_state.chat_uploaded_files:
-                    file_path = upload_dir / uploaded_file.name
-                    file_path.write_bytes(uploaded_file.getvalue())
-                    logger.info(f"Saved uploaded file: {file_path}")
-                
-                # Ingest from persistent location
-                try:
-                    result = service.ingest_directory(upload_dir)
-                    st.session_state.chat_files_ingested = True
-                    st.session_state.chat_uploaded_filenames = uploaded_filenames  # Store for filtering
-                except Exception as e:
-                    st.error(f"❌ Ingestion failed: {str(e)}")
-                    st.stop()
+            ingestion_result = None
+            if st.session_state.chat_uploaded_files and not st.session_state.chat_upload_processing_done:
+                with st.spinner("Preparing uploaded documents..."):
+                    try:
+                        ingested_filenames, ingestion_result = _prepare_uploaded_files(
+                            st.session_state.chat_uploaded_files,
+                            service,
+                        )
+                    except Exception as exc:
+                        st.error(f"❌ Failed to process uploaded files: {exc}")
+                        logger.exception("Error preparing uploaded files")
+                        st.stop()
+
+                st.session_state.chat_uploaded_filenames = ingested_filenames
+                st.session_state.chat_files_ingested = bool(ingested_filenames)
+                st.session_state.chat_upload_processing_done = True
+                ingestion_happened = ingestion_result is not None and bool(ingested_filenames)
+                st.session_state.chat_files_just_ingested = ingestion_happened
             
             # Now add user message to history
             st.session_state.messages.append({"role": "user", "content": prompt})
@@ -938,7 +976,10 @@ def render() -> None:
                 with st.chat_message("user"):
                     st.markdown(prompt)
                 with st.chat_message("assistant"):
-                    st.success(f"✅ Ingested {len(result.documents)} document(s) into {len(result.chunks)} chunks! Now answering your question...")
+                    st.success(
+                        f"✅ Ingested {len(ingestion_result.documents)} document(s) into "
+                        f"{len(ingestion_result.chunks)} chunks! Now answering your question..."
+                    )
             
             # Check if this is a visualization request
             is_viz_request = is_visualization_request(prompt) and st.session_state.csv_filename
@@ -1082,7 +1123,7 @@ def render() -> None:
                             st.caption(f"📚 Retrieved {len(citations)} passages from {len(hits_by_doc)} document(s): {', '.join(hits_by_doc.keys())}")
                         else:
                             st.info("ℹ️ No passages found in uploaded documents. Using general knowledge...")
-                
+
                 # Check for quiz requests FIRST (before other processing)
                 is_quiz_request = service.detect_quiz_request(prompt)
                 
@@ -1095,10 +1136,12 @@ def render() -> None:
                 
                 # We still prepare context for uploaded documents to pass as extra_context,
                 # but let the agent system handle the actual routing and tool calls.
+                has_ingested_docs = (
+                    st.session_state.chat_files_ingested and st.session_state.chat_uploaded_filenames
+                )
                 filter_to_uploaded = (
                     is_question_about_uploaded_docs(prompt) and
-                    st.session_state.chat_files_ingested and
-                    st.session_state.chat_uploaded_filenames and
+                    has_ingested_docs and
                     not is_quiz_request
                 )
                 
@@ -1125,14 +1168,19 @@ def render() -> None:
                             st.session_state.chat_uploaded_filenames
                         )
                         
+                        agent_context_parts: List[str] = []
                         if filtered_hits:
                             st.caption(f"📚 Found {len(filtered_hits)} passages from your uploaded documents")
-                            uploaded_docs_context_for_agent, _ = service.format_context_from_hits(
+                            formatted_context, _ = service.format_context_from_hits(
                                 hits=filtered_hits[:15],
                                 max_passages=15
                             )
-                        else:
+                            agent_context_parts.append(formatted_context)
+                        elif has_ingested_docs:
                             st.warning("No relevant passages found in uploaded documents. Using general knowledge...")
+
+                        if agent_context_parts:
+                            uploaded_docs_context_for_agent = "\n\n---\n\n".join(agent_context_parts)
                 
                 # Always route through TutorAgent for proper agent orchestration
                 # Combine all available context (uploaded docs, quiz context, etc.)
@@ -1147,10 +1195,14 @@ def render() -> None:
                 # If user mentions "documents" and we have uploaded files, enhance the prompt
                 enhanced_prompt = prompt
                 if uploaded_docs_context and ("document" in prompt.lower() or "file" in prompt.lower() or "pdf" in prompt.lower()):
-                    # Extract document titles from context
                     if st.session_state.chat_uploaded_filenames:
-                        doc_names = [Path(f).stem.replace('_', ' ').replace('-', ' ') for f in st.session_state.chat_uploaded_filenames]
-                        enhanced_prompt = f"{prompt} (Note: User has uploaded documents about: {', '.join(doc_names)})"
+                        doc_names = [
+                            Path(f).stem.replace('_', ' ').replace('-', ' ')
+                            for f in st.session_state.chat_uploaded_filenames
+                            if f
+                        ]
+                        if doc_names:
+                            enhanced_prompt = f"{prompt} (Note: User has uploaded documents about: {', '.join(doc_names)})"
                 
                 with st.spinner("Thinking..."):
                     try:
