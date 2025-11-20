@@ -32,9 +32,10 @@ class RoutingDecision:
     quiz_count: Optional[int] = None
     deterministic: bool = True
     confidence: float = 1.0
+    documents_only: bool = False
 
 
-def extract_source_mentions(message: str) -> List[str]:
+def extract_source_mentions(message: str, extra_hints: Optional[List[str]] = None) -> List[str]:
     """Extract concrete document identifiers or titles for source filtering."""
     references: List[str] = []
 
@@ -66,8 +67,12 @@ def extract_source_mentions(message: str) -> List[str]:
         r"Source filter hints:\s*([^\n\r]+)",
         r"Content from uploaded documents:\s*([^\n\r]+)",
     ]
+    combined_message = message
+    if extra_hints:
+        combined_message += "\n" + "\n".join(extra_hints)
+
     for pattern in metadata_patterns:
-        for match in re.findall(pattern, message, flags=re.IGNORECASE):
+        for match in re.findall(pattern, combined_message, flags=re.IGNORECASE):
             for candidate in re.split(r"[,\|]", match):
                 _add_candidate(candidate)
 

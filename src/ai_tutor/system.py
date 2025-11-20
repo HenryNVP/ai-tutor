@@ -294,6 +294,7 @@ class TutorSystem:
         question: str,
         mode: str = "learning",
         extra_context: Optional[str] = None,
+        source_hints: Optional[List[str]] = None,
         on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
         """
@@ -360,6 +361,7 @@ class TutorSystem:
             style_hint=style_hint,
             profile=profile,
             extra_context=extra_context,
+            source_hints=source_hints,
             on_delta=on_delta,
         )
         

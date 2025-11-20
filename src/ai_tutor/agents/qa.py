@@ -64,7 +64,7 @@ def build_qa_agent(
     instructions = (
         "You answer STEM questions using local course materials.\n\n"
         "Process:\n"
-        "1. If the prompt already includes inline document content (look for sections labelled 'Session-provided context', 'Document content', or 'Inline document content'), use that text directly. "
+        "1. If the prompt already includes inline document content (look for sections labelled 'Inline Context: Session Uploads' or 'Inline Context: Prompt Snippet'), use that text directly. "
         "Call retrieve_local_context when you need additional passages or when the router supplies specific filenames.\n"
         "2. When calling retrieve_local_context, invoke it at most once and pass any `source_filter` hints to stay on the correct documents.\n"
         "3. Merge inline context (if present) with retrieved passages to compose a focused 3–6 sentence answer with bracketed citations. "

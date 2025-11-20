@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from typing import List, Optional, Protocol
 
 
 def detect_quiz_request(message: str) -> bool:
@@ -87,3 +89,68 @@ def extract_quiz_topic(message: str) -> str:
 		cleaned = cleaned.replace(keyword, "")
 	cleaned = re.sub(r"^\s*\d+\s+", "", cleaned).strip()
 	return cleaned or "general"
+
+
+@dataclass
+class DocumentRequest:
+	source_filter: List[str]
+	use_documents_only: bool = False
+
+
+def detect_document_request(message: str, filenames: Optional[List[str]] = None) -> DocumentRequest:
+	source_filter = [name for name in (filenames or []) if name]
+	if not source_filter:
+		file_matches = re.findall(r"([\w\-\s]+\.(?:pdf|pptx|ppt|docx|md|txt))", message, flags=re.IGNORECASE)
+		if file_matches:
+			source_filter = [match.strip() for match in file_matches]
+	lowered = message.lower()
+	use_docs = any(
+		phrase in lowered
+		for phrase in [
+			"uploaded document",
+			"uploaded file",
+			"these documents",
+			"these files",
+			"this document",
+			"this file",
+		]
+	)
+	return DocumentRequest(source_filter=source_filter, use_documents_only=use_docs)
+
+
+class QuizCountLLM(Protocol):
+	def generate(self, messages, **kwargs) -> str: ...
+
+
+def refine_quiz_count_with_llm(
+	message: str,
+	initial_count: int,
+	llm: QuizCountLLM,
+) -> int:
+	"""
+	Ask the LLM to interpret ambiguous quiz count instructions.
+	Returns the refined count, clamped to [3, 40].
+	"""
+	system_prompt = (
+		"You interpret quiz instructions and return ONLY a JSON object "
+		"with a `num_questions` integer (3-40). "
+		"If multiple counts are mentioned (e.g. '5 easy and 10 hard'), "
+		"set num_questions to the total."
+	)
+	user_prompt = (
+		f"Instruction: {message}\n"
+		f"Initial heuristic count: {initial_count}\n\n"
+		"Respond with: {\"num_questions\": <int>}"
+	)
+	raw = llm.generate(
+		[
+			{"role": "system", "content": system_prompt},
+			{"role": "user", "content": user_prompt},
+		],
+		max_tokens=150,
+	)
+	match = re.search(r'"num_questions"\s*:\s*(\d+)', raw)
+	if not match:
+		return initial_count
+	refined = int(match.group(1))
+	return max(3, min(refined, 40))

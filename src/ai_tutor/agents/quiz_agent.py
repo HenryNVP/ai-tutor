@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from agents import Agent, function_tool
 
@@ -15,6 +15,8 @@ def build_quiz_agent(
     state,
     get_profile: Callable[[], Optional[LearnerProfile]],
     get_extra_context: Callable[[], Optional[str]],
+    get_source_filter: Callable[[], Optional[List[str]]],
+    get_documents_only: Callable[[], bool],
 ) -> Agent:
     """Create an agent that owns quiz generation responsibilities."""
 
@@ -35,6 +37,8 @@ def build_quiz_agent(
 
         profile = get_profile()
         extra_context = get_extra_context()
+        source_filter = get_source_filter()
+        documents_only = get_documents_only()
 
         logger.info(
             "[Quiz Agent] Generating quiz: topic='%s', count=%s, difficulty=%s",
@@ -48,6 +52,8 @@ def build_quiz_agent(
             num_questions=question_count,
             difficulty=difficulty,
             extra_context=extra_context,
+            source_filter=source_filter,
+            documents_only=documents_only,
         )
         state.last_quiz = quiz
         state.last_source = "quiz"

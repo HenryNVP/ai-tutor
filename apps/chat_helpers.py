@@ -41,6 +41,14 @@ def is_question_about_uploaded_docs(message: str) -> bool:
 	return any(keyword in message_lower for keyword in upload_keywords)
 
 
+def extract_document_hints(message: str, filenames: List[str]) -> List[str]:
+	"""Unified helper to detect when the user wants to operate on uploaded docs."""
+	hints: List[str] = []
+	if filenames and is_question_about_uploaded_docs(message):
+		hints.extend(filenames)
+	return hints
+
+
 def filter_hits_by_filenames(hits: List, filenames: List[str]) -> List:
 	if not filenames:
 		return hits
@@ -92,6 +100,7 @@ def filter_hits_by_filenames(hits: List, filenames: List[str]) -> List:
 __all__ = [
 	"format_answer",
 	"is_question_about_uploaded_docs",
+	"extract_document_hints",
 	"filter_hits_by_filenames",
 ]
 

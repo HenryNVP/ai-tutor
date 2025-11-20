@@ -34,6 +34,7 @@ from ai_tutor.services.tutor_service import TutorService
 from apps.chat_helpers import (
     format_answer,
     is_question_about_uploaded_docs,
+    extract_document_hints,
     filter_hits_by_filenames,
 )
 from apps.corpus_tab import render_corpus_management_tab
@@ -1068,75 +1069,13 @@ def render() -> None:
                 else:
                     quiz_context = ""
                 
-                # Retrieve content from uploaded documents if they exist
-                # This provides context for both Q&A and quiz generation
-                uploaded_docs_context = None
-                if st.session_state.chat_files_ingested and st.session_state.chat_uploaded_filenames:
-                    with st.spinner("Retrieving content from your uploaded documents..."):
-                        # Build queries from filenames and user prompt
-                        queries = []
-                        for filename in st.session_state.chat_uploaded_filenames:
-                            # Extract meaningful terms from filename
-                            query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
-                            queries.append(query_text)
-                            # Also try the full filename without extension
-                            queries.append(Path(filename).stem)
-                        
-                        # Add user's actual query
-                        queries.append(prompt)
-                        
-                        # For newly uploaded files, also try broad subject queries
-                        if st.session_state.get('chat_files_just_ingested', False):
-                            broad_queries = ["computer science", "engineering", "mathematics", "lecture", "course material"]
-                            queries.extend(broad_queries)
-                        
-                        # Use service layer for retrieval (handles config, filtering, deduplication)
-                        filtered_hits = service.retrieve_multiple_queries(
-                            queries=queries,
-                            filenames=st.session_state.chat_uploaded_filenames,
-                            top_k=50
-                        )
-                        
-                        # Show debug info about what we found
-                        if filtered_hits:
-                            st.caption(f"✅ Found {len(filtered_hits)} passages from your uploaded file(s)")
-                        
-                        if filtered_hits:
-                            # Use service layer for formatting (handles grouping, balancing, citations)
-                            context, citations = service.format_context_from_hits(
-                                hits=filtered_hits,
-                                max_passages=15
-                            )
-                            
-                            # Get document titles for context header
-                            from collections import defaultdict
-                            hits_by_doc = defaultdict(list)
-                            for hit in filtered_hits:
-                                doc_title = hit.chunk.metadata.title or "Unknown"
-                                hits_by_doc[doc_title].append(hit)
-                            
-                            doc_titles_str = ", ".join(hits_by_doc.keys())
-                            uploaded_docs_context = (
-                                f"Content from uploaded documents: {doc_titles_str}\n\n"
-                                f"{context}"
-                            )
-                            
-                            # Surface explicit source filter hints so routing can stay on the right files
-                            filename_hints = [
-                                name for name in (st.session_state.chat_uploaded_filenames or []) if name
-                            ]
-                            if not filename_hints:
-                                filename_hints = list(hits_by_doc.keys())
-                            if filename_hints:
-                                hints_line = "SOURCE_FILTER_HINTS: " + ", ".join(filename_hints)
-                                uploaded_docs_context = f"{hints_line}\n\n{uploaded_docs_context}"
-                            
-                            st.caption(
-                                f"📚 Retrieved {len(citations)} passages from {len(hits_by_doc)} document(s): "
-                                f"{', '.join(hits_by_doc.keys())}"
-                            )
-                        else:
-                            st.info("ℹ️ No passages found in uploaded documents. Using general knowledge...")
+                uploaded_docs_context = None  # deprecated but kept for compat
+                raw_filenames = [
+                    Path(f).name
+                    for f in (st.session_state.chat_uploaded_filenames or [])
+                    if f
+                ]
+                doc_hints = extract_document_hints(prompt, raw_filenames)
 
                 # Check for quiz requests FIRST (before other processing)
                 is_quiz_request = service.detect_quiz_request(prompt)
@@ -1148,28 +1087,22 @@ def render() -> None:
                 # - Route summary requests → hand off to QA agent (which can use write_text_file)
                 # - Route regular Q&A → hand off to QA agent or web agent
                 
-                # Always route through TutorAgent for proper agent orchestration
-                # Reuse the context already retrieved for display (avoid duplicate retrieval)
-                # The agents will use this context via extra_context, and can still retrieve
-                # additional context using source_filter if needed
-                combined_context = None
-                if uploaded_docs_context:
-                    # Reuse the context already retrieved above (no duplicate retrieval)
-                    combined_context = uploaded_docs_context
-                elif quiz_context:
-                    combined_context = quiz_context
+                context_parts: List[str] = []
+                if doc_hints:
+                    context_parts.append("SOURCE_FILTER_HINTS: " + ", ".join(doc_hints))
+                if quiz_context:
+                    context_parts.append(quiz_context)
+                combined_context = "\n\n".join(context_parts) if context_parts else None
                 
-                # If user mentions "documents" and we have uploaded files, enhance the prompt
+                # If user mentions "documents" and we have uploads, append hint for routing
                 enhanced_prompt = prompt
-                if uploaded_docs_context and ("document" in prompt.lower() or "file" in prompt.lower() or "pdf" in prompt.lower()):
-                    if st.session_state.chat_uploaded_filenames:
-                        doc_names = [
-                            Path(f).stem.replace('_', ' ').replace('-', ' ')
-                            for f in st.session_state.chat_uploaded_filenames
-                            if f
-                        ]
-                        if doc_names:
-                            enhanced_prompt = f"{prompt} (Note: User has uploaded documents about: {', '.join(doc_names)})"
+                if doc_hints:
+                    display_names = [
+                        Path(name).stem.replace("_", " ").replace("-", " ")
+                        for name in doc_hints
+                    ]
+                    hint_line = f"(Uploaded docs available: {', '.join(display_names)})"
+                    enhanced_prompt = f"{prompt}\n\n{hint_line}"
                 
                 with st.spinner("Thinking..."):
                     try:
@@ -1179,6 +1112,7 @@ def render() -> None:
                             learner_id=learner_id,
                             question=enhanced_prompt,
                             extra_context=combined_context,
+                            source_hints=doc_hints or None,
                         )
                     except Exception as e:
                         error_msg = str(e)

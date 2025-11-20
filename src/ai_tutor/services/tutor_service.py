@@ -33,6 +33,7 @@ class TutorService:
         question: str,
         mode: str = "learning",
         extra_context: Optional[str] = None,
+        source_hints: Optional[List[str]] = None,
         on_delta: Optional[callable] = None,
     ):
         """Answer a question using the full agent system.
@@ -45,6 +46,7 @@ class TutorService:
             question=question,
             mode=mode,
             extra_context=extra_context,
+            source_hints=source_hints,
             on_delta=on_delta,
         )
     

@@ -146,6 +146,8 @@ class QuizService:
         num_questions: int = 4,
         difficulty: Optional[str] = None,
         extra_context: Optional[str] = None,
+        source_filter: Optional[List[str]] = None,
+        documents_only: bool = False,
     ) -> Quiz:
         context_sections: List[str] = []
         references = []
@@ -156,22 +158,25 @@ class QuizService:
         
         # If we have substantial extra_context (e.g., from uploaded documents), prioritize it
         # For uploaded documents, skip vector store retrieval to avoid mixing with external sources
+        def _retrieve_hits() -> List[RetrievalHit]:
+            query = Query(text=topic, source_filter=source_filter)
+            hits_local = list(self.retriever.retrieve(query))
+            if not hits_local and source_filter and not documents_only:
+                hits_local = list(self.retriever.retrieve(Query(text=topic)))
+            return hits_local
+
         if is_uploaded_doc_context:
             context_sections.append("Document content:\n" + extra_context.strip())
-            # Only do vector store retrieval if topic is NOT about uploaded documents
-            # This prevents mixing uploaded content with vector store content
             topic_lower = (topic or "").lower()
             is_topic_about_uploaded_docs = any(x in topic_lower for x in ['uploaded', 'document', 'file', 'upload'])
             
             if topic and not is_topic_about_uploaded_docs:
-                # Topic is specific (not about uploaded docs), so we can supplement with vector store
-                hits = list(self.retriever.retrieve(Query(text=topic)))
+                hits = _retrieve_hits()
                 references = _format_references(hits)
                 if hits:
                     context_sections.append("Additional passages:\n" + _render_hit_context(hits))
         else:
-            # Normal flow: retrieve from vector store first, then add extra context if available
-            hits = list(self.retriever.retrieve(Query(text=topic)))
+            hits = _retrieve_hits()
             references = _format_references(hits)
             if hits:
                 context_sections.append("Retrieved passages:\n" + _render_hit_context(hits))

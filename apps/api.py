@@ -93,6 +93,10 @@ class AnswerRequest(BaseModel):
         default=None,
         description="Optional additional context to inject into the answer",
     )
+    source_hints: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of filenames to prioritize (e.g., uploaded docs)",
+    )
 
 
 class AnswerResponse(BaseModel):
@@ -175,6 +179,7 @@ async def answer_question(
             learner_id=payload.learner_id,
             question=payload.question,
             extra_context=payload.extra_context,
+            source_hints=payload.source_hints,
         )
     except Exception as exc:  # pragma: no cover - surface underlying error
         logger.exception("Error during answer generation: %s", exc)

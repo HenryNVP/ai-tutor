@@ -32,6 +32,7 @@ from ai_tutor.data_models import RetrievalHit
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.learning.models import LearnerProfile
 from ai_tutor.learning.quiz import Quiz, QuizEvaluation, QuizService
+from ai_tutor.learning.quiz_intent import detect_document_request
 from ai_tutor.retrieval.retriever import Retriever
 from ai_tutor.retrieval.vector_store import VectorStore
 # SearchTool removed - web_agent uses WebSearchTool directly
@@ -224,6 +225,8 @@ class TutorAgent:
         # Temporary context for quiz generation (set during answer() calls)
         self._active_profile: Optional[LearnerProfile] = None
         self._active_extra_context: Optional[str] = None
+        self._active_source_filter: Optional[List[str]] = None
+        self._documents_only_request: bool = False
 
         # Agent instances (initialized in _build_agents)
         self.ingestion_agent: Agent | None = None
@@ -270,6 +273,8 @@ class TutorAgent:
             self.state,
             get_profile=lambda: self._active_profile,
             get_extra_context=lambda: self._active_extra_context,
+            get_source_filter=lambda: self._active_source_filter,
+            get_documents_only=lambda: self._documents_only_request,
         )
         if self.mcp_servers:
             logger.info("[TutorAgent] Agents built with MCP tool access (%d server(s))", len(self.mcp_servers))
@@ -318,6 +323,7 @@ class TutorAgent:
         style_hint: str,
         profile: Optional[LearnerProfile] = None,
         extra_context: Optional[str] = None,
+        source_hints: Optional[List[str]] = None,
         on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
         """Synchronously orchestrate the multi-agent run and produce a TutorResponse."""
@@ -341,6 +347,7 @@ class TutorAgent:
                 style_hint=style_hint,
                 profile=profile,
                 extra_context=extra_context,
+                    source_hints=source_hints,
                 on_delta=on_delta,
             )
             )
@@ -353,6 +360,7 @@ class TutorAgent:
         style_hint: str,
         profile: Optional[LearnerProfile] = None,
         extra_context: Optional[str] = None,
+        source_hints: Optional[List[str]] = None,
         on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
         """Asynchronously orchestrate the multi-agent run and produce a TutorResponse."""
@@ -363,6 +371,7 @@ class TutorAgent:
             style_hint=style_hint,
             profile=profile,
             extra_context=extra_context,
+            source_hints=source_hints,
             on_delta=on_delta,
         )
 
@@ -374,6 +383,7 @@ class TutorAgent:
         style_hint: str,
         profile: Optional[LearnerProfile],
         extra_context: Optional[str],
+        source_hints: Optional[List[str]],
         on_delta: Optional[Callable[[str], None]],
     ) -> TutorResponse:
         import time
@@ -398,6 +408,7 @@ class TutorAgent:
         decision = await self._route_question(
             question=question,
             extra_context=extra_context,
+            source_hints=source_hints,
             profile=profile,
         )
         logger.info(
@@ -426,6 +437,8 @@ class TutorAgent:
 
         self._active_profile = profile
         self._active_extra_context = extra_context
+        self._active_source_filter = decision.source_filter
+        self._documents_only_request = decision.documents_only
         self.state.last_quiz = None
         try:
             answer_text, quiz_payload = await self._execute_decision(
@@ -437,6 +450,8 @@ class TutorAgent:
         finally:
             self._active_profile = None
             self._active_extra_context = None
+            self._active_source_filter = None
+            self._documents_only_request = False
 
         if quiz_payload is None and self.state.last_quiz is not None:
             quiz_payload = self.state.last_quiz
@@ -515,11 +530,12 @@ class TutorAgent:
         self,
         question: str,
         extra_context: Optional[str],
+        source_hints: Optional[List[str]],
         profile: Optional[LearnerProfile],
     ) -> RoutingDecision:
         decision = apply_deterministic_routing(question, extra_context)
         if decision:
-            return decision
+            return self._apply_document_hints(decision, question, extra_context, source_hints)
         routed = await self._route_with_llm(question, extra_context, profile)
         if (
             not routed.deterministic
@@ -531,14 +547,15 @@ class TutorAgent:
                 routed.target,
                 routed.confidence,
             )
-            return RoutingDecision(
+            fallback_decision = RoutingDecision(
                 target="qa",
                 reason=f"Low routing confidence for '{routed.target}', defaulting to QA",
                 deterministic=False,
                 confidence=routed.confidence,
                 source_filter=routed.source_filter,
             )
-        return routed
+            return self._apply_document_hints(fallback_decision, question, extra_context, source_hints)
+        return self._apply_document_hints(routed, question, extra_context, source_hints)
 
     async def _route_with_llm(
         self,
@@ -659,6 +676,32 @@ class TutorAgent:
             confidence=confidence_value,
         )
 
+    def _apply_document_hints(
+        self,
+        decision: RoutingDecision,
+        question: str,
+        extra_context: Optional[str],
+        source_hints: Optional[List[str]],
+    ) -> RoutingDecision:
+        hints: List[str] = []
+        if source_hints:
+            hints.extend([hint for hint in source_hints if hint])
+        if extra_context:
+            context_refs = extract_source_mentions(extra_context)
+            hints.extend([ref for ref in context_refs if ref not in hints])
+        if decision.source_filter:
+            hints.extend([ref for ref in decision.source_filter if ref not in hints])
+
+        doc_request = detect_document_request(question, hints or None)
+        if doc_request.source_filter:
+            merged = decision.source_filter[:] if decision.source_filter else []
+            for ref in doc_request.source_filter:
+                if ref not in merged:
+                    merged.append(ref)
+            decision.source_filter = merged
+        decision.documents_only = doc_request.use_documents_only or decision.documents_only
+        return decision
+
     def _build_agent_prompt(
         self,
         *,
@@ -680,7 +723,7 @@ class TutorAgent:
             sections.append(self._render_profile_summary(profile))
             sections.append("")
         if extra_context and decision.target != "quiz":
-            sections.append("Session-provided context (verbatim, do not leak sensitive info):")
+            sections.append("Inline Context: Session Uploads")
             sections.append(extra_context[:2000])
             sections.append("")
         if decision.source_filter:
