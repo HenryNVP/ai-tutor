@@ -814,131 +814,131 @@ def render() -> None:
                     st.caption(f"Port: {port}")
     
     # Chat & Learn experience
-        # Initialize session state
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-        if "chat_uploaded_files" not in st.session_state:
-            st.session_state.chat_uploaded_files = []
-        if "chat_uploaded_filenames" not in st.session_state:
-            st.session_state.chat_uploaded_filenames = []  # Track ingested filenames
-        if "chat_upload_processing_done" not in st.session_state:
-            st.session_state.chat_upload_processing_done = False
-        if "chat_files_just_ingested" not in st.session_state:
-            st.session_state.chat_files_just_ingested = False
-        if "quiz" not in st.session_state:
-            st.session_state.quiz = None
-        if "quiz_answers" not in st.session_state:
-            st.session_state.quiz_answers = {}
-        if "quiz_result" not in st.session_state:
-            st.session_state.quiz_result = None
-        # Visualization state
-        if "uploaded_csv" not in st.session_state:
-            st.session_state.uploaded_csv = None
-        if "csv_filename" not in st.session_state:
-            st.session_state.csv_filename = None
-        _ensure_generated_files_state()
+    # Initialize session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "chat_uploaded_files" not in st.session_state:
+        st.session_state.chat_uploaded_files = []
+    if "chat_uploaded_filenames" not in st.session_state:
+        st.session_state.chat_uploaded_filenames = []  # Track ingested filenames
+    if "chat_upload_processing_done" not in st.session_state:
+        st.session_state.chat_upload_processing_done = False
+    if "chat_files_just_ingested" not in st.session_state:
+        st.session_state.chat_files_just_ingested = False
+    if "quiz" not in st.session_state:
+        st.session_state.quiz = None
+    if "quiz_answers" not in st.session_state:
+        st.session_state.quiz_answers = {}
+    if "quiz_result" not in st.session_state:
+        st.session_state.quiz_result = None
+    # Visualization state
+    if "uploaded_csv" not in st.session_state:
+        st.session_state.uploaded_csv = None
+    if "csv_filename" not in st.session_state:
+        st.session_state.csv_filename = None
+    _ensure_generated_files_state()
 
-        session_client: SessionClient | None = None
-        with st.sidebar:
-            st.header("Session Settings")
-            default_api_base = st.session_state.get("api_base_url", _default_api_base_url())
-            api_base_url = st.text_input("API Base URL", value=default_api_base)
-            st.session_state.api_base_url = api_base_url
-            learner_id = st.text_input(
-                "Learner ID",
-                value=st.session_state.get("learner_id_global", "s1"),
-            )
-            st.session_state.learner_id_global = learner_id
-            if api_base_url:
-                try:
-                    session_client = load_session_client(api_base_url, learner_id)
-                except Exception as exc:
-                    st.error(f"Failed to initialize session client: {exc}")
-                    session_client = None
-            else:
-                st.warning("Provide an API base URL to connect to the tutor backend.")
+    session_client: SessionClient | None = None
+    with st.sidebar:
+        st.header("Session Settings")
+        default_api_base = st.session_state.get("api_base_url", _default_api_base_url())
+        api_base_url = st.text_input("API Base URL", value=default_api_base)
+        st.session_state.api_base_url = api_base_url
+        learner_id = st.text_input(
+            "Learner ID",
+            value=st.session_state.get("learner_id_global", "s1"),
+        )
+        st.session_state.learner_id_global = learner_id
+        if api_base_url:
+            try:
+                session_client = load_session_client(api_base_url, learner_id)
+            except Exception as exc:
+                st.error(f"Failed to initialize session client: {exc}")
                 session_client = None
+        else:
+            st.warning("Provide an API base URL to connect to the tutor backend.")
+            session_client = None
 
-            st.subheader("📤 Upload Documents")
-            st.caption("Upload documents for Q&A and quiz generation. They will be automatically ingested when you ask questions.")
-            
-            uploaded_files = st.file_uploader(
-                "Add PDFs, Markdown, or TXT files",
-                type=["pdf", "txt", "md"],
-                accept_multiple_files=True,
-                key="chat_file_uploader"
-            )
-            
-            # Update session state when files are uploaded
-            if uploaded_files:
-                # Check if these are new files (different from what's already stored)
-                if not st.session_state.chat_uploaded_files or \
-                   len(uploaded_files) != len(st.session_state.chat_uploaded_files) or \
-                   any(new.name != old.name for new, old in zip(uploaded_files, st.session_state.chat_uploaded_files)):
-                    # New files uploaded - reset ingestion flag
-                    st.session_state.chat_uploaded_files = uploaded_files
-                    st.session_state.chat_uploaded_filenames = []
-                    st.session_state.chat_upload_processing_done = False
-                    st.session_state.chat_files_just_ingested = False
-            else:
-                # No files in uploader - clear session state
-                if st.session_state.chat_uploaded_files:
-                    st.session_state.chat_uploaded_files = []
-                    st.session_state.chat_uploaded_filenames = []
-                    st.session_state.chat_upload_processing_done = False
-                    st.session_state.chat_files_just_ingested = False
-            
-            # Show status
+        st.subheader("📤 Upload Documents")
+        st.caption("Upload documents for Q&A and quiz generation. They will be automatically ingested when you ask questions.")
+        
+        uploaded_files = st.file_uploader(
+            "Add PDFs, Markdown, or TXT files",
+            type=["pdf", "txt", "md"],
+            accept_multiple_files=True,
+            key="chat_file_uploader"
+        )
+        
+        # Update session state when files are uploaded
+        if uploaded_files:
+            # Check if these are new files (different from what's already stored)
+            if not st.session_state.chat_uploaded_files or \
+               len(uploaded_files) != len(st.session_state.chat_uploaded_files) or \
+               any(new.name != old.name for new, old in zip(uploaded_files, st.session_state.chat_uploaded_files)):
+                # New files uploaded - reset ingestion flag
+                st.session_state.chat_uploaded_files = uploaded_files
+                st.session_state.chat_uploaded_filenames = []
+                st.session_state.chat_upload_processing_done = False
+                st.session_state.chat_files_just_ingested = False
+        else:
+            # No files in uploader - clear session state
             if st.session_state.chat_uploaded_files:
-                st.success(f"✅ {len(st.session_state.chat_uploaded_files)} file(s) uploaded!")
-                
-                with st.expander("View uploaded files"):
-                    for file in st.session_state.chat_uploaded_files:
-                        file_size_mb = len(file.getvalue()) / (1024 * 1024)
-                        st.write(f"• {file.name} ({file_size_mb:.2f} MB)")
+                st.session_state.chat_uploaded_files = []
+                st.session_state.chat_uploaded_filenames = []
+                st.session_state.chat_upload_processing_done = False
+                st.session_state.chat_files_just_ingested = False
+        
+        # Show status
+        if st.session_state.chat_uploaded_files:
+            st.success(f"✅ {len(st.session_state.chat_uploaded_files)} file(s) uploaded!")
             
-            st.subheader("🗂️ Generated Files")
-            with st.expander("Manage generated files", expanded=False):
-                render_generated_files_manager()
-            st.divider()
+            with st.expander("View uploaded files"):
+                for file in st.session_state.chat_uploaded_files:
+                    file_size_mb = len(file.getvalue()) / (1024 * 1024)
+                    st.write(f"• {file.name} ({file_size_mb:.2f} MB)")
+        
+        st.subheader("🗂️ Generated Files")
+        with st.expander("Manage generated files", expanded=False):
+            render_generated_files_manager()
+        st.divider()
+        
+        # CSV Upload for Visualization
+        st.subheader("📊 Data Visualization")
+        st.caption("Upload a CSV file to create plots and charts")
+        
+        uploaded_csv = st.file_uploader(
+            "Upload CSV file",
+            type=["csv"],
+            key="csv_uploader",
+            help="Upload a CSV file and then ask to plot/visualize the data"
+        )
+        
+        if uploaded_csv:
+            # Save CSV to uploads directory
+            upload_dir = Path("data/uploads")
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            csv_path = upload_dir / uploaded_csv.name
+            csv_path.write_bytes(uploaded_csv.getvalue())
             
-            # CSV Upload for Visualization
-            st.subheader("📊 Data Visualization")
-            st.caption("Upload a CSV file to create plots and charts")
+            st.session_state.uploaded_csv = csv_path
+            st.session_state.csv_filename = uploaded_csv.name
+            st.success(f"✅ Uploaded: {uploaded_csv.name}")
             
-            uploaded_csv = st.file_uploader(
-                "Upload CSV file",
-                type=["csv"],
-                key="csv_uploader",
-                help="Upload a CSV file and then ask to plot/visualize the data"
-            )
-            
-            if uploaded_csv:
-                # Save CSV to uploads directory
-                upload_dir = Path("data/uploads")
-                upload_dir.mkdir(parents=True, exist_ok=True)
-                csv_path = upload_dir / uploaded_csv.name
-                csv_path.write_bytes(uploaded_csv.getvalue())
-                
-                st.session_state.uploaded_csv = csv_path
-                st.session_state.csv_filename = uploaded_csv.name
-                st.success(f"✅ Uploaded: {uploaded_csv.name}")
-                
-                # Show preview
-                with st.expander("Preview data"):
-                    import pandas as pd
-                    df = pd.read_csv(csv_path)
-                    st.write(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
-                    st.write(f"**Columns:** {', '.join(df.columns.tolist())}")
-                    st.dataframe(df.head(5), use_container_width=True)
-            elif st.session_state.csv_filename:
-                st.info(f"📁 Current file: {st.session_state.csv_filename}")
-                if st.button("🗑️ Clear CSV"):
-                    st.session_state.uploaded_csv = None
-                    st.session_state.csv_filename = None
-                    st.rerun()
-            
-            st.divider()
+            # Show preview
+            with st.expander("Preview data"):
+                import pandas as pd
+                df = pd.read_csv(csv_path)
+                st.write(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
+                st.write(f"**Columns:** {', '.join(df.columns.tolist())}")
+                st.dataframe(df.head(5), use_container_width=True)
+        elif st.session_state.csv_filename:
+            st.info(f"📁 Current file: {st.session_state.csv_filename}")
+            if st.button("🗑️ Clear CSV"):
+                st.session_state.uploaded_csv = None
+                st.session_state.csv_filename = None
+                st.rerun()
+        
+        st.divider()
         
         if session_client is None:
             st.error("Session API client is unavailable. Check the base URL and try again.")
@@ -1031,10 +1031,10 @@ def render() -> None:
             
             if is_viz_request:
                 st.warning("Visualization handling currently bypasses session API. TODO: convert to session events.")
-                            else:
-            if not ingestion_happened:
-                with st.chat_message("user"):
-                    st.markdown(prompt)
+            else:
+                if not ingestion_happened:
+                    with st.chat_message("user"):
+                        st.markdown(prompt)
             
             with st.chat_message("assistant"):
                 placeholder = st.empty()
@@ -1042,66 +1042,66 @@ def render() -> None:
                 
                 with st.spinner("Thinking..."):
                     try:
-                            event_type = "message"
-                            quiz_topic = None
-                            quiz_count = None
-                            if "quiz" in prompt.lower():
-                                event_type = "quiz"
-                                quiz_topic = prompt
-                                quiz_count = 5
+                        event_type = "message"
+                        quiz_topic = None
+                        quiz_count = None
+                        if "quiz" in prompt.lower():
+                            event_type = "quiz"
+                            quiz_topic = prompt
+                            quiz_count = 5
 
-                            session_response = session_client.post_event(
-                                event_type=event_type,
-                                content=prompt,
-                                quiz_topic=quiz_topic,
-                                quiz_count=quiz_count,
-                                source_hints=doc_hints or None,
-                                documents_only=documents_only,
+                        session_response = session_client.post_event(
+                            event_type=event_type,
+                            content=prompt,
+                            quiz_topic=quiz_topic,
+                            quiz_count=quiz_count,
+                            source_hints=doc_hints or None,
+                            documents_only=documents_only,
                         )
                     except Exception as e:
                         error_msg = str(e)
                         st.error(f"❌ Error generating answer: {error_msg}")
                         logger.exception("Error in answer_question")
-                            session_response = SessionResponse(
-                                session_id=learner_id,
-                                turn_id=0,
-                                route="error",
-                                answer=f"I encountered an error: {error_msg}",
-                                citations=[],
-                                source="error",
-                                quiz=None,
-                                metadata={},
-                            )
+                        session_response = SessionResponse(
+                            session_id=learner_id,
+                            turn_id=0,
+                            route="error",
+                            answer=f"I encountered an error: {error_msg}",
+                            citations=[],
+                            source="error",
+                            quiz=None,
+                            metadata={},
+                        )
                 
-                    if session_response.answer:
-                        placeholder.markdown(format_answer(session_response.answer))
+                if session_response.answer:
+                    placeholder.markdown(format_answer(session_response.answer))
                 else:
                     placeholder.error("No answer was generated. Please try again.")
                     
-                    if session_response.citations:
-                        citations_container.markdown(
-                            "**Citations:**\n" + "\n".join(f"- {c}" for c in session_response.citations)
-                        )
+                if session_response.citations:
+                    citations_container.markdown(
+                        "**Citations:**\n" + "\n".join(f"- {c}" for c in session_response.citations)
+                    )
                 else:
                     citations_container.caption("No citations provided.")
 
-                    if session_response.quiz:
-                        quiz_model = Quiz.model_validate(session_response.quiz)
-                        st.session_state.quiz = quiz_model.model_dump(mode="json")
-                        st.session_state.quiz_markdown = session_response.quiz_markdown
-                        st.session_state.quiz_answers = {}
-                        st.session_state.quiz_result = None
-                        if session_response.quiz_markdown:
-                            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                            _add_generated_file(
-                                name=f"quiz_{quiz_model.topic.replace(' ', '_')}_{timestamp}.md",
-                                content=session_response.quiz_markdown,
-                                kind="text",
-                                mime="text/markdown",
-                                binary=False,
-                                language="markdown",
-                                set_preview=False,
-                            )
+                if session_response.quiz:
+                    quiz_model = Quiz.model_validate(session_response.quiz)
+                    st.session_state.quiz = quiz_model.model_dump(mode="json")
+                    st.session_state.quiz_markdown = session_response.quiz_markdown
+                    st.session_state.quiz_answers = {}
+                    st.session_state.quiz_result = None
+                    if session_response.quiz_markdown:
+                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                        _add_generated_file(
+                            name=f"quiz_{quiz_model.topic.replace(' ', '_')}_{timestamp}.md",
+                            content=session_response.quiz_markdown,
+                            kind="text",
+                            mime="text/markdown",
+                            binary=False,
+                            language="markdown",
+                            set_preview=False,
+                        )
 
                 st.session_state.messages.append(
                     {

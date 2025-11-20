@@ -477,8 +477,8 @@ def delete_collection(collection_name: str) -> str:
 
 if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "http")
-    # Get port (prioritize MCP_PORT, default to 8000)
-    port = int(os.getenv("MCP_PORT", "8000"))
+    # Get port (prioritize MCP_PORT, default to 8200)
+    port = int(os.getenv("MCP_PORT", "8200"))
     
     print(f"Starting Chroma MCP server on port {port} with {transport} transport...")
     print(f"Connect to: http://localhost:{port}/mcp")
