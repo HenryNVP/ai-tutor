@@ -18,7 +18,7 @@ def detect_quiz_request(message: str) -> bool:
 
 
 def extract_quiz_num_questions(message: str) -> int:
-	"""Extract requested number of questions; cap at 20; default 4."""
+	"""Extract requested number of questions; cap at 40; default 4."""
 	message_lower = message.lower()
 	patterns = [
 		r"(\d+)\s+(?:question|questions)",
@@ -31,7 +31,8 @@ def extract_quiz_num_questions(message: str) -> int:
 		m = re.search(p, message_lower)
 		if m:
 			n = int(m.group(1))
-			return min(n, 20)
+			# Cap at 40 to match system limit (see quiz_agent.py and tutor.py)
+			return max(3, min(n, 40))
 	return 4
 
 

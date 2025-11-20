@@ -1120,7 +1120,21 @@ def render() -> None:
                                 f"Content from uploaded documents: {doc_titles_str}\n\n"
                                 f"{context}"
                             )
-                            st.caption(f"📚 Retrieved {len(citations)} passages from {len(hits_by_doc)} document(s): {', '.join(hits_by_doc.keys())}")
+                            
+                            # Surface explicit source filter hints so routing can stay on the right files
+                            filename_hints = [
+                                name for name in (st.session_state.chat_uploaded_filenames or []) if name
+                            ]
+                            if not filename_hints:
+                                filename_hints = list(hits_by_doc.keys())
+                            if filename_hints:
+                                hints_line = "SOURCE_FILTER_HINTS: " + ", ".join(filename_hints)
+                                uploaded_docs_context = f"{hints_line}\n\n{uploaded_docs_context}"
+                            
+                            st.caption(
+                                f"📚 Retrieved {len(citations)} passages from {len(hits_by_doc)} document(s): "
+                                f"{', '.join(hits_by_doc.keys())}"
+                            )
                         else:
                             st.info("ℹ️ No passages found in uploaded documents. Using general knowledge...")
 
@@ -1134,60 +1148,13 @@ def render() -> None:
                 # - Route summary requests → hand off to QA agent (which can use write_text_file)
                 # - Route regular Q&A → hand off to QA agent or web agent
                 
-                # We still prepare context for uploaded documents to pass as extra_context,
-                # but let the agent system handle the actual routing and tool calls.
-                has_ingested_docs = (
-                    st.session_state.chat_files_ingested and st.session_state.chat_uploaded_filenames
-                )
-                filter_to_uploaded = (
-                    is_question_about_uploaded_docs(prompt) and
-                    has_ingested_docs and
-                    not is_quiz_request
-                )
-                
-                # Prepare context from uploaded documents if available
-                uploaded_docs_context_for_agent = None
-                if filter_to_uploaded:
-                    # Retrieve context from uploaded documents to pass as extra_context
-                    # The agent will use this context but still route through proper agents
-                    with st.spinner("Searching uploaded documents..."):
-                        queries = []
-                        for filename in st.session_state.chat_uploaded_filenames:
-                            query_text = Path(filename).stem.replace('_', ' ').replace('-', ' ')
-                            queries.append(query_text)
-                        queries.append(prompt)
-                        
-                        filtered_hits = service.retrieve_multiple_queries(
-                            queries=queries,
-                            filenames=st.session_state.chat_uploaded_filenames,
-                            top_k=50
-                        )
-                        
-                        filtered_hits = filter_hits_by_filenames(
-                            filtered_hits,
-                            st.session_state.chat_uploaded_filenames
-                        )
-                        
-                        agent_context_parts: List[str] = []
-                        if filtered_hits:
-                            st.caption(f"📚 Found {len(filtered_hits)} passages from your uploaded documents")
-                            formatted_context, _ = service.format_context_from_hits(
-                                hits=filtered_hits[:15],
-                                max_passages=15
-                            )
-                            agent_context_parts.append(formatted_context)
-                        elif has_ingested_docs:
-                            st.warning("No relevant passages found in uploaded documents. Using general knowledge...")
-
-                        if agent_context_parts:
-                            uploaded_docs_context_for_agent = "\n\n---\n\n".join(agent_context_parts)
-                
                 # Always route through TutorAgent for proper agent orchestration
-                # Combine all available context (uploaded docs, quiz context, etc.)
+                # Reuse the context already retrieved for display (avoid duplicate retrieval)
+                # The agents will use this context via extra_context, and can still retrieve
+                # additional context using source_filter if needed
                 combined_context = None
-                if uploaded_docs_context_for_agent:
-                    combined_context = uploaded_docs_context_for_agent
-                elif uploaded_docs_context:
+                if uploaded_docs_context:
+                    # Reuse the context already retrieved above (no duplicate retrieval)
                     combined_context = uploaded_docs_context
                 elif quiz_context:
                     combined_context = quiz_context

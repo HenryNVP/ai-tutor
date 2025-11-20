@@ -60,6 +60,17 @@ def extract_source_mentions(message: str) -> List[str]:
     ):
         _add_candidate(match)
 
+    # Parse metadata-based hints injected by the UI (e.g., SOURCE_FILTER_HINTS or context headers)
+    metadata_patterns = [
+        r"SOURCE_FILTER_HINTS:\s*([^\n\r]+)",
+        r"Source filter hints:\s*([^\n\r]+)",
+        r"Content from uploaded documents:\s*([^\n\r]+)",
+    ]
+    for pattern in metadata_patterns:
+        for match in re.findall(pattern, message, flags=re.IGNORECASE):
+            for candidate in re.split(r"[,\|]", match):
+                _add_candidate(candidate)
+
     return references
 
 

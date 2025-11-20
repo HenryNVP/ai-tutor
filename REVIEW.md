@@ -38,54 +38,30 @@ RoutingDecision → _execute_decision() → Specialist Agent
 ✅ **Source filter extraction** handles document references well
 ✅ **RoutingDecision dataclass** provides structured metadata
 
-**Issues & Concerns:**
-
-#### 🔴 **Critical Issue: Quiz Routing Bypass**
-```python:674:679:src/ai_tutor/agents/tutor.py
-if decision.target == "quiz":
-    guidance = (
-        "Quiz creation is available from the Quiz Builder tab in the app. "
-        "Please open the quiz tab to generate and take a quiz."
-    )
-    return guidance, None
-```
-**Problem:** Quiz requests are **completely bypassed** in `_execute_decision()`, returning a static message instead of calling `quiz_agent`. This contradicts the architecture where quiz_agent should handle quiz generation.
-
-**Impact:** 
-- Quiz requests routed to "quiz" target never generate quizzes
-- Users get a redirect message instead of actual quiz generation
-- The `quiz_agent` and `generate_quiz` tool are never invoked through normal routing
-
-**Recommendation:** 
-```python
+**Recent Fixes:**
+- ✅ `_execute_decision()` now calls `_run_quiz_agent` for quiz routes and the fallback path re-routes missed quiz intents through the same agent flow, so quiz requests consistently trigger the `generate_quiz` tool.
+```674:683:src/ai_tutor/agents/tutor.py
 if decision.target == "quiz":
     answer = await self._run_quiz_agent(prompt, session, on_delta)
-    # quiz_agent will call generate_quiz tool internally
-    return answer, self.state.last_quiz
+    return answer, None
+```
+- ✅ Quiz count extraction now respects the 40-question limit supported elsewhere.
+```20:36:src/ai_tutor/learning/quiz_intent.py
+return max(3, min(n, 40))
+```
+- ✅ Uploaded-document context now includes explicit `SOURCE_FILTER_HINTS`, and `extract_source_mentions` parses them so routing can stay on the correct files even when the learner does not cite filenames verbatim.
+```1120:1135:apps/ui.py
+hints_line = "SOURCE_FILTER_HINTS: " + ", ".join(filename_hints)
+uploaded_docs_context = f"{hints_line}\n\n{uploaded_docs_context}"
+```
+```37:63:src/ai_tutor/agents/routing.py
+metadata_patterns = [
+    r"SOURCE_FILTER_HINTS:\s*([^\n\r]+)",
+    ...
+]
 ```
 
-#### 🟡 **Issue: Inconsistent Quiz Handling**
-There are **three different paths** for quiz generation:
-1. `decision.target == "quiz"` → Returns static message (broken)
-2. `_should_force_quiz()` → Directly calls `quiz_service.generate_quiz()` (bypasses agent)
-3. `_process_quiz_directive()` → Parses JSON from agent response (legacy)
-
-**Recommendation:** Consolidate to single path through `quiz_agent`.
-
-#### 🟡 **Issue: Source Filter Extraction Limitations**
-```python:37:63:src/ai_tutor/agents/routing.py
-def extract_source_mentions(message: str) -> List[str]:
-    # Only extracts:
-    # - Quoted strings
-    # - Filenames with extensions
-    # - "lecture/chapter/module N" patterns
-```
-**Problem:** Doesn't handle:
-- Generic references like "my uploaded documents" (filtered out by `GENERIC_SOURCE_TOKENS`)
-- Document titles without quotes
-- Contextual references from `extra_context`
-
-**Recommendation:** Enhance extraction to handle document titles from metadata.
+**Remaining Issues & Concerns:**
 
 #### 🟡 **Issue: Routing Confidence Not Used**
 ```python:26:34:src/ai_tutor/agents/routing.py
@@ -151,38 +127,10 @@ if source_filter and not hits:
 
 **Issues:**
 
-#### 🔴 **Critical Issue: Uploaded Document Detection Logic**
-```python:155:164:src/ai_tutor/learning/quiz.py
-is_uploaded_doc_request = topic and any(x in topic.lower() for x in ['uploaded', 'document', 'file', 'upload'])
+#### ✅ **Fixed: Uploaded Document Detection Logic**
+QuizService now keys off the presence/length of `extra_context` rather than topic keywords before deciding whether to skip vector-store retrieval, preventing uploaded-doc quizzes from mixing in unrelated passages.
 
-if extra_context and len(extra_context) > 500:
-    context_sections.append("Document content:\n" + extra_context.strip())
-    # Only do retrieval if NOT an uploaded document request
-    if topic and not is_uploaded_doc_request:
-        hits = list(self.retriever.retrieve(Query(text=topic)))
-```
-**Problem:** 
-- Detection is **topic-based** (checks if topic contains keywords), not based on actual `extra_context` source
-- If topic is "machine learning" but `extra_context` contains uploaded docs, it will still do vector store retrieval
-- Logic is inverted: should check if `extra_context` is from uploaded docs, not if topic mentions "document"
-
-**Impact:** Quiz generation may mix uploaded document content with vector store content when it should be exclusive.
-
-**Recommendation:** 
-```python
-# Better: Check if extra_context is substantial (indicates uploaded docs)
-is_uploaded_doc_context = extra_context and len(extra_context) > 500
-
-if is_uploaded_doc_context:
-    context_sections.append("Document content:\n" + extra_context.strip())
-    # Skip vector store retrieval for uploaded docs to avoid mixing sources
-    if not topic or topic.lower() == "uploaded documents":
-        # Only use uploaded content
-        pass
-else:
-    # Normal flow: retrieve from vector store
-    hits = list(self.retriever.retrieve(Query(text=topic)))
-```
+#### 🟡 **Issue: Quiz Topic Extraction Still Generic**
 
 #### 🟡 **Issue: Quiz Topic Extraction for Uploaded Docs**
 ```python:38:49:src/ai_tutor/learning/quiz_intent.py
@@ -272,18 +220,6 @@ Context passed as `extra_context` → Routing → Agent
 
 **Issues:**
 
-#### 🟡 **Issue: Duplicate Context Retrieval**
-```python:1150:1183:apps/ui.py
-if filter_to_uploaded:
-    with st.spinner("Searching uploaded documents..."):
-        filtered_hits = service.retrieve_multiple_queries(...)
-        # Format context
-        uploaded_docs_context_for_agent = "\n\n---\n\n".join(agent_context_parts)
-```
-**Problem:** UI retrieves context **before** routing, then agents may retrieve again. This duplicates work.
-
-**Recommendation:** Let agents handle retrieval, or pass document IDs instead of full context.
-
 #### 🟡 **Issue: Context Size Management**
 ```python:1214:apps/ui.py
 extra_context=combined_context,  # No size limit
@@ -291,6 +227,15 @@ extra_context=combined_context,  # No size limit
 **Problem:** `combined_context` can grow unbounded if multiple large documents are uploaded.
 
 **Recommendation:** Add size limits or truncation with summarization.
+
+#### 🟡 **Issue: Pre-retrieval Runs For Every Turn**
+```1071:1125:apps/ui.py
+if st.session_state.chat_files_ingested ...:
+    filtered_hits = service.retrieve_multiple_queries(... top_k=50)
+```
+**Problem:** The UI pre-fetches up to 50 passages from uploaded docs for **every** prompt once files exist, even if the learner is asking unrelated questions. This adds latency and vector-store cost, and could be deferred until routing actually requests document-grounded work.
+
+**Recommendation:** Gate the retrieval behind intent checks (e.g., only when question references documents or routing demands it) or switch to lightweight metadata hints without pulling full passages.
 
 ---
 
@@ -312,20 +257,17 @@ extra_context=combined_context,  # No size limit
 ## 7. Recommendations Summary
 
 ### High Priority
-1. **Fix quiz routing bypass** - Call `quiz_agent` instead of returning static message
-2. **Fix uploaded document detection** - Use `extra_context` presence, not topic keywords
-3. **Consolidate quiz generation paths** - Single path through `quiz_agent`
+1. **Leverage routing confidence** - degrade to LLM router / confirmation when low
+2. **Clamp/session-scope retrieval cache** - avoid stale responses across learners
+3. **Improve quiz topic extraction** - recover real document titles for uploaded-doc quizzes
 
 ### Medium Priority
-4. **Enhance source filter extraction** - Handle document titles and generic references
-5. **Standardize context labels** - Consistent naming across agents
-6. **Add context size limits** - Prevent token overflow from large uploads
-7. **Use routing confidence** - Implement fallback or validation
+4. **Standardize context labels** - Match agent instructions with actual prompt sections
+5. **Add context size limits** - Prevent token overflow from large uploads
+6. **Reduce redundant retrieval cost** - UI still pre-fetches 50 passages for every turn even if the question ignores uploads
 
 ### Low Priority
-8. **Session-scoped retrieval cache** - Prevent stale results
-9. **Adaptive top_k for notes** - Scale with document size
-10. **Extract document names** - Better topic extraction for uploaded docs
+7. **Adaptive top_k for notes** - Scale with document size
 
 ---
 
