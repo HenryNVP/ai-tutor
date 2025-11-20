@@ -36,12 +36,13 @@ from apps.chat_helpers import (
     is_question_about_uploaded_docs,
     extract_document_hints,
 )
-from apps.corpus_tab import render_corpus_management_tab
+from apps.session_client import SessionClient
 from apps.file_utils import extract_text, summarize_documents
 from ai_tutor.learning.quiz import Quiz, QuizEvaluation
 from ai_tutor.agents.visualization import VisualizationAgent
 from ai_tutor.agents.llm_client import LLMClient
 from ai_tutor.config.loader import load_settings
+from ai_tutor.data_models.session import SessionResponse
 
 try:  # pragma: no cover - optional dependency
     from pypdf import PdfReader
@@ -756,8 +757,7 @@ def render() -> None:
         )
         st.stop()
 
-    system = load_system(api_key)  # Keep for corpus management tab
-    service = load_service(api_key)  # Use service layer for chat operations
+    service = load_service(api_key)  # Use session API-backed service
     viz_agent = load_visualization_agent(api_key)
     
     # Show MCP status if any server is enabled
@@ -801,7 +801,6 @@ def render() -> None:
 
     # Tab 2: Corpus Management
     with tab2:
-        render_corpus_management_tab(system)
     
     # Tab 1: Chat & Learn (enhanced with auto-ingestion and quiz preview)
     with tab1:
@@ -812,8 +811,6 @@ def render() -> None:
             st.session_state.chat_uploaded_files = []
         if "chat_uploaded_filenames" not in st.session_state:
             st.session_state.chat_uploaded_filenames = []  # Track ingested filenames
-        if "chat_files_ingested" not in st.session_state:
-            st.session_state.chat_files_ingested = False
         if "chat_upload_processing_done" not in st.session_state:
             st.session_state.chat_upload_processing_done = False
         if "chat_files_just_ingested" not in st.session_state:
@@ -831,10 +828,12 @@ def render() -> None:
             st.session_state.csv_filename = None
         _ensure_generated_files_state()
 
+        session_client: SessionClient | None = None
         with st.sidebar:
             st.header("Session Settings")
             learner_id = st.text_input("Learner ID", value="s1")
             st.session_state.learner_id_global = learner_id
+            session_client = SessionClient(service, learner_id)
 
             st.subheader("📤 Upload Documents")
             st.caption("Upload documents for Q&A and quiz generation. They will be automatically ingested when you ask questions.")
@@ -853,8 +852,7 @@ def render() -> None:
                    len(uploaded_files) != len(st.session_state.chat_uploaded_files) or \
                    any(new.name != old.name for new, old in zip(uploaded_files, st.session_state.chat_uploaded_files)):
                     # New files uploaded - reset ingestion flag
-                    st.session_state.chat_uploaded_files = uploaded_files
-                    st.session_state.chat_files_ingested = False
+                st.session_state.chat_uploaded_files = uploaded_files
                     st.session_state.chat_uploaded_filenames = []
                     st.session_state.chat_upload_processing_done = False
                     st.session_state.chat_files_just_ingested = False
@@ -863,16 +861,12 @@ def render() -> None:
                 if st.session_state.chat_uploaded_files:
                     st.session_state.chat_uploaded_files = []
                     st.session_state.chat_uploaded_filenames = []
-                    st.session_state.chat_files_ingested = False
                     st.session_state.chat_upload_processing_done = False
                     st.session_state.chat_files_just_ingested = False
             
             # Show status
             if st.session_state.chat_uploaded_files:
-                if st.session_state.chat_files_ingested:
-                    st.success(f"✅ {len(st.session_state.chat_uploaded_files)} file(s) ingested and ready!")
-                else:
-                    st.info(f"📁 {len(st.session_state.chat_uploaded_files)} file(s) ready. Ask a question to auto-ingest!")
+                st.success(f"✅ {len(st.session_state.chat_uploaded_files)} file(s) uploaded!")
                 
                 with st.expander("View uploaded files"):
                     for file in st.session_state.chat_uploaded_files:
@@ -922,6 +916,9 @@ def render() -> None:
             
             st.divider()
         
+        if session_client is None:
+            session_client = SessionClient(service, st.session_state.get("learner_id_global", "s1"))
+        
         for message in st.session_state.messages:
             role = message["role"]
             with st.chat_message(role):
@@ -951,7 +948,7 @@ def render() -> None:
             ingestion_happened = False
             ingestion_result = None
             if st.session_state.chat_uploaded_files and not st.session_state.chat_upload_processing_done:
-                with st.spinner("Preparing uploaded documents..."):
+                with st.spinner("Uploading documents..."):
                     try:
                         ingested_filenames, ingestion_result = _prepare_uploaded_files(
                             st.session_state.chat_uploaded_files,
@@ -963,24 +960,35 @@ def render() -> None:
                         st.stop()
 
                 st.session_state.chat_uploaded_filenames = ingested_filenames
-                st.session_state.chat_files_ingested = bool(ingested_filenames)
                 st.session_state.chat_upload_processing_done = True
-                ingestion_happened = ingestion_result is not None and bool(ingested_filenames)
+                ingestion_happened = bool(ingested_filenames)
                 st.session_state.chat_files_just_ingested = ingestion_happened
+                if ingestion_happened and session_client:
+                    try:
+                        session_client.post_event(
+                            event_type="upload",
+                            file_ids=ingested_filenames,
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to record upload event: %s", exc)
             
             # Now add user message to history
             st.session_state.messages.append({"role": "user", "content": prompt})
             
             # If ingestion just happened, show a system message about it
-            if ingestion_happened:
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-                with st.chat_message("assistant"):
-                    st.success(
-                        f"✅ Ingested {len(ingestion_result.documents)} document(s) into "
-                        f"{len(ingestion_result.chunks)} chunks! Now answering your question..."
-                    )
+                if ingestion_happened and ingestion_result:
+                    with st.chat_message("assistant"):
+                        st.success(
+                            f"✅ Ingested {len(ingestion_result.documents)} document(s) into "
+                            f"{len(ingestion_result.chunks)} chunks! Now answering your question..."
+                        )
             
+        doc_hints = extract_document_hints(
+            prompt,
+            st.session_state.chat_uploaded_filenames or [],
+        )
+        documents_only = bool(doc_hints and is_question_about_uploaded_docs(prompt))
+
             # Check if this is a visualization request
             is_viz_request = is_visualization_request(prompt) and st.session_state.csv_filename
             
@@ -1061,13 +1069,6 @@ def render() -> None:
                 placeholder = st.empty()
                 citations_container = st.empty()
                 
-                # Check for quiz context from previous interactions
-                if st.session_state.quiz_result:
-                    quiz_result = QuizEvaluation.model_validate(st.session_state.quiz_result)
-                    quiz_context = service.format_quiz_context(quiz_result)
-                else:
-                    quiz_context = ""
-                
                 uploaded_docs_context = None  # deprecated but kept for compat
                 raw_filenames = [
                     Path(f).name
@@ -1086,58 +1087,59 @@ def render() -> None:
                 # - Route summary requests → hand off to QA agent (which can use write_text_file)
                 # - Route regular Q&A → hand off to QA agent or web agent
                 
-                context_parts: List[str] = []
-                if doc_hints:
-                    context_parts.append("SOURCE_FILTER_HINTS: " + ", ".join(doc_hints))
-                if quiz_context:
-                    context_parts.append(quiz_context)
-                combined_context = "\n\n".join(context_parts) if context_parts else None
-                
-                # If user mentions "documents" and we have uploads, append hint for routing
-                enhanced_prompt = prompt
-                if doc_hints:
-                    display_names = [
-                        Path(name).stem.replace("_", " ").replace("-", " ")
-                        for name in doc_hints
-                    ]
-                    hint_line = f"(Uploaded docs available: {', '.join(display_names)})"
-                    enhanced_prompt = f"{prompt}\n\n{hint_line}"
-                
                 with st.spinner("Thinking..."):
                     try:
-                        # Route ALL requests through TutorAgent (orchestrator)
-                        # This ensures proper agent routing and tool access (e.g., write_text_file for summaries)
-                        response = service.answer_question(
-                            learner_id=learner_id,
-                            question=enhanced_prompt,
-                            extra_context=combined_context,
+                        event_type = "message"
+                        quiz_topic = None
+                        quiz_count = None
+                        # basic detection for dedicated quiz flow
+                        if "quiz" in prompt.lower():
+                            event_type = "quiz"
+                            quiz_topic = prompt
+                            quiz_count = 5
+
+                        session_response = session_client.post_event(
+                            event_type=event_type,
+                            content=prompt,
+                            quiz_topic=quiz_topic,
+                            quiz_count=quiz_count,
                             source_hints=doc_hints or None,
+                            documents_only=documents_only,
                         )
                     except Exception as e:
                         error_msg = str(e)
                         st.error(f"❌ Error generating answer: {error_msg}")
                         logger.exception("Error in answer_question")
-                        # Use service layer to create error response
-                        response = service.create_error_response(error_msg)
+                        session_response = SessionResponse(
+                            session_id=learner_id,
+                            turn_id=0,
+                            route="error",
+                            answer=f"I encountered an error: {error_msg}",
+                            citations=[],
+                            source="error",
+                            quiz=None,
+                            metadata={},
+                        )
                 
-                if response.answer:
-                    placeholder.markdown(format_answer(response.answer))
+                if session_response.answer:
+                    placeholder.markdown(format_answer(session_response.answer))
                 else:
                     placeholder.error("No answer was generated. Please try again.")
-                if response.citations:
-                    citations_container.markdown("**Citations:**\n" + "\n".join(f"- {c}" for c in response.citations))
+                if session_response.citations:
+                    citations_container.markdown("**Citations:**\n" + "\n".join(f"- {c}" for c in session_response.citations))
                 else:
                     citations_container.caption("No citations provided.")
 
-                if response.quiz:
-                    st.session_state.quiz = response.quiz.model_dump(mode="json")
+                if session_response.quiz:
+                    quiz_model = Quiz.model_validate(session_response.quiz)
+                    st.session_state.quiz = quiz_model.model_dump(mode="json")
                     st.session_state.quiz_answers = {}
                     st.session_state.quiz_result = None
                     # Generate quiz markdown file (similar to old behavior)
                     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                    quiz_markdown = service.system.quiz_to_markdown(response.quiz)
+                    quiz_markdown = service.system.quiz_to_markdown(quiz_model)
                     _add_generated_file(
-                        name=f"quiz_{response.quiz.topic.replace(' ', '_')}_{timestamp}.md",
+                        name=f"quiz_{quiz_model.topic.replace(' ', '_')}_{timestamp}.md",
                         content=quiz_markdown,
                         kind="text",
                         mime="text/markdown",
@@ -1149,8 +1151,9 @@ def render() -> None:
                 st.session_state.messages.append(
                     {
                         "role": "assistant",
-                        "content": response.answer,
-                        "citations": response.citations,
+                        "content": session_response.answer,
+                        "citations": session_response.citations,
+                        "route": session_response.route,
                     }
                 )
 
