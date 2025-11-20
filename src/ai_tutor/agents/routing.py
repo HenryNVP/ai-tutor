@@ -95,11 +95,20 @@ def detect_note_request(message: str) -> bool:
         "save notes",
         "write a file",
         "create a file",
+        "create text file",
+        "write text file",
+        "text file introducing",
         "lesson notes",
         "study notes",
         "make notes",
+        "draft notes",
+        "note file",
+        "export notes",
     ]
     if any(keyword in lowered for keyword in keywords):
+        return True
+    # Pattern: verbs like write/create/make + "text file"/"notes"
+    if re.search(r"(write|create|make|draft)\s+(?:a\s+)?(?:text\s+)?file", lowered):
         return True
     return bool(re.search(r"\bnotes?\b", lowered) and "quiz" not in lowered)
 

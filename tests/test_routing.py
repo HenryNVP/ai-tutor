@@ -25,6 +25,15 @@ def test_note_routing_extracts_source_filter() -> None:
     assert decision is not None
     assert decision.target == "note"
     assert decision.source_filter == ["Module 2 lecture"]
+def test_note_routing_detects_text_file_request() -> None:
+    question = "Please create a text file introducing BERT."
+
+    decision = apply_deterministic_routing(question)
+
+    assert decision is not None
+    assert decision.target == "note"
+    assert decision.source_filter == []
+
 
 
 def test_routing_uses_extra_context_hints() -> None:

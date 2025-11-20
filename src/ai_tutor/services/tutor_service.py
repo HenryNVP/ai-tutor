@@ -371,12 +371,27 @@ Please answer based only on the provided context."""
             return response
 
         question, extra_context, source_hints = self._build_prompt_from_event(event)
-        tutor_response = self.answer_question(
-            learner_id=session_id,
-            question=question,
-            extra_context=extra_context,
-            source_hints=source_hints,
+        logger.info(
+            "[TutorService] Processing event: type=%s, question=%s, source_hints=%s",
+            event.type,
+            question[:100] if question else None,
+            source_hints,
         )
+        try:
+            tutor_response = self.answer_question(
+                learner_id=session_id,
+                question=question,
+                extra_context=extra_context,
+                source_hints=source_hints,
+            )
+            logger.info(
+                "[TutorService] Answer generated: route=%s, answer_length=%d",
+                tutor_response.route,
+                len(tutor_response.answer) if tutor_response.answer else 0,
+            )
+        except Exception as exc:
+            logger.exception("[TutorService] Error generating answer: %s", exc)
+            raise
         quiz_payload = (
             tutor_response.quiz.model_dump(mode="json") if tutor_response.quiz else None
         )

@@ -55,7 +55,12 @@ class MCPServerManager:
             from agents.mcp import MCPServerStreamableHttp
 
             port_env = f"{self.env_prefix}_PORT"
-            port = int(os.getenv(port_env, os.getenv("MCP_PORT", str(self.default_port))))
+            # For filesystem server, don't fall back to MCP_PORT to avoid connecting to wrong server
+            if self.env_prefix == "FS_MCP":
+                port = int(os.getenv(port_env, str(self.default_port)))
+            else:
+                # For chroma and other servers, allow fallback to MCP_PORT
+                port = int(os.getenv(port_env, os.getenv("MCP_PORT", str(self.default_port))))
             server_url = os.getenv(
                 f"{self.env_prefix}_URL",
                 f"http://localhost:{port}/mcp",
@@ -112,7 +117,59 @@ class MCPServerManager:
 
                     self.server_obj = self.loop.run_until_complete(_connect_with_timeout())
                     self._connection_error = None
-                    logger.info("[MCP] Connected to %s", self.name)
+                    
+                    # Validate that the server provides the expected tools
+                    try:
+                        tools = self.loop.run_until_complete(self.server_obj.list_tools())
+                        tool_names = {tool.name for tool in tools} if tools else set()
+                        
+                        # Expected tools for each server type
+                        expected_chroma_tools = {
+                            "query_collection", "add_documents", "list_collections",
+                            "get_collection_info", "create_collection", "delete_collection",
+                            "generate_embedding", "query_with_text"
+                        }
+                        expected_filesystem_tools = {
+                            "read_text_file", "write_text_file", "list_directory",
+                            "create_directory", "delete_path"
+                        }
+                        
+                        # Validate server type based on tools
+                        is_chroma = bool(tool_names & expected_chroma_tools)
+                        is_filesystem = bool(tool_names & expected_filesystem_tools)
+                        
+                        if "chroma" in self.name.lower() and not is_chroma:
+                            logger.warning(
+                                "[MCP] Chroma server on port %d doesn't have expected Chroma tools. "
+                                "Found tools: %s. This might be the wrong server.",
+                                port,
+                                sorted(tool_names)[:10],
+                            )
+                        elif "filesystem" in self.name.lower() and not is_filesystem:
+                            logger.warning(
+                                "[MCP] Filesystem server on port %d doesn't have expected filesystem tools. "
+                                "Found tools: %s. This might be the wrong server.",
+                                port,
+                                sorted(tool_names)[:10],
+                            )
+                        
+                        logger.info(
+                            "[MCP] Connected to %s on port %d (%d tools: %s)",
+                            self.name,
+                            port,
+                            len(tool_names),
+                            ", ".join(sorted(tool_names)[:5]) + ("..." if len(tool_names) > 5 else ""),
+                        )
+                        # Store tool names for duplicate detection
+                        self._tool_names = tool_names
+                    except Exception as tool_check_exc:
+                        logger.warning(
+                            "[MCP] Connected to %s but failed to list tools: %s",
+                            self.name,
+                            tool_check_exc,
+                        )
+                        self._tool_names = set()
+                    
                     self._connection_event.set()
 
                     async def _keep_alive():
@@ -177,6 +234,7 @@ class MCPServerManager:
         self._initialized = False
         self._connection_event.clear()
         self._connection_error = None
+        self._tool_names = set()
 
 
 _mcp_server_managers: Dict[str, MCPServerManager] = {}
@@ -192,7 +250,7 @@ def load_mcp_servers() -> Dict[str, Any]:
                     "chroma": MCPServerManager(
                         name="Chroma MCP Server",
                         env_prefix="MCP",
-                        default_port=8000,
+                        default_port=8200,  # Updated to match chroma_mcp_server default
                         start_hint="cd chroma_mcp_server\npython server.py",
                     ),
                     "filesystem": MCPServerManager(
@@ -205,10 +263,43 @@ def load_mcp_servers() -> Dict[str, Any]:
             )
 
         connections: Dict[str, Any] = {}
+        tool_names_by_server: Dict[str, set] = {}
+        
         for name, manager in _mcp_server_managers.items():
             server = manager.initialize()
             if server is not None:
                 connections[name] = server
+                # Collect tool names for validation
+                if hasattr(manager, "_tool_names") and manager._tool_names:
+                    tool_names_by_server[name] = manager._tool_names
+        
+        # Validate that servers don't have duplicate tools
+        if len(tool_names_by_server) > 1:
+            all_tool_sets = list(tool_names_by_server.values())
+            if len(all_tool_sets) >= 2:
+                # Check for overlaps
+                set1, set2 = all_tool_sets[0], all_tool_sets[1]
+                duplicates = set1 & set2
+                if duplicates:
+                    server_names = list(tool_names_by_server.keys())
+                    logger.error(
+                        "[MCP] CRITICAL: Duplicate tool names detected between servers!\n"
+                        "  Server 1 (%s): %d tools\n"
+                        "  Server 2 (%s): %d tools\n"
+                        "  Duplicate tools: %s\n"
+                        "  This usually means both servers are running the same code or pointing to the same instance.\n"
+                        "  Expected:\n"
+                        "    - Chroma MCP (port 8200): query_collection, add_documents, list_collections, etc.\n"
+                        "    - Filesystem MCP (port 8100): read_text_file, write_text_file, list_directory, etc.\n"
+                        "  Check that you have started the correct server on each port.",
+                        server_names[0],
+                        len(set1),
+                        server_names[1],
+                        len(set2),
+                        sorted(duplicates),
+                    )
+                    # Don't fail here - let the agent SDK handle it, but log the issue clearly
+        
         return connections
 
 

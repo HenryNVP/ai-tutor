@@ -66,8 +66,15 @@ def build_retrieve_local_context_tool(
         logger.info("[%s Agent] Retrieving context (top_k=%s, filter=%s)", log_prefix, top_k, source_filter)
 
         def _run_query(filter_value):
-            local_query = Query(text=question, source_filter=filter_value)
-            return retriever.retrieve(local_query)
+            try:
+                logger.debug("[%s Agent] Executing query: %s", log_prefix, question[:100])
+                local_query = Query(text=question, source_filter=filter_value)
+                hits = retriever.retrieve(local_query)
+                logger.debug("[%s Agent] Query returned %d hits", log_prefix, len(hits))
+                return hits
+            except Exception as exc:
+                logger.error("[%s Agent] Query failed: %s", log_prefix, exc, exc_info=True)
+                raise
 
         hits = _run_query(source_filter)
         fallback_used = False

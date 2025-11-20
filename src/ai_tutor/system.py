@@ -133,10 +133,17 @@ class TutorSystem:
 
         # Initialize core embedding and storage infrastructure
         self.embedder = EmbeddingClient(settings.embeddings, api_key=api_key)
-        # NOTE: Embedding model is loaded lazily on first use to avoid blocking startup
-        # This prevents CPU exhaustion during initialization that could starve the event loop
-        # The model will be loaded in a background thread when first needed
-        logger.info("Embedding model will be loaded on first use (lazy loading)")
+        # Pre-load embedding model to avoid first-request delay
+        # This is done in a background thread to avoid blocking startup
+        import threading
+        def _preload_embedder():
+            try:
+                logger.info("Pre-loading embedding model in background thread...")
+                self.embedder._ensure_model()
+                logger.info("Embedding model pre-loaded successfully")
+            except Exception as e:
+                logger.warning("Failed to pre-load embedding model: %s (will load on first use)", e)
+        threading.Thread(target=_preload_embedder, daemon=True).start()
         self.vector_store = create_vector_store(settings.paths.vector_store_dir)
         self.chunk_store = ChunkJsonlStore(settings.paths.chunks_index)
         

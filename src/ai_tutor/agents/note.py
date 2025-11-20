@@ -39,14 +39,14 @@ def build_note_agent(
         "2. When the prompt already includes inline context (look for sections labelled 'Inline Context: Session Uploads' or 'Inline Context: Prompt Snippet'), merge that content with retrieved passages; do not request the same files twice.\n"
         "3. For comprehensive summaries, call retrieve_local_context ONCE with top_k=50 (or higher for very large documents) using a broad question such as \"What does <document name> cover?\" or \"Summarize the entire content of <document name>\". For specific questions (e.g., \"what is RegNet\"), use the exact question as the query with top_k=50 to retrieve all relevant chunks. This ensures you retrieve ALL chunks from the document.\n"
         "4. Merge all retrieved passages into structured notes (clear headings, bullet lists, key takeaways). Include the learner's requested focus areas. Make sure to cover ALL major topics from the retrieved context.\n"
-        "4. When the learner asks to save notes or create a file, call the write_text_file tool via the filesystem MCP server. Name files under data/generated/ with a descriptive slug.\n"
-        "5. Cite supporting passages with [1], [2], etc., referencing the retrieve_local_context citations. If no citations were returned, mention the document title directly instead.\n\n"
+        "5. When the learner asks to save notes or create a text file, you MUST call the write_text_file tool via the filesystem MCP server before responding. Use descriptive filenames under data/generated/ (slugify the topic, e.g., data/generated/text/bert-intro.txt) and report the saved path in your answer.\n"
+        "6. Cite supporting passages with [1], [2], etc., referencing the retrieve_local_context citations. If no citations were returned, mention the document title directly instead.\n\n"
         "Rules:\n"
         "- Keep answers focused on the requested documents; do not invent context.\n"
         "- Use top_k=50 or higher to ensure comprehensive coverage of the entire document.\n"
         "- If retrieve_local_context returns zero entries, explain that no local evidence matched and ask the learner to re-check the document name.\n"
         "- Use professional, concise tone suitable for study notes.\n"
-        "- If write_text_file is unavailable when requested, reply with an explicit error message.\n"
+        "- If write_text_file is unavailable when requested, reply with an explicit error message and include the notes inline.\n"
     )
 
     return Agent(

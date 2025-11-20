@@ -208,6 +208,10 @@ class TutorAgent:
         self.ingest_fn = ingest_directory
         self.mcp_servers = mcp_servers or {}
         self.mcp_server = self.mcp_servers.get("chroma") or next(iter(self.mcp_servers.values()), None)
+        self._filesystem_mcp = (
+            self.mcp_servers.get("filesystem")
+            or next((server for name, server in self.mcp_servers.items() if "filesystem" in name.lower()), None)
+        )
         
         if self.mcp_servers:
             server_names = ", ".join(self.mcp_servers.keys())
@@ -286,7 +290,7 @@ class TutorAgent:
             "- Valid routes: qa, note, quiz, web, ingestion.\n"
             "- Respond ONLY with compact JSON: "
             '{"route": "...", "reason": "...", "source_mentions": [], "quiz_topic": null, "quiz_count": null, "confidence": 0-1}.\n'
-            "- Prefer deterministic rules: quizzes/tests -> quiz, summaries/notes/files -> note, news/current events -> web, ingestion/upload/indexing -> ingestion, "
+            "- Prefer deterministic rules: quizzes/tests -> quiz, summaries/notes/text-file creation/saving -> note, news/current events -> web, ingestion/upload/indexing of learner documents -> ingestion, "
             "otherwise default to qa.\n"
             "- Preserve exact document titles or filenames in source_mentions; never use placeholders like 'uploaded documents'.\n"
             "- If unsure, pick the most likely route but lower confidence."
@@ -498,6 +502,10 @@ class TutorAgent:
             if self.state.last_quiz is not None:
                 quiz_payload = self.state.last_quiz
 
+        saved_file_path = None
+        if decision.target == "note" and answer_text:
+            saved_file_path = await self._maybe_write_text_file(question, answer_text)
+
         if quiz_payload is None and not self.state.last_citations:
             answer_text = self._strip_citation_markers(answer_text)
 
@@ -518,6 +526,11 @@ class TutorAgent:
         total_answer_duration = time.time() - answer_start
         logger.info("[TutorAgent] Answer generation complete in %.2fs", total_answer_duration)
 
+        if saved_file_path:
+            note_suffix = f"\n\n_(Saved to {saved_file_path})_"
+            if note_suffix not in answer_text:
+                answer_text = f"{answer_text}{note_suffix}"
+
         return TutorResponse(
             answer=answer_text,
             hits=hits,
@@ -527,6 +540,69 @@ class TutorAgent:
             quiz=quiz_payload,
             route=decision.target,
         )
+
+    async def _maybe_write_text_file(self, question: str, content: str) -> Optional[str]:
+        """Persist note content via filesystem MCP when explicitly requested."""
+        if not self._filesystem_mcp:
+            return None
+        if not self._needs_text_file(question):
+            return None
+        filename = self._generate_note_filename(question)
+        path = f"data/generated/text/{filename}.txt"
+        try:
+            result = await self._filesystem_mcp.call_tool(
+                "write_text_file",
+                {"path": path, "content": content, "overwrite": False},
+            )
+        except Exception as exc:
+            logger.warning(
+                "[TutorAgent] Failed to write note file via filesystem MCP: %s",
+                exc,
+                exc_info=True,
+            )
+            return None
+        try:
+            # Result content is JSON string per filesystem MCP contract
+            text_payload = result.structuredContent.get("result") if result.structuredContent else None
+            if not text_payload and result.content:
+                text_payload = result.content[0].text
+            if not text_payload:
+                return path
+            data = json.loads(text_payload)
+            return data.get("path", path)
+        except Exception:
+            return path
+
+    @staticmethod
+    def _needs_text_file(question: str) -> bool:
+        lowered = question.lower()
+        keywords = [
+            "create a text file",
+            "write a text file",
+            "make a text file",
+            "draft a text file",
+            "save this as a text file",
+            "create file",
+            "write file",
+        ]
+        return any(keyword in lowered for keyword in keywords)
+
+    @staticmethod
+    def _generate_note_filename(question: str) -> str:
+        import re
+
+        lowered = question.lower()
+        # Try to capture topic after "introducing", "about", etc.
+        match = re.search(r"(?:introducing|about|on)\s+([a-z0-9 \-_/]+)", lowered)
+        if match:
+            candidate = match.group(1)
+        else:
+            candidate = lowered
+        slug = re.sub(r"[^a-z0-9]+", "-", candidate).strip("-")
+        slug = slug or "note"
+        if len(slug) > 60:
+            slug = slug[:60].rstrip("-")
+        return slug or "note"
 
     async def _route_question(
         self,
@@ -793,13 +869,25 @@ class TutorAgent:
     ) -> str:
         if agent is None:
             return "I could not complete that request because the required agent is unavailable."
+        logger.info("[TutorAgent] Running agent %s with prompt length %d", agent.name, len(prompt))
         try:
             result = await Runner.run(agent, input=prompt, session=session)
+            logger.info(
+                "[TutorAgent] Agent %s completed: output_length=%d",
+                agent.name,
+                len(result.final_output) if result and result.final_output else 0,
+            )
         except Exception as exc:
             logger.error("[TutorAgent] Agent %s failed: %s", agent.name, exc, exc_info=True)
             return f"I encountered an error while delegating to {agent.name}: {exc}"
 
         text = result.final_output.strip() if result and result.final_output else ""
+        if not text:
+            logger.warning(
+                "[TutorAgent] Agent %s returned empty output. Result: %s",
+                agent.name,
+                result,
+            )
         if allow_web_fallback and self._should_web_fallback(text):
             logger.info("[TutorAgent] QA requested web fallback")
             return await self._run_web_agent(prompt, session, on_delta)
@@ -810,6 +898,7 @@ class TutorAgent:
 
         if text:
             return text
+        logger.warning("[TutorAgent] Agent %s produced no output, returning fallback message", agent.name)
         return "I could not generate a response. Please try rephrasing your request."
 
     async def _run_web_agent(

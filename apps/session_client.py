@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 from pathlib import Path
+import os
 
 import requests
 
 from ai_tutor.data_models.session import SessionResponse, SessionHistoryResponse
+
+
+DEFAULT_SESSION_TIMEOUT = float(os.getenv("SESSION_HTTP_TIMEOUT", "90"))
 
 
 class SessionClient:
@@ -16,11 +20,11 @@ class SessionClient:
         *,
         api_base_url: str,
         session_id: str,
-        timeout: float = 30.0,
+        timeout: Optional[float] = None,
     ):
         self.base_url = api_base_url.rstrip("/")
         self.session_id = session_id
-        self._timeout = timeout
+        self._timeout = timeout or DEFAULT_SESSION_TIMEOUT
         self._http = requests.Session()
 
     def post_event(
