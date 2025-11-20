@@ -35,7 +35,6 @@ from apps.chat_helpers import (
     format_answer,
     is_question_about_uploaded_docs,
     extract_document_hints,
-    filter_hits_by_filenames,
 )
 from apps.corpus_tab import render_corpus_management_tab
 from apps.file_utils import extract_text, summarize_documents

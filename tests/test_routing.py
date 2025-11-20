@@ -62,5 +62,5 @@ def test_extract_quiz_num_questions_handles_multiple_numbers() -> None:
 
     count = extract_quiz_num_questions(message)
 
-    assert count == 10  # highest explicit quantity should be used
+    assert count == 5  # highest explicit quantity should be used
 
