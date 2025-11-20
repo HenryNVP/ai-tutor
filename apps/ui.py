@@ -1031,17 +1031,17 @@ def render() -> None:
             
             if is_viz_request:
                 st.warning("Visualization handling currently bypasses session API. TODO: convert to session events.")
-            else:
-                if not ingestion_happened:
-                    with st.chat_message("user"):
-                        st.markdown(prompt)
+                            else:
+            if not ingestion_happened:
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+            
+            with st.chat_message("assistant"):
+                placeholder = st.empty()
+                citations_container = st.empty()
                 
-                with st.chat_message("assistant"):
-                    placeholder = st.empty()
-                    citations_container = st.empty()
-                    
-                    with st.spinner("Thinking..."):
-                        try:
+                with st.spinner("Thinking..."):
+                    try:
                             event_type = "message"
                             quiz_topic = None
                             quiz_count = None
@@ -1057,11 +1057,11 @@ def render() -> None:
                                 quiz_count=quiz_count,
                                 source_hints=doc_hints or None,
                                 documents_only=documents_only,
-                            )
-                        except Exception as e:
-                            error_msg = str(e)
-                            st.error(f"❌ Error generating answer: {error_msg}")
-                            logger.exception("Error in answer_question")
+                        )
+                    except Exception as e:
+                        error_msg = str(e)
+                        st.error(f"❌ Error generating answer: {error_msg}")
+                        logger.exception("Error in answer_question")
                             session_response = SessionResponse(
                                 session_id=learner_id,
                                 turn_id=0,
@@ -1072,35 +1072,36 @@ def render() -> None:
                                 quiz=None,
                                 metadata={},
                             )
-                    
+                
                     if session_response.answer:
                         placeholder.markdown(format_answer(session_response.answer))
-                    else:
-                        placeholder.error("No answer was generated. Please try again.")
+                else:
+                    placeholder.error("No answer was generated. Please try again.")
                     
                     if session_response.citations:
                         citations_container.markdown(
                             "**Citations:**\n" + "\n".join(f"- {c}" for c in session_response.citations)
                         )
-                    else:
-                        citations_container.caption("No citations provided.")
+                else:
+                    citations_container.caption("No citations provided.")
 
                     if session_response.quiz:
                         quiz_model = Quiz.model_validate(session_response.quiz)
                         st.session_state.quiz = quiz_model.model_dump(mode="json")
+                        st.session_state.quiz_markdown = session_response.quiz_markdown
                         st.session_state.quiz_answers = {}
                         st.session_state.quiz_result = None
-                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                        quiz_markdown = quiz_to_markdown(quiz_model)
-                        _add_generated_file(
-                            name=f"quiz_{quiz_model.topic.replace(' ', '_')}_{timestamp}.md",
-                            content=quiz_markdown,
-                            kind="text",
-                            mime="text/markdown",
-                            binary=False,
-                            language="markdown",
-                            set_preview=False,
-                        )
+                        if session_response.quiz_markdown:
+                            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                            _add_generated_file(
+                                name=f"quiz_{quiz_model.topic.replace(' ', '_')}_{timestamp}.md",
+                                content=session_response.quiz_markdown,
+                                kind="text",
+                                mime="text/markdown",
+                                binary=False,
+                                language="markdown",
+                                set_preview=False,
+                            )
 
                 st.session_state.messages.append(
                     {
@@ -1165,33 +1166,39 @@ def render() -> None:
                     if any(choice < 0 or choice > 3 for choice in answers):
                         st.warning("Answer every question before submitting.")
                     else:
-                        evaluation_payload = session_client.evaluate_quiz(
-                            quiz_payload=quiz,
-                            answers=answers,
-                        )
-                        evaluation = QuizEvaluation.model_validate(evaluation_payload)
-                        st.session_state.quiz_result = evaluation.model_dump(mode="json")
-                        st.session_state.quiz_completed = quiz.model_dump(mode="json")
-                        st.session_state.quiz = None
-                        st.session_state.quiz_answers = {}
-                        # Initialize markdown for download
-                        st.session_state.quiz_markdown = quiz_to_markdown(quiz)
-                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                        _add_generated_file(
-                            name=f"quiz_{quiz.topic.replace(' ', '_')}_{timestamp}.md",
-                            content=st.session_state.quiz_markdown,
-                            kind="text",
-                            mime="text/markdown",
-                            binary=False,
-                            language="markdown",
-                            set_preview=False,
-                        )
-                        st.session_state.quiz_edit_mode = False
-                        st.success(
-                            f"Quiz scored {evaluation.correct_count}/{evaluation.total_questions} "
-                            f"({evaluation.score * 100:.0f}%)."
-                        )
-                        st.rerun()
+                        try:
+                            session_response = session_client.submit_quiz(
+                                quiz_payload=quiz.model_dump(mode="json"),
+                                answers=answers,
+                            )
+                        except Exception as exc:
+                            st.error(f"Failed to submit quiz: {exc}")
+                            logger.exception("Quiz submission failed")
+                        else:
+                            evaluation_data = session_response.metadata.get("evaluation", {})
+                            evaluation = QuizEvaluation.model_validate(evaluation_data)
+                            st.session_state.quiz_result = evaluation.model_dump(mode="json")
+                            st.session_state.quiz_completed = quiz.model_dump(mode="json")
+                            st.session_state.quiz = None
+                            st.session_state.quiz_answers = {}
+                            st.session_state.quiz_markdown = session_response.quiz_markdown
+                            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                            if session_response.quiz_markdown:
+                                _add_generated_file(
+                                    name=f"quiz_{quiz.topic.replace(' ', '_')}_{timestamp}.md",
+                                    content=session_response.quiz_markdown,
+                                    kind="text",
+                                    mime="text/markdown",
+                                    binary=False,
+                                    language="markdown",
+                                    set_preview=False,
+                                )
+                            st.session_state.quiz_edit_mode = False
+                            st.success(
+                                f"Quiz scored {evaluation.correct_count}/{evaluation.total_questions} "
+                                f"({evaluation.score * 100:.0f}%)."
+                            )
+                            st.rerun()
             
             with col_edit_download:
                 # Initialize session state for pre-submit edit mode

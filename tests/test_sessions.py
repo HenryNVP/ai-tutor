@@ -32,18 +32,40 @@ class FakeTutorService:
         turn_id = len(history)
 
         route = self._route_for_event(event)
-        answer = f"{route.upper()} response for turn {turn_id}"
         metadata: Dict[str, Any] = {"event_type": event.type}
+        quiz_payload = None
+        quiz_markdown = None
+        answer = f"{route.upper()} response for turn {turn_id}"
+
         if event.type == "upload" and event.file_ids:
             metadata["file_ids"] = event.file_ids
+
+        if route == "quiz":
+            quiz_payload = {"topic": "physics", "questions": []}
+            quiz_markdown = "# Quiz physics"
+
+        if event.type == "quiz_submission":
+            quiz_payload = event.quiz or {"topic": "physics", "questions": []}
+            quiz_markdown = "# Quiz submission markdown"
+            total = len(event.answers or [])
+            metadata["evaluation"] = {
+                "topic": quiz_payload.get("topic", "physics"),
+                "total_questions": total,
+                "correct_count": total,
+                "score": 1.0,
+            }
+            answer = "Quiz graded"
+            route = "quiz_submission"
+
         response = SessionResponse(
             session_id=session_id,
             turn_id=turn_id,
             route=route,
-            answer=answer,
+            answer=answer if route != "quiz_submission" else None,
             citations=[f"[{turn_id}]"],
-            source="local" if route != "upload" else "upload",
-            quiz={"topic": "physics", "questions": []} if route == "quiz" else None,
+            source="local" if route not in {"upload", "quiz_submission"} else route,
+            quiz=quiz_payload,
+            quiz_markdown=quiz_markdown,
             metadata=metadata,
         )
         self.responses.setdefault(session_id, []).append(response)
@@ -60,6 +82,8 @@ class FakeTutorService:
     def _route_for_event(event: SessionEvent) -> str:
         if event.type == "upload":
             return "upload"
+        if event.type == "quiz_submission":
+            return "quiz_submission"
         content = (event.content or "").lower()
         if event.type == "quiz" or "quiz" in content:
             return "quiz"
@@ -164,4 +188,23 @@ def test_upload_event_metadata(api_client):
     data = response.json()
     assert data["route"] == "upload"
     assert data["metadata"]["file_ids"] == ["docA.pdf", "docB.pdf"]
+
+
+def test_quiz_submission_event(api_client):
+    client, _ = api_client
+    session_id = "learner-quiz"
+    payload = {
+        "session_id": session_id,
+        "event": {
+            "type": "quiz_submission",
+            "quiz": {"topic": "torque", "questions": []},
+            "answers": [1, 2, 0],
+        },
+    }
+    response = client.post(f"/sessions/{session_id}/events", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["route"] == "quiz_submission"
+    assert body["quiz_markdown"] == "# Quiz submission markdown"
+    assert body["metadata"]["evaluation"]["total_questions"] == 3
 

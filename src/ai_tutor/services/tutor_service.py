@@ -13,6 +13,8 @@ from typing import DefaultDict, List, Optional
 
 from ai_tutor.data_models import Query, RetrievalHit
 from ai_tutor.system import TutorSystem
+from ai_tutor.learning.quiz import Quiz
+from ai_tutor.learning.quiz_utils import quiz_to_markdown
 from ai_tutor.data_models import SessionEvent, SessionResponse, SessionHistoryResponse
 
 logger = logging.getLogger(__name__)
@@ -340,6 +342,34 @@ Please answer based only on the provided context."""
             self._session_responses[session_id].append(response)
             return response
 
+        if event.type == "quiz_submission":
+            if not event.quiz:
+                raise ValueError("quiz_submission events require quiz payload")
+            answers = event.answers or []
+            quiz_model = Quiz.model_validate(event.quiz)
+            evaluation = self.system.evaluate_quiz(
+                learner_id=session_id,
+                quiz=quiz_model,
+                answers=answers,
+            )
+            markdown = quiz_to_markdown(quiz_model)
+            response = SessionResponse(
+                session_id=session_id,
+                turn_id=turn_id,
+                route="quiz_submission",
+                answer=None,
+                citations=[],
+                source="quiz",
+                quiz=event.quiz,
+                quiz_markdown=markdown,
+                metadata={
+                    "event_type": "quiz_submission",
+                    "evaluation": evaluation.model_dump(mode="json"),
+                },
+            )
+            self._session_responses[session_id].append(response)
+            return response
+
         question, extra_context, source_hints = self._build_prompt_from_event(event)
         tutor_response = self.answer_question(
             learner_id=session_id,
@@ -350,6 +380,7 @@ Please answer based only on the provided context."""
         quiz_payload = (
             tutor_response.quiz.model_dump(mode="json") if tutor_response.quiz else None
         )
+        quiz_markdown = quiz_to_markdown(tutor_response.quiz) if tutor_response.quiz else None
         response = SessionResponse(
             session_id=session_id,
             turn_id=turn_id,
@@ -358,6 +389,7 @@ Please answer based only on the provided context."""
             citations=tutor_response.citations,
             source=tutor_response.source,
             quiz=quiz_payload,
+            quiz_markdown=quiz_markdown,
             metadata={"event_type": event.type},
         )
         self._session_responses[session_id].append(response)

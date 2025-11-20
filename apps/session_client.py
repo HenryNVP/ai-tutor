@@ -79,18 +79,19 @@ class SessionClient:
         response.raise_for_status()
         return response.json()
 
-    def evaluate_quiz(self, quiz_payload, answers: List[int]) -> Dict[str, Any]:
-        """Submit quiz answers for scoring via the API."""
-        if hasattr(quiz_payload, "model_dump"):
-            quiz_payload = quiz_payload.model_dump(mode="json")
-        url = f"{self.base_url}/quiz/evaluate"
-        body = {
-            "learner_id": self.session_id,
+    def submit_quiz(self, quiz_payload, answers: List[int]) -> SessionResponse:
+        """Send quiz submission through the session API."""
+        url = f"{self.base_url}/sessions/{self.session_id}/events"
+        event = {
+            "type": "quiz_submission",
             "quiz": quiz_payload,
             "answers": answers,
         }
-        response = self._http.post(url, json=body, timeout=self._timeout)
+        payload = {
+            "session_id": self.session_id,
+            "event": event,
+        }
+        response = self._http.post(url, json=payload, timeout=self._timeout)
         response.raise_for_status()
-        data = response.json()
-        return data["evaluation"]
+        return SessionResponse.model_validate(response.json())
 
