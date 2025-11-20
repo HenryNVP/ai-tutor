@@ -564,13 +564,12 @@ def render() -> None:
                 st.session_state.uploaded_csv = None
                 st.session_state.csv_filename = None
                 st.rerun()
-        
-        st.divider()
-        
-        if session_client is None:
-            st.error("Session API client is unavailable. Check the base URL and try again.")
-            st.stop()
-        
+    
+    # Main panel - Chat interface
+    if session_client is None:
+        st.warning("⚠️ Session API client is unavailable. Please configure the API Base URL in the sidebar to start chatting.")
+    else:
+        # Load and display chat history
         history = None
         if session_client:
             try:
@@ -581,6 +580,7 @@ def render() -> None:
         if history:
             st.session_state.messages = _messages_from_history(history)
         
+        # Display chat messages
         for message in st.session_state.messages:
             role = message["role"]
             with st.chat_message(role):
@@ -604,6 +604,7 @@ def render() -> None:
                 else:
                     st.markdown(content)
 
+        # Chat input
         prompt = st.chat_input("Ask the tutor a question...")
         if prompt:
             # Prepare uploaded files before answering
@@ -690,7 +691,7 @@ def render() -> None:
                         st.error(f"❌ Error generating answer: {error_msg}")
                         logger.exception("Error in answer_question")
                         session_response = SessionResponse(
-                            session_id=learner_id,
+                            session_id=st.session_state.get("learner_id_global", "s1"),
                             turn_id=0,
                             route="error",
                             answer=f"I encountered an error: {error_msg}",
