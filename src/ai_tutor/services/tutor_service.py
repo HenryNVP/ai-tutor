@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from collections import defaultdict
+from typing import DefaultDict, List, Optional
 
 from ai_tutor.data_models import Query, RetrievalHit
 from ai_tutor.system import TutorSystem
+from ai_tutor.data_models import SessionEvent, SessionResponse, SessionHistoryResponse
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ class TutorService:
     def __init__(self, system: TutorSystem):
         """Initialize service with a TutorSystem instance."""
         self.system = system
+        self._session_events: DefaultDict[str, List[SessionEvent]] = defaultdict(list)
     
     def answer_question(
         self,
@@ -251,7 +254,8 @@ Please answer based only on the provided context."""
             next_topic=None,
             difficulty=None,
             source="local",
-            quiz=None
+            quiz=None,
+            route="qa",
         )
     
     def create_quiz(
@@ -291,11 +295,77 @@ Please answer based only on the provided context."""
             citations=[],
             style="concise",
             source=None,
+            quiz=None,
+            route="error",
         )
     
     def format_quiz_context(self, result):
         """Format quiz evaluation result as context string."""
         return self.system.format_quiz_context(result)
+    
+    def process_event(self, session_id: str, event: SessionEvent) -> SessionResponse:
+        """Process a session event and return structured response."""
+        history = self._session_events[session_id]
+        history.append(event)
+        turn_id = len(history)
+
+        if event.type == "upload":
+            metadata = {"file_ids": event.file_ids or []}
+            return SessionResponse(
+                session_id=session_id,
+                turn_id=turn_id,
+                route="upload",
+                answer=None,
+                citations=[],
+                source="upload",
+                quiz=None,
+                metadata=metadata,
+            )
+
+        question, extra_context, source_hints = self._build_prompt_from_event(event)
+        tutor_response = self.answer_question(
+            learner_id=session_id,
+            question=question,
+            extra_context=extra_context,
+            source_hints=source_hints,
+        )
+        quiz_payload = (
+            tutor_response.quiz.model_dump(mode="json") if tutor_response.quiz else None
+        )
+        return SessionResponse(
+            session_id=session_id,
+            turn_id=turn_id,
+            route=tutor_response.route,
+            answer=tutor_response.answer,
+            citations=tutor_response.citations,
+            source=tutor_response.source,
+            quiz=quiz_payload,
+            metadata={"event_type": event.type},
+        )
+
+    def get_session_history(self, session_id: str) -> SessionHistoryResponse:
+        return SessionHistoryResponse(session_id=session_id, events=self._session_events.get(session_id, []))
+
+    @staticmethod
+    def _build_prompt_from_event(event: SessionEvent) -> tuple[str, Optional[str], Optional[List[str]]]:
+        source_hints = event.source_hints or event.file_ids or []
+        documents_phrase = " Please use the uploaded documents only." if event.documents_only else ""
+
+        if event.type == "note":
+            topic = event.content or "the uploaded documents"
+            question = f"Create detailed study notes about {topic}.{documents_phrase}"
+            return question, None, source_hints
+
+        if event.type == "quiz":
+            topic = event.quiz_topic or event.content or "uploaded documents"
+            count = event.quiz_count or 4
+            question = f"Create {count} quiz questions about {topic}.{documents_phrase}"
+            return question, None, source_hints
+
+        # Default: standard message
+        content = event.content or ""
+        question = f"{content}{documents_phrase}" if content else documents_phrase.strip()
+        return question, None, source_hints
     
     def detect_quiz_request(self, message: str) -> bool:
         """Detect if a message is a quiz request."""

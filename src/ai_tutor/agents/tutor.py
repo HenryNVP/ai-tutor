@@ -85,6 +85,7 @@ class TutorResponse:
     difficulty: Optional[str] = None
     source: Optional[str] = None
     quiz: Optional[Quiz] = None
+    route: str = "qa"
 
 
 @dataclass
@@ -524,6 +525,7 @@ class TutorAgent:
             style=style_hint,
             source=source,
             quiz=quiz_payload,
+            route=decision.target,
         )
 
     async def _route_question(

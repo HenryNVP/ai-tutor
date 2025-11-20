@@ -24,6 +24,12 @@ from pydantic import BaseModel, Field
 
 from ai_tutor.services import TutorService
 from ai_tutor.system import TutorSystem
+from ai_tutor.data_models.session import (
+    SessionEvent,
+    SessionEventRequest,
+    SessionResponse,
+    SessionHistoryResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +77,7 @@ def _serialize_tutor_response(response) -> Dict[str, Any]:
         "difficulty": response.difficulty,
         "hits": hits_payload,
         "quiz": quiz_payload,
+        "route": response.route,
     }
 
 
@@ -108,6 +115,7 @@ class AnswerResponse(BaseModel):
     difficulty: Optional[str]
     hits: List[Dict[str, Any]]
     quiz: Optional[Dict[str, Any]]
+    route: Optional[str] = Field(default=None, description="Agent route used for this turn")
 
 
 class QuizRequest(BaseModel):
@@ -120,37 +128,6 @@ class QuizRequest(BaseModel):
 
 class QuizResponse(BaseModel):
     quiz: Dict[str, Any]
-
-
-class SessionEvent(BaseModel):
-    type: Literal["message", "upload", "quiz", "note"]
-    content: Optional[str] = Field(default=None, description="User text payload")
-    quiz_topic: Optional[str] = Field(default=None, description="Topic for quiz events")
-    quiz_count: Optional[int] = Field(default=None, description="Requested number of questions")
-    file_ids: Optional[List[str]] = Field(default=None, description="Uploaded file identifiers")
-    source_hints: Optional[List[str]] = Field(default=None, description="Document names to prioritize")
-    documents_only: bool = Field(default=False, description="Restrict processing to uploaded docs only")
-
-
-class SessionEventRequest(BaseModel):
-    session_id: str = Field(..., description="Learner/session identifier")
-    event: SessionEvent
-
-
-class SessionResponse(BaseModel):
-    session_id: str
-    turn_id: int
-    route: str
-    answer: Optional[str]
-    citations: List[str] = Field(default_factory=list)
-    source: Optional[str]
-    quiz: Optional[Dict[str, Any]]
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
-class SessionHistoryResponse(BaseModel):
-    session_id: str
-    events: List[SessionEvent]
 
 
 class IngestResponse(BaseModel):
@@ -244,6 +221,52 @@ async def create_quiz(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return QuizResponse(quiz=quiz.model_dump(mode="json"))
+
+
+@app.post(
+    "/sessions/{learner_id}/events",
+    response_model=SessionResponse,
+    summary="Submit a session event and receive structured response",
+)
+async def post_session_event(
+    learner_id: str,
+    payload: SessionEventRequest,
+    service: TutorService = Depends(get_service),
+) -> SessionResponse:
+    session_id = payload.session_id or learner_id
+    if session_id != learner_id:
+        logger.warning(
+            "Session ID mismatch: path=%s, body=%s. Using path parameter.",
+            learner_id,
+            session_id,
+        )
+        session_id = learner_id
+    try:
+        response = await asyncio.to_thread(
+            service.process_event,
+            session_id,
+            payload.event,
+        )
+    except Exception as exc:
+        logger.exception("Error during session event processing: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return response
+
+
+@app.get(
+    "/sessions/{learner_id}",
+    response_model=SessionHistoryResponse,
+    summary="Retrieve session event history",
+)
+async def get_session_history(
+    learner_id: str,
+    service: TutorService = Depends(get_service),
+) -> SessionHistoryResponse:
+    try:
+        return await asyncio.to_thread(service.get_session_history, learner_id)
+    except Exception as exc:
+        logger.exception("Error fetching session history: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post(
