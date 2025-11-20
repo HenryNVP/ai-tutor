@@ -440,32 +440,49 @@ class TutorAgent:
         if quiz_payload is None and self.state.last_quiz is not None:
             quiz_payload = self.state.last_quiz
 
-        if quiz_payload is None and self._should_force_quiz(question):
-            quiz_payload = self.quiz_service.generate_quiz(
-                topic=self._infer_topic_from_request(question),
+        # If routing missed a quiz request, re-route through quiz agent
+        # This ensures all quiz generation goes through the quiz_agent for consistency
+        if quiz_payload is None and self._should_force_quiz(question) and decision.target != "quiz":
+            logger.info(
+                "[TutorAgent] Quiz request detected but missed by routing. Re-routing through quiz agent."
+            )
+            # Create a proper routing decision for quiz
+            quiz_decision = RoutingDecision(
+                target="quiz",
+                reason="Fallback: detected quiz intent keywords",
+                quiz_topic=self._infer_topic_from_request(question),
+                quiz_count=self._infer_count_from_request(question),
+                deterministic=False,
+                confidence=0.8,
+            )
+            # Build prompt for quiz agent
+            quiz_prompt = self._build_agent_prompt(
+                question=question,
+                mode=mode,
+                style_hint=style_hint,
                 profile=profile,
-                num_questions=self._infer_count_from_request(question),
-                difficulty=None,
                 extra_context=extra_context,
+                decision=quiz_decision,
             )
-            self.state.last_quiz = quiz_payload
-            answer_text = (
-                f"I've prepared a {len(quiz_payload.questions)}-question quiz on {quiz_payload.topic} for you. "
-                "You can start taking the quiz now!"
-            )
+            # Execute through quiz agent
+            self._active_profile = profile
+            self._active_extra_context = extra_context
+            try:
+                answer_text, _ = await self._execute_decision(
+                    decision=quiz_decision,
+                    prompt=quiz_prompt,
+                    session=session,
+                    on_delta=on_delta,
+                )
+            finally:
+                self._active_profile = None
+                self._active_extra_context = None
+            # Check if quiz was generated
+            if self.state.last_quiz is not None:
+                quiz_payload = self.state.last_quiz
 
         if quiz_payload is None and not self.state.last_citations:
             answer_text = self._strip_citation_markers(answer_text)
-
-        if quiz_payload is None:
-            processed, computed_quiz = self._process_quiz_directive(
-                answer_text,
-                profile=profile,
-                extra_context=extra_context,
-            )
-            if computed_quiz is not None:
-                quiz_payload = computed_quiz
-                answer_text = processed
 
         hits = self.state.last_hits if not quiz_payload else []
         citations = self.state.last_citations if not quiz_payload else []
@@ -672,11 +689,10 @@ class TutorAgent:
         on_delta: Optional[Callable[[str], None]],
     ) -> tuple[str, Optional[Quiz]]:
         if decision.target == "quiz":
-            guidance = (
-                "Quiz creation is available from the Quiz Builder tab in the app. "
-                "Please open the quiz tab to generate and take a quiz."
-            )
-            return guidance, None
+            answer = await self._run_quiz_agent(prompt, session, on_delta)
+            # quiz_agent will call generate_quiz tool and store result in self.state.last_quiz
+            # The quiz will be picked up from state.last_quiz in answer_async if needed
+            return answer, None
 
         if decision.target == "web":
             answer = await self._run_web_agent(prompt, session, on_delta)
@@ -899,45 +915,6 @@ class TutorAgent:
             next_topics = ", ".join(f"{domain}: {topic}" for domain, topic in list(profile.next_topics.items())[:3])
             lines.append(f"Upcoming topics: {next_topics}")
         return "\n".join(lines)
-
-    def _process_quiz_directive(
-        self,
-        answer_text: str,
-        profile: Optional[LearnerProfile],
-        extra_context: Optional[str],
-    ) -> tuple[str, Optional[Quiz]]:
-        text = answer_text.strip()
-        if not text.startswith("{"):
-            return answer_text, None
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            return answer_text, None
-        if not isinstance(payload, dict):
-            return answer_text, None
-        if payload.get("action") != "generate_quiz":
-            return answer_text, None
-
-        topic_raw = payload.get("topic") or payload.get("subject") or "general review"
-        topic = str(topic_raw).strip() or "general review"
-        count_raw = payload.get("count") or payload.get("num_questions") or 4
-        try:
-            count = int(count_raw)
-        except (TypeError, ValueError):
-            count = 4
-        count = max(3, min(count, 40))  # Allow up to 40 questions
-        message = str(payload.get("message") or "").strip()
-
-        quiz = self.quiz_service.generate_quiz(
-            topic=topic,
-            profile=profile,
-            num_questions=count,
-            difficulty=None,
-            extra_context=extra_context,
-        )
-        if not message:
-            message = f"I've prepared a {count}-question quiz on {quiz.topic}. Scroll down to take it."
-        return message, quiz
 
     @staticmethod
     def _should_force_quiz(question: str) -> bool:

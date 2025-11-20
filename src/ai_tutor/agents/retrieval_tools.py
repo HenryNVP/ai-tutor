@@ -82,17 +82,34 @@ def build_retrieve_local_context_tool(
             fallback_used = True
 
         filtered: List[RetrievalHit] = []
-        seen_docs: set[str] = set()
-        for hit in hits:
-            if hit.score < min_confidence:
-                continue
-            doc_id = hit.chunk.metadata.doc_id.lower()
-            if doc_id in seen_docs:
-                continue
-            seen_docs.add(doc_id)
-            filtered.append(hit)
-            if len(filtered) >= top_k:
-                break
+        # When source_filter is provided, we want ALL chunks from that document (no deduplication)
+        # When no source_filter, deduplicate by doc_id to get diverse sources
+        if source_filter:
+            # For document-specific queries (like summaries or specific questions), include all chunks from the document
+            seen_chunk_ids: set[str] = set()
+            for hit in hits:
+                if hit.score < min_confidence:
+                    continue
+                chunk_id = hit.chunk.metadata.chunk_id
+                if chunk_id in seen_chunk_ids:
+                    continue  # Skip duplicate chunks (same chunk_id)
+                seen_chunk_ids.add(chunk_id)
+                filtered.append(hit)
+                if len(filtered) >= top_k:
+                    break
+        else:
+            # For general queries, deduplicate by doc_id to get diverse sources
+            seen_docs: set[str] = set()
+            for hit in hits:
+                if hit.score < min_confidence:
+                    continue
+                doc_id = hit.chunk.metadata.doc_id.lower()
+                if doc_id in seen_docs:
+                    continue
+                seen_docs.add(doc_id)
+                filtered.append(hit)
+                if len(filtered) >= top_k:
+                    break
 
         state.last_hits = filtered
         state.last_citations = [_format_citation(hit, idx + 1) for idx, hit in enumerate(filtered)]

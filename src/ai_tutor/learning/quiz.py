@@ -150,20 +150,27 @@ class QuizService:
         context_sections: List[str] = []
         references = []
         
-        # If we have substantial extra_context (e.g., from uploaded documents), prioritize it
-        # For uploaded documents, skip vector store retrieval to avoid external sources
-        is_uploaded_doc_request = topic and any(x in topic.lower() for x in ['uploaded', 'document', 'file', 'upload'])
+        # Check if extra_context is substantial (indicates uploaded documents)
+        # Substantial context (>500 chars) typically means uploaded documents were provided
+        is_uploaded_doc_context = extra_context and len(extra_context) > 500
         
-        if extra_context and len(extra_context) > 500:
+        # If we have substantial extra_context (e.g., from uploaded documents), prioritize it
+        # For uploaded documents, skip vector store retrieval to avoid mixing with external sources
+        if is_uploaded_doc_context:
             context_sections.append("Document content:\n" + extra_context.strip())
-            # Only do retrieval if NOT an uploaded document request (to avoid external sources)
-            if topic and not is_uploaded_doc_request:
+            # Only do vector store retrieval if topic is NOT about uploaded documents
+            # This prevents mixing uploaded content with vector store content
+            topic_lower = (topic or "").lower()
+            is_topic_about_uploaded_docs = any(x in topic_lower for x in ['uploaded', 'document', 'file', 'upload'])
+            
+            if topic and not is_topic_about_uploaded_docs:
+                # Topic is specific (not about uploaded docs), so we can supplement with vector store
                 hits = list(self.retriever.retrieve(Query(text=topic)))
                 references = _format_references(hits)
                 if hits:
                     context_sections.append("Additional passages:\n" + _render_hit_context(hits))
         else:
-            # Normal flow: retrieve first, then add extra context if available
+            # Normal flow: retrieve from vector store first, then add extra context if available
             hits = list(self.retriever.retrieve(Query(text=topic)))
             references = _format_references(hits)
             if hits:
