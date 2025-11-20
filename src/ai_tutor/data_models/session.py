@@ -34,4 +34,5 @@ class SessionResponse(BaseModel):
 class SessionHistoryResponse(BaseModel):
     session_id: str
     events: List[SessionEvent]
+    responses: List[SessionResponse] = Field(default_factory=list)
 

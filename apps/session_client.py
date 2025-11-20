@@ -4,7 +4,6 @@ from typing import List, Optional
 
 from ai_tutor.data_models.session import (
     SessionEvent,
-    SessionEventRequest,
     SessionResponse,
     SessionHistoryResponse,
 )

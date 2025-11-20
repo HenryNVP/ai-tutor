@@ -29,6 +29,7 @@ class TutorService:
         """Initialize service with a TutorSystem instance."""
         self.system = system
         self._session_events: DefaultDict[str, List[SessionEvent]] = defaultdict(list)
+        self._session_responses: DefaultDict[str, List[SessionResponse]] = defaultdict(list)
     
     def answer_question(
         self,
@@ -302,6 +303,21 @@ Please answer based only on the provided context."""
     def format_quiz_context(self, result):
         """Format quiz evaluation result as context string."""
         return self.system.format_quiz_context(result)
+
+    def evaluate_quiz(
+        self,
+        learner_id: str,
+        quiz_payload,
+        answers: List[int],
+    ):
+        return self.system.evaluate_quiz(
+            learner_id=learner_id,
+            quiz=quiz_payload,
+            answers=answers,
+        )
+
+    def quiz_to_markdown(self, quiz) -> str:
+        return self.system.quiz_to_markdown(quiz)
     
     def process_event(self, session_id: str, event: SessionEvent) -> SessionResponse:
         """Process a session event and return structured response."""
@@ -311,7 +327,7 @@ Please answer based only on the provided context."""
 
         if event.type == "upload":
             metadata = {"file_ids": event.file_ids or []}
-            return SessionResponse(
+            response = SessionResponse(
                 session_id=session_id,
                 turn_id=turn_id,
                 route="upload",
@@ -321,6 +337,8 @@ Please answer based only on the provided context."""
                 quiz=None,
                 metadata=metadata,
             )
+            self._session_responses[session_id].append(response)
+            return response
 
         question, extra_context, source_hints = self._build_prompt_from_event(event)
         tutor_response = self.answer_question(
@@ -332,7 +350,7 @@ Please answer based only on the provided context."""
         quiz_payload = (
             tutor_response.quiz.model_dump(mode="json") if tutor_response.quiz else None
         )
-        return SessionResponse(
+        response = SessionResponse(
             session_id=session_id,
             turn_id=turn_id,
             route=tutor_response.route,
@@ -342,9 +360,15 @@ Please answer based only on the provided context."""
             quiz=quiz_payload,
             metadata={"event_type": event.type},
         )
+        self._session_responses[session_id].append(response)
+        return response
 
     def get_session_history(self, session_id: str) -> SessionHistoryResponse:
-        return SessionHistoryResponse(session_id=session_id, events=self._session_events.get(session_id, []))
+        return SessionHistoryResponse(
+            session_id=session_id,
+            events=self._session_events.get(session_id, []),
+            responses=self._session_responses.get(session_id, []),
+        )
 
     @staticmethod
     def _build_prompt_from_event(event: SessionEvent) -> tuple[str, Optional[str], Optional[List[str]]]:
