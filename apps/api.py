@@ -31,6 +31,7 @@ from ai_tutor.data_models.session import (
     SessionResponse,
     SessionHistoryResponse,
 )
+from apps.mcp import load_mcp_servers, shutdown_mcp_servers
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,11 @@ def _get_system() -> TutorSystem:
     """Create a singleton TutorSystem instance."""
     api_key = _require_api_key()
     logger.info("Initializing TutorSystem for FastAPI service")
-    return TutorSystem.from_config(api_key=api_key)
+    mcp_servers = load_mcp_servers()
+    return TutorSystem.from_config(
+        api_key=api_key,
+        mcp_servers=mcp_servers if mcp_servers else None,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -174,6 +179,12 @@ async def _startup_event() -> None:
     except Exception as exc:  # pragma: no cover - startup failures should be logged
         logger.exception("Failed to initialize TutorService: %s", exc)
         raise
+
+
+@app.on_event("shutdown")
+async def _shutdown_event() -> None:
+    """Clean up shared resources."""
+    shutdown_mcp_servers()
 
 
 @app.get("/health", summary="Health check")
