@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
@@ -34,6 +35,7 @@ class StubTutorService:
 def quiz_client():
     stub_service = StubTutorService()
     app.dependency_overrides[get_service] = lambda: stub_service
+    os.environ.setdefault("OPENAI_API_KEY", "test-key")
     with TestClient(app) as client:
         yield client, stub_service
     app.dependency_overrides.clear()
