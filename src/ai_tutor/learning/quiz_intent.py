@@ -18,7 +18,11 @@ def detect_quiz_request(message: str) -> bool:
 
 
 def extract_quiz_num_questions(message: str) -> int:
-	"""Extract requested number of questions; cap at 40; default 4."""
+	"""Extract requested number of questions; cap at 40; default 4.
+
+	If multiple quantities are mentioned (e.g., "5 easy and 10 hard"),
+	use the largest explicit count to avoid underestimating the total quiz size.
+	"""
 	message_lower = message.lower()
 	patterns = [
 		r"(\d+)\s+(?:question|questions)",
@@ -27,12 +31,16 @@ def extract_quiz_num_questions(message: str) -> int:
 		r"make\s+(\d+)\s+(?:\w+\s+)?(?:quiz|quizzes)",
 		r"quiz\s+with\s+(\d+)",
 	]
+	found_counts: list[int] = []
 	for p in patterns:
-		m = re.search(p, message_lower)
-		if m:
-			n = int(m.group(1))
-			# Cap at 40 to match system limit (see quiz_agent.py and tutor.py)
-			return max(3, min(n, 40))
+		for m in re.finditer(p, message_lower):
+			try:
+				found_counts.append(int(m.group(1)))
+			except ValueError:
+				continue
+	if found_counts:
+		max_value = max(found_counts)
+		return max(3, min(max_value, 40))
 	return 4
 
 
