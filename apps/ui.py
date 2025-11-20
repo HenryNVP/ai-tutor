@@ -29,6 +29,7 @@ if str(_project_root) not in sys.path:
 import streamlit as st
 from streamlit.runtime.secrets import StreamlitSecretNotFoundError
 
+from ai_tutor.system import TutorSystem
 from ai_tutor.services.tutor_service import TutorService
 from apps.chat_helpers import (
     format_answer,
@@ -1080,16 +1081,16 @@ def render() -> None:
                             set_preview=False,
                         )
 
-                    st.session_state.messages.append(
-                        {
-                            "role": "assistant",
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
                             "content": session_response.answer,
                             "citations": session_response.citations,
                             "route": session_response.route,
-                        }
-                    )
+                    }
+                )
 
-                    st.rerun()
+                st.rerun()
 
         if st.session_state.quiz:
             quiz = Quiz.model_validate(st.session_state.quiz)
