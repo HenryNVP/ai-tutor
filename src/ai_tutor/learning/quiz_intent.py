@@ -39,6 +39,19 @@ def extract_quiz_num_questions(message: str) -> int:
 def extract_quiz_topic(message: str) -> str:
 	"""Extract quiz topic from message; handle document-based phrasing; fallback to cleaned text."""
 	message_lower = message.lower()
+	# If the user references explicit filenames (e.g., lecture_notes.pdf, "Module 3 Summary"),
+	# prefer those signals over generic "uploaded documents".
+	filename_matches = re.findall(r"([\w\-\s]+\.(?:pdf|pptx|ppt|docx|md|txt))", message, flags=re.IGNORECASE)
+	if filename_matches:
+		return filename_matches[0].strip()
+
+	title_matches = re.findall(
+		r"(?:\"|“)([^\"”]{3,120})(?:\"|”)",
+		message,
+	)
+	if title_matches:
+		return title_matches[0].strip()
+
 	# document-based hints
 	doc_patterns = [
 		r"(?:from|using)\s+(?:the|my|these|uploaded)?\s*(?:document|documents|files|pdfs)",

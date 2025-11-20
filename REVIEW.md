@@ -60,16 +60,18 @@ metadata_patterns = [
     ...
 ]
 ```
+- ✅ Low-confidence LLM routing decisions now automatically fall back to QA with logging, preventing accidental hand-offs when the router is unsure.
+```410:430:src/ai_tutor/agents/tutor.py
+if (
+    not routed.deterministic
+    and routed.confidence is not None
+    and routed.confidence < self.MIN_ROUTING_CONFIDENCE
+):
+    ...
+    return RoutingDecision(target="qa", reason="Low routing confidence ...")
+```
 
 **Remaining Issues & Concerns:**
-
-#### 🟡 **Issue: Routing Confidence Not Used**
-```python:26:34:src/ai_tutor/agents/routing.py
-@dataclass
-class RoutingDecision:
-    confidence: float = 1.0  # Set but never used
-```
-**Problem:** Confidence score is calculated but never used for fallback or validation.
 
 ---
 

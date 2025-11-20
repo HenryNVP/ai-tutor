@@ -170,6 +170,7 @@ class TutorAgent:
     """
 
     MIN_CONFIDENCE = 0.2  # Minimum retrieval score for accepting local results
+    MIN_ROUTING_CONFIDENCE = 0.45  # Below this, fall back to QA for safety
 
     def __init__(
         self,
@@ -519,7 +520,25 @@ class TutorAgent:
         decision = apply_deterministic_routing(question, extra_context)
         if decision:
             return decision
-        return await self._route_with_llm(question, extra_context, profile)
+        routed = await self._route_with_llm(question, extra_context, profile)
+        if (
+            not routed.deterministic
+            and routed.confidence is not None
+            and routed.confidence < self.MIN_ROUTING_CONFIDENCE
+        ):
+            logger.warning(
+                "[TutorAgent] Low-confidence routing decision (route=%s, confidence=%.2f). Falling back to QA.",
+                routed.target,
+                routed.confidence,
+            )
+            return RoutingDecision(
+                target="qa",
+                reason=f"Low routing confidence for '{routed.target}', defaulting to QA",
+                deterministic=False,
+                confidence=routed.confidence,
+                source_filter=routed.source_filter,
+            )
+        return routed
 
     async def _route_with_llm(
         self,

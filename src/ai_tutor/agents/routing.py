@@ -135,6 +135,7 @@ def apply_deterministic_routing(
             reason="Detected quiz intent keywords",
             quiz_topic=extract_quiz_topic(question),
             quiz_count=extract_quiz_num_questions(question),
+            confidence=1.0,
         )
 
     if detect_note_request(question):
@@ -142,13 +143,22 @@ def apply_deterministic_routing(
             target="note",
             reason="Detected summarize/note intent",
             source_filter=extract_source_mentions(question),
+            confidence=1.0,
         )
 
     if detect_ingestion_request(question):
-        return RoutingDecision(target="ingestion", reason="Detected ingestion keywords")
+        return RoutingDecision(
+            target="ingestion",
+            reason="Detected ingestion keywords",
+            confidence=1.0,
+        )
 
     if detect_news_request(question):
-        return RoutingDecision(target="web", reason="Detected news/current events intent")
+        return RoutingDecision(
+            target="web",
+            reason="Detected news/current events intent",
+            confidence=1.0,
+        )
 
     references = extract_source_mentions(question)
     if references:
@@ -156,6 +166,7 @@ def apply_deterministic_routing(
             target="qa",
             reason="Detected explicit document references",
             source_filter=references,
+            confidence=1.0,
         )
 
     if extra_context:
@@ -165,6 +176,7 @@ def apply_deterministic_routing(
                 target="qa",
                 reason="Detected contextual document references",
                 source_filter=context_refs,
+                confidence=1.0,
             )
 
     return None
