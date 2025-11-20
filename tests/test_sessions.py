@@ -24,6 +24,7 @@ class FakeTutorService:
 
     def __init__(self) -> None:
         self.events: Dict[str, List[SessionEvent]] = {}
+        self.responses: Dict[str, List[SessionResponse]] = {}
 
     def process_event(self, session_id: str, event: SessionEvent) -> SessionResponse:
         history = self.events.setdefault(session_id, [])
@@ -32,7 +33,10 @@ class FakeTutorService:
 
         route = self._route_for_event(event)
         answer = f"{route.upper()} response for turn {turn_id}"
-        return SessionResponse(
+        metadata: Dict[str, Any] = {"event_type": event.type}
+        if event.type == "upload" and event.file_ids:
+            metadata["file_ids"] = event.file_ids
+        response = SessionResponse(
             session_id=session_id,
             turn_id=turn_id,
             route=route,
@@ -40,13 +44,16 @@ class FakeTutorService:
             citations=[f"[{turn_id}]"],
             source="local" if route != "upload" else "upload",
             quiz={"topic": "physics", "questions": []} if route == "quiz" else None,
-            metadata={"event_type": event.type},
+            metadata=metadata,
         )
+        self.responses.setdefault(session_id, []).append(response)
+        return response
 
     def get_session_history(self, session_id: str) -> SessionHistoryResponse:
         return SessionHistoryResponse(
             session_id=session_id,
             events=self.events.get(session_id, []),
+            responses=self.responses.get(session_id, []),
         )
 
     @staticmethod
@@ -143,4 +150,18 @@ def test_full_session_flow(api_client):
     assert len(history["responses"]) == len(steps)
     assert [evt["type"] for evt in history["events"]] == [step[0]["type"] for step in steps]
     assert [resp["route"] for resp in history["responses"]] == routes_seen
+
+
+def test_upload_event_metadata(api_client):
+    client, _ = api_client
+    session_id = "learner-xyz"
+    payload = {
+        "session_id": session_id,
+        "event": {"type": "upload", "file_ids": ["docA.pdf", "docB.pdf"]},
+    }
+    response = client.post(f"/sessions/{session_id}/events", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["route"] == "upload"
+    assert data["metadata"]["file_ids"] == ["docA.pdf", "docB.pdf"]
 

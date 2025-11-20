@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from ai_tutor.services import TutorService
 from ai_tutor.system import TutorSystem
+from ai_tutor.learning.quiz import Quiz, QuizEvaluation
 from ai_tutor.data_models.session import (
     SessionEvent,
     SessionEventRequest,
@@ -130,6 +131,16 @@ class QuizResponse(BaseModel):
     quiz: Dict[str, Any]
 
 
+class QuizEvaluateRequest(BaseModel):
+    learner_id: str
+    quiz: Dict[str, Any]
+    answers: List[int]
+
+
+class QuizEvaluateResponse(BaseModel):
+    evaluation: Dict[str, Any]
+
+
 class IngestResponse(BaseModel):
     document_count: int
     chunk_count: int
@@ -221,6 +232,29 @@ async def create_quiz(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return QuizResponse(quiz=quiz.model_dump(mode="json"))
+
+
+@app.post(
+    "/quiz/evaluate",
+    response_model=QuizEvaluateResponse,
+    summary="Evaluate a quiz submission",
+)
+async def evaluate_quiz(
+    payload: QuizEvaluateRequest,
+    service: TutorService = Depends(get_service),
+) -> QuizEvaluateResponse:
+    try:
+        quiz = Quiz.model_validate(payload.quiz)
+        evaluation = await asyncio.to_thread(
+            service.evaluate_quiz,
+            learner_id=payload.learner_id,
+            quiz_payload=quiz,
+            answers=payload.answers,
+        )
+    except Exception as exc:
+        logger.exception("Error evaluating quiz: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return QuizEvaluateResponse(evaluation=evaluation.model_dump(mode="json"))
 
 
 @app.post(
