@@ -1,21 +1,27 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Sequence
+from pathlib import Path
 
-from ai_tutor.data_models.session import (
-    SessionEvent,
-    SessionResponse,
-    SessionHistoryResponse,
-)
-from ai_tutor.services.tutor_service import TutorService
+import requests
+
+from ai_tutor.data_models.session import SessionResponse, SessionHistoryResponse
 
 
 class SessionClient:
-    """Lightweight client for posting session events to the tutor service."""
+    """HTTP client for interacting with the FastAPI session endpoints."""
 
-    def __init__(self, service: TutorService, session_id: str):
-        self.service = service
+    def __init__(
+        self,
+        *,
+        api_base_url: str,
+        session_id: str,
+        timeout: float = 30.0,
+    ):
+        self.base_url = api_base_url.rstrip("/")
         self.session_id = session_id
+        self._timeout = timeout
+        self._http = requests.Session()
 
     def post_event(
         self,
@@ -28,17 +34,63 @@ class SessionClient:
         source_hints: Optional[List[str]] = None,
         documents_only: bool = False,
     ) -> SessionResponse:
-        event = SessionEvent(
-            type=event_type,  # type: ignore[arg-type]
-            content=content,
-            quiz_topic=quiz_topic,
-            quiz_count=quiz_count,
-            file_ids=file_ids,
-            source_hints=source_hints,
-            documents_only=documents_only,
-        )
-        return self.service.process_event(self.session_id, event)
+        url = f"{self.base_url}/sessions/{self.session_id}/events"
+        payload = {
+            "session_id": self.session_id,
+            "event": {
+                "type": event_type,
+                "content": content,
+                "quiz_topic": quiz_topic,
+                "quiz_count": quiz_count,
+                "file_ids": file_ids,
+                "source_hints": source_hints,
+                "documents_only": documents_only,
+            },
+        }
+        response = self._http.post(url, json=payload, timeout=self._timeout)
+        response.raise_for_status()
+        return SessionResponse.model_validate(response.json())
 
     def get_history(self) -> SessionHistoryResponse:
-        return self.service.get_session_history(self.session_id)
+        url = f"{self.base_url}/sessions/{self.session_id}"
+        response = self._http.get(url, timeout=self._timeout)
+        response.raise_for_status()
+        return SessionHistoryResponse.model_validate(response.json())
+
+    def ingest_files(self, paths: Sequence[Path]) -> Dict[str, Any]:
+        """Upload documents to the backend for ingestion."""
+        if not paths:
+            return {}
+        files: List[tuple[str, tuple[str, bytes, str]]] = []
+        for path in paths:
+            data = path.read_bytes()
+            files.append(
+                (
+                    "files",
+                    (
+                        path.name,
+                        data,
+                        "application/octet-stream",
+                    ),
+                )
+            )
+        url = f"{self.base_url}/ingest"
+        response = self._http.post(url, files=files, timeout=self._timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def evaluate_quiz(self, quiz_payload, answers: List[int]) -> Dict[str, Any]:
+        """Submit quiz answers for scoring via the API."""
+        if hasattr(quiz_payload, "model_dump"):
+            quiz_payload = quiz_payload.model_dump(mode="json")
+        url = f"{self.base_url}/quiz/evaluate"
+        body = {
+            "learner_id": self.session_id,
+            "quiz": quiz_payload,
+            "answers": answers,
+        }
+        response = self._http.post(url, json=body, timeout=self._timeout)
+        response.raise_for_status()
+        data = response.json()
+        return data["evaluation"]
 

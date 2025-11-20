@@ -9,7 +9,6 @@ import re
 import sys
 import tempfile
 import uuid
-import shutil
 import base64
 import asyncio
 import threading
@@ -29,8 +28,7 @@ if str(_project_root) not in sys.path:
 import streamlit as st
 from streamlit.runtime.secrets import StreamlitSecretNotFoundError
 
-from ai_tutor.system import TutorSystem
-from ai_tutor.services.tutor_service import TutorService
+# No direct service imports; UI uses HTTP session client
 from apps.chat_helpers import (
     format_answer,
     is_question_about_uploaded_docs,
@@ -39,6 +37,7 @@ from apps.chat_helpers import (
 from apps.session_client import SessionClient
 from apps.file_utils import extract_text, summarize_documents
 from ai_tutor.learning.quiz import Quiz, QuizEvaluation
+from ai_tutor.learning.quiz_utils import quiz_to_markdown
 from ai_tutor.agents.visualization import VisualizationAgent
 from ai_tutor.agents.llm_client import LLMClient
 from ai_tutor.config.loader import load_settings
@@ -57,8 +56,8 @@ _mcp_server_lock = threading.Lock()
 
 def _prepare_uploaded_files(
     uploaded_files: List[Any],
-    service: TutorService,
-) -> tuple[List[str], Optional[Any]]:
+    session_client: SessionClient,
+) -> tuple[List[str], Optional[Dict[str, Any]]]:
     """
     Save uploaded files and ingest them immediately.
     
@@ -79,12 +78,7 @@ def _prepare_uploaded_files(
 
     ingestion_result = None
     if saved_paths:
-        ingest_dir = upload_dir / f"ingest_batch_{uuid.uuid4().hex[:8]}"
-        ingest_dir.mkdir(parents=True, exist_ok=True)
-        for source_path in saved_paths:
-            shutil.copy2(source_path, ingest_dir / source_path.name)
-        ingestion_result = service.ingest_directory(ingest_dir)
-        shutil.rmtree(ingest_dir, ignore_errors=True)
+        ingestion_result = session_client.ingest_files(saved_paths)
 
     ingested_filenames = [path.name for path in saved_paths]
     return ingested_filenames, ingestion_result
@@ -420,12 +414,20 @@ def _get_mcp_servers() -> Dict[str, Any]:
         return connections
 
 
+def _default_api_base_url() -> str:
+    """Resolve the default API base URL from secrets or environment."""
+    base = os.getenv("AI_TUTOR_API_BASE") or os.getenv("API_BASE_URL") or "http://localhost:8000"
+    try:
+        base = st.secrets.get("API_BASE_URL", base)
+    except StreamlitSecretNotFoundError:
+        pass
+    return base
+
+
 @st.cache_resource(show_spinner=False)
-def load_service(api_key: Optional[str]) -> TutorService:
-    """Load TutorService - the clean API layer for UI interactions."""
-    mcp_servers = _get_mcp_servers()
-    system = TutorSystem.from_config(api_key=api_key, mcp_servers=mcp_servers)
-    return TutorService(system)
+def load_session_client(api_base_url: str, learner_id: str) -> SessionClient:
+    """Create an HTTP SessionClient for the given learner."""
+    return SessionClient(api_base_url=api_base_url, session_id=learner_id)
 
 
 @st.cache_resource(show_spinner=False)
@@ -773,7 +775,6 @@ def render() -> None:
         )
         st.stop()
 
-    service = load_service(api_key)  # Use session API-backed service
     viz_agent = load_visualization_agent(api_key)
     
     # Show MCP status if any server is enabled
@@ -840,9 +841,23 @@ def render() -> None:
         session_client: SessionClient | None = None
         with st.sidebar:
             st.header("Session Settings")
-            learner_id = st.text_input("Learner ID", value="s1")
+            default_api_base = st.session_state.get("api_base_url", _default_api_base_url())
+            api_base_url = st.text_input("API Base URL", value=default_api_base)
+            st.session_state.api_base_url = api_base_url
+            learner_id = st.text_input(
+                "Learner ID",
+                value=st.session_state.get("learner_id_global", "s1"),
+            )
             st.session_state.learner_id_global = learner_id
-            session_client = SessionClient(service, learner_id)
+            if api_base_url:
+                try:
+                    session_client = load_session_client(api_base_url, learner_id)
+                except Exception as exc:
+                    st.error(f"Failed to initialize session client: {exc}")
+                    session_client = None
+            else:
+                st.warning("Provide an API base URL to connect to the tutor backend.")
+                session_client = None
 
             st.subheader("📤 Upload Documents")
             st.caption("Upload documents for Q&A and quiz generation. They will be automatically ingested when you ask questions.")
@@ -926,7 +941,8 @@ def render() -> None:
             st.divider()
         
         if session_client is None:
-            session_client = SessionClient(service, st.session_state.get("learner_id_global", "s1"))
+            st.error("Session API client is unavailable. Check the base URL and try again.")
+            st.stop()
         
         history = None
         if session_client:
@@ -971,7 +987,7 @@ def render() -> None:
                     try:
                         ingested_filenames, ingestion_result = _prepare_uploaded_files(
                             st.session_state.chat_uploaded_files,
-                            service,
+                            session_client,
                         )
                     except Exception as exc:
                         st.error(f"❌ Failed to process uploaded files: {exc}")
@@ -997,9 +1013,11 @@ def render() -> None:
             # If ingestion just happened, show a system message about it
             if ingestion_happened and ingestion_result:
                 with st.chat_message("assistant"):
+                    doc_count = ingestion_result.get("document_count", 0)
+                    chunk_count = ingestion_result.get("chunk_count", 0)
                     st.success(
-                        f"✅ Ingested {len(ingestion_result.documents)} document(s) into "
-                        f"{len(ingestion_result.chunks)} chunks! Now answering your question..."
+                        f"✅ Ingested {doc_count} document(s) into "
+                        f"{chunk_count} chunks! Now answering your question..."
                     )
 
             doc_hints = extract_document_hints(
@@ -1013,17 +1031,17 @@ def render() -> None:
             
             if is_viz_request:
                 st.warning("Visualization handling currently bypasses session API. TODO: convert to session events.")
-                            else:
-            if not ingestion_happened:
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-            
-            with st.chat_message("assistant"):
-                placeholder = st.empty()
-                citations_container = st.empty()
+            else:
+                if not ingestion_happened:
+                    with st.chat_message("user"):
+                        st.markdown(prompt)
                 
-                with st.spinner("Thinking..."):
-                    try:
+                with st.chat_message("assistant"):
+                    placeholder = st.empty()
+                    citations_container = st.empty()
+                    
+                    with st.spinner("Thinking..."):
+                        try:
                             event_type = "message"
                             quiz_topic = None
                             quiz_count = None
@@ -1039,11 +1057,11 @@ def render() -> None:
                                 quiz_count=quiz_count,
                                 source_hints=doc_hints or None,
                                 documents_only=documents_only,
-                        )
-                    except Exception as e:
-                        error_msg = str(e)
-                        st.error(f"❌ Error generating answer: {error_msg}")
-                        logger.exception("Error in answer_question")
+                            )
+                        except Exception as e:
+                            error_msg = str(e)
+                            st.error(f"❌ Error generating answer: {error_msg}")
+                            logger.exception("Error in answer_question")
                             session_response = SessionResponse(
                                 session_id=learner_id,
                                 turn_id=0,
@@ -1054,39 +1072,42 @@ def render() -> None:
                                 quiz=None,
                                 metadata={},
                             )
-                
+                    
                     if session_response.answer:
                         placeholder.markdown(format_answer(session_response.answer))
-                else:
-                    placeholder.error("No answer was generated. Please try again.")
+                    else:
+                        placeholder.error("No answer was generated. Please try again.")
+                    
                     if session_response.citations:
-                        citations_container.markdown("**Citations:**\n" + "\n".join(f"- {c}" for c in session_response.citations))
-                else:
-                    citations_container.caption("No citations provided.")
+                        citations_container.markdown(
+                            "**Citations:**\n" + "\n".join(f"- {c}" for c in session_response.citations)
+                        )
+                    else:
+                        citations_container.caption("No citations provided.")
 
                     if session_response.quiz:
                         quiz_model = Quiz.model_validate(session_response.quiz)
                         st.session_state.quiz = quiz_model.model_dump(mode="json")
-                    st.session_state.quiz_answers = {}
-                    st.session_state.quiz_result = None
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                        quiz_markdown = service.quiz_to_markdown(quiz_model)
-                    _add_generated_file(
+                        st.session_state.quiz_answers = {}
+                        st.session_state.quiz_result = None
+                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                        quiz_markdown = quiz_to_markdown(quiz_model)
+                        _add_generated_file(
                             name=f"quiz_{quiz_model.topic.replace(' ', '_')}_{timestamp}.md",
-                        content=quiz_markdown,
-                        kind="text",
-                        mime="text/markdown",
-                        binary=False,
-                        language="markdown",
-                        set_preview=False,
-                    )
+                            content=quiz_markdown,
+                            kind="text",
+                            mime="text/markdown",
+                            binary=False,
+                            language="markdown",
+                            set_preview=False,
+                        )
 
                 st.session_state.messages.append(
                     {
                         "role": "assistant",
-                            "content": session_response.answer,
-                            "citations": session_response.citations,
-                            "route": session_response.route,
+                        "content": session_response.answer,
+                        "citations": session_response.citations,
+                        "route": session_response.route,
                     }
                 )
 
@@ -1144,17 +1165,17 @@ def render() -> None:
                     if any(choice < 0 or choice > 3 for choice in answers):
                         st.warning("Answer every question before submitting.")
                     else:
-                        evaluation = service.evaluate_quiz(
-                            learner_id=learner_id,
+                        evaluation_payload = session_client.evaluate_quiz(
                             quiz_payload=quiz,
                             answers=answers,
                         )
+                        evaluation = QuizEvaluation.model_validate(evaluation_payload)
                         st.session_state.quiz_result = evaluation.model_dump(mode="json")
                         st.session_state.quiz_completed = quiz.model_dump(mode="json")
                         st.session_state.quiz = None
                         st.session_state.quiz_answers = {}
                         # Initialize markdown for download
-                        st.session_state.quiz_markdown = service.quiz_to_markdown(quiz)
+                        st.session_state.quiz_markdown = quiz_to_markdown(quiz)
                         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
                         _add_generated_file(
                             name=f"quiz_{quiz.topic.replace(' ', '_')}_{timestamp}.md",
@@ -1182,7 +1203,7 @@ def render() -> None:
                     st.session_state.pre_submit_edit_mode = not st.session_state.pre_submit_edit_mode
                     if st.session_state.pre_submit_edit_mode:
                         # Initialize markdown when entering edit mode
-                        st.session_state.pre_submit_quiz_markdown = service.quiz_to_markdown(quiz)
+                        st.session_state.pre_submit_quiz_markdown = quiz_to_markdown(quiz)
                     st.rerun()
             
             # Show edit/download interface if enabled
@@ -1193,7 +1214,7 @@ def render() -> None:
                 
                 edited_quiz = st.text_area(
                     "Quiz Content (Markdown)",
-                    value=st.session_state.get("pre_submit_quiz_markdown", service.quiz_to_markdown(quiz)),
+                    value=st.session_state.get("pre_submit_quiz_markdown", quiz_to_markdown(quiz)),
                     height=300,
                     key="pre_submit_quiz_editor"
                 )
