@@ -364,7 +364,7 @@ Please answer based only on the provided context."""
     ):
         return self.system.evaluate_quiz(
             learner_id=learner_id,
-            quiz=quiz_payload,
+            quiz_payload=quiz_payload,
             answers=answers,
         )
 
@@ -399,7 +399,7 @@ Please answer based only on the provided context."""
             quiz_model = Quiz.model_validate(event.quiz)
             evaluation = self.system.evaluate_quiz(
                 learner_id=session_id,
-                quiz=quiz_model,
+                quiz_payload=quiz_model,
                 answers=answers,
             )
             markdown = quiz_to_markdown(quiz_model)
