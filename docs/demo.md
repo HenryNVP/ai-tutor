@@ -4,13 +4,13 @@ AI Tutor - Demo Script
 
 
 ```bash
+
 # Start MCP Servers
 python filesystem_mcp_server/server.py
 python chroma_mcp_server/server.py
 
 # Start REST API
 uvicorn apps.api:app --reload --port 8080
-
 
 # Start UI
 streamlit run apps/ui.py

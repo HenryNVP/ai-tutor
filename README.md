@@ -6,10 +6,12 @@ An intelligent tutoring system that ingests STEM course materials, answers quest
 
 - **📚 Smart Document Upload** – Upload PDFs/TXT in chat, auto-ingest on first question
 - **🤖 Agent-First Architecture** – Intelligent orchestrator routes requests to specialized tools
-- **📝 Natural Language Quizzes** – "Create 20 questions from uploaded documents" (3-40 questions)
+- **💬 Natural Language Q&A** – Ask questions with automatic citation tracking
+- **📝 Lesson Notes Generation** – "Create lesson notes about [topic]" from uploaded documents
+- **🎯 Natural Language Quizzes** – "Create 10 review quizzes from uploaded file" (3-40 questions)
 - **💬 Interactive Quiz Interface** – Take quizzes in chat with immediate feedback
-- **🗂️ Generated Files Manager** – Rename, delete, preview & download charts/quizzes/code
-- **📊 Data Visualization** – Upload CSV, request plots: "plot revenue by month"
+- **🗂️ Generated Files Manager** – Rename, delete, preview & download notes/quizzes/charts/code
+- **📊 Data Visualization** – Upload CSV, request plots: "plot sales per month"
 - **🔍 Source-Filtered Retrieval** – Search specific documents only (320x faster)
 - **🎯 Adaptive Learning** – Track progress, adjust difficulty automatically
 - **🌐 Web Search** – Falls back to current information when needed
@@ -77,51 +79,80 @@ You can customise ports and root directories via `MCP_PORT`, `FS_MCP_PORT`, and 
 
 ## 💬 How to Use
 
-### 1. Ask Questions
+### Quick Demo Workflow
 
-```
-You: "Explain the Bernoulli equation"
-AI: [Provides answer with citations from local documents]
-```
+1. **Greetings** - Start with a simple hello
+   ```
+   You: "Hello"
+   AI: "Hello! I'm your AI tutor. How can I assist you today?"
+   ```
 
-### 2. Upload Documents & Generate Quizzes
+2. **Ask General Questions** - No documents needed
+   ```
+   You: "What is YOLO?"
+   AI: [Provides answer with citations if available in knowledge base]
+   ```
 
-```
-1. In sidebar, upload PDF(s) under "📤 Upload Documents"
-2. Small files (<200 KB) are parsed immediately and passed to the agent as inline context; larger files auto-ingest the first time you ask about them
-3. Say: "create 20 questions from the uploaded documents"
-4. Take the quiz interactively!
-5. Click "Edit and Download Quiz" for markdown export (changes sync to Generated Files Manager)
-```
+3. **Upload & Ask About Documents**
+   ```
+   1. Upload PDF in sidebar: "📤 Upload Documents"
+   2. Ask: "What is RegNet?"
+   AI: [Retrieves from uploaded document with citations]
+   ```
 
-### 3. Data Visualization
+4. **Create Lesson Notes**
+   ```
+   You: "Create lesson notes about RegNet"
+   AI: [Generates structured notes from uploaded documents]
+   You: "Save these notes to a file"
+   AI: "Notes saved to data/generated/regnet_notes.txt"
+   ```
 
-```
-1. In sidebar, upload CSV under "📊 Data Visualization"
-2. System shows preview (columns, shape, first 5 rows)
-3. Say: "plot revenue by month"
-4. System generates matplotlib code and displays chart
-5. Click "View generated code" to see Python code (also saved in Generated Files Manager)
-```
+5. **Generate Quizzes from Documents**
+   ```
+   1. Upload course material in sidebar
+   2. Say: "Create 10 review quizzes from the uploaded file"
+   AI: [Generates interactive quiz]
+   3. Take quiz, get instant feedback
+   4. Quiz automatically saved to Generated Files
+   ```
+
+6. **Data Visualization**
+   ```
+   1. Upload CSV in sidebar: "📊 Data Visualization"
+   2. Say: "Plot sales per month"
+   AI: [Generates chart and displays it]
+   3. View generated code, download from Generated Files
+   ```
 
 ### Example Requests
 
 ```
 # Questions
+"What is YOLO?"
 "Explain R-CNN architecture"
 "What is recursion?"
 "How does photosynthesis work?"
 
+# With Uploaded Documents
+"Upload file, ask what is RegNet"
+"What does the uploaded document say about neural networks?"
+
+# Lesson Notes
+"Create lesson notes about RegNet"
+"Create lesson notes from the uploaded file"
+
 # Quizzes
-"create 10 questions on machine learning"
-"quiz me on Newton's Laws"
-"create 30 questions from uploaded document"
+"Create 10 review quizzes from the uploaded file"
+"Create 20 questions on machine learning"
+"Quiz me on Newton's Laws"
 
 # Visualizations
-"create a bar chart of sales by region"
-"show me a histogram of temperatures"
-"scatter plot of X vs Y"
-"line chart comparing revenue and expenses"
+"Plot sales per month"
+"Create a bar chart of sales by region"
+"Show me a histogram of temperatures"
+"Scatter plot of X vs Y"
+"Line chart comparing revenue and expenses"
 ```
 
 ## 🏗️ Architecture
@@ -160,23 +191,29 @@ User Message → Orchestrator Agent → Specialized Tools/Agents
 - Multi-document support
 - Automatic citation tracking
 
-**4. Quiz Generation**
+**4. Note Agent**
+- Automatic context retrieval from uploaded documents
+- Structured note generation (headings, bullet points, key takeaways)
+- File saving capability
+- Supports both topic-based and document-based note creation
+
+**5. Quiz Generation**
 - Dynamic question count (3-40)
 - Topic extraction from context
 - Multiple choice format
 - Source-filtered retrieval
 - Interactive UI + Markdown export
 
-**5. Visualization Agent**
+**6. Visualization Agent**
 - CSV dataset inspection
 - LLM-powered code generation (matplotlib/seaborn)
 - Safe execution environment
 - Base64 image encoding
 - Code display in UI
 
-**6. Adaptive Learning**
+**7. Adaptive Learning**
 
-**7. Tutor Service Layer**
+**8. Tutor Service Layer**
 - Shared backend API used by Streamlit and FastAPI
 - Manages retrieval, ingestion, quiz creation, and error handling
 - Ensures UI stays presentation-only
@@ -214,32 +251,14 @@ UI displays interactive quiz
 User takes quiz, gets results & explanations
 ```
 
-### Performance
-
-| Metric | Value |
-|--------|-------|
-| Question count | 3-40 per quiz |
-| Generation time | ~8-15 seconds (10 questions) |
-| Retrieval time | 50-200ms (with source filtering) |
-| Export format | Markdown |
 
 ## 📈 Data Visualization
-
-### Supported Charts
-
-- Line charts
-- Bar charts (single/grouped)
-- Scatter plots
-- Histograms
-- Pie charts
-- Heatmaps
-- Box plots
 
 ### Workflow
 
 ```
-1. Upload: sales_2024.csv (12 rows × 3 columns: month, revenue, expenses)
-2. Request: "plot revenue by month"
+1. Upload: data csv file
+2. Request: e.g, plot revenue by month
 3. Agent:
    • Inspects dataset (columns, types, sample rows)
    • Generates matplotlib code via LLM
@@ -248,15 +267,6 @@ User takes quiz, gets results & explanations
 4. UI displays plot in chat
 5. User clicks "View generated code" to see Python
 ```
-
-### Performance
-
-| Metric | Time |
-|--------|------|
-| Dataset inspection | ~50-100ms |
-| Code generation (LLM) | ~2-4 seconds |
-| Code execution | ~500-1000ms |
-| **Total** | **~3-5 seconds** |
 
 ## 🔍 Retrieval Features
 
@@ -274,14 +284,9 @@ Search ONLY uploaded documents:
 ```python
 Query(
     text="machine learning",
-    source_filter=["lecture9.pdf", "lecture10.pdf"]
+    source_filter=["lecture9.pdf"]
 )
 ```
-
-**Benefits:**
-- **320x faster** (31 chunks vs 10,000)
-- **Better ranking** (no old document competition)
-- **100% relevant** to user's files
 
 ## 📊 Learner Profiles
 
@@ -334,113 +339,17 @@ quiz:
   max_questions: 40
 ```
 
-## 🧪 Testing
-
-```bash
-# Run all tests
-pytest
-
-# With coverage
-pytest --cov=src/ai_tutor tests/
-
-# Specific component
-pytest tests/test_quiz_generation.py
-```
-
 ## 📚 Documentation
 
-- **[Demo Guide](docs/demo.md)** – Use cases and workflows
-- **[Technical Report](docs/presentation_report.md)** – System architecture
+- **[Demo Guide](docs/demo.md)** – Step-by-step use cases including:
+  - Greetings and general questions
+  - Document upload and Q&A
+  - Lesson notes generation
+  - Quiz creation from documents
+  - Data visualization workflows
+
 - **[Architecture Diagrams](docs/architecture.puml)** – PlantUML diagrams
-- **[Backend API](docs/backend_api.md)** – FastAPI endpoints & payloads
-- **[Generated Files Manager](docs/generated_files_manager.md)** – UI behaviors and session state
-
-## 🔧 Advanced Usage
-
-### CLI Commands
-
-```bash
-# Ingest documents
-ai-tutor ingest ./data/raw
-
-# Ask a question
-ai-tutor ask student123 "What is the Bernoulli equation?"
-
-# Clear conversation history
-python scripts/clear_sessions.py student123
-```
-
-### Programmatic Usage
-
-```python
-from ai_tutor.system import TutorSystem
-
-# Initialize
-system = TutorSystem.from_yaml("config/default.yaml")
-
-# Ingest documents
-system.ingest_directory("./data/raw")
-
-# Ask a question
-response = system.answer_question(
-    learner_id="student123",
-    question="Explain neural networks",
-)
-
-print(response.answer)
-print(response.citations)
-```
-
-## 🔄 Session Management
-
-Sessions are stored in SQLite with daily rotation:
-
-**Format**: `ai_tutor_{learner_id}_{YYYYMMDD}`
-
-**Auto-rotation**: Prevents token overflow
-
-**Manual clearing**:
-```bash
-# View all sessions
-python scripts/clear_sessions.py
-
-# Clear specific learner
-python scripts/clear_sessions.py student123
-
-# Clear all
-python scripts/clear_sessions.py all
-```
-
-## 🎯 Key Innovations
-
-1. **Agent-First Design** – Natural language over button-based UI
-2. **Source Filtering** – Search only relevant documents (320x speedup)
-3. **Dynamic Token Allocation** – Auto-scales for 3-40 question quizzes
-4. **LLM-Powered Visualization** – Generate plotting code from descriptions
-5. **Safe Code Execution** – Restricted environment for plot generation
-6. **Citation Transparency** – Every answer traceable to source
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## 📝 License
 
 MIT License - see [LICENSE](LICENSE) for details
-
-## 🙏 Acknowledgments
-
-- OpenAI API for LLM capabilities
-- Sentence-Transformers for embeddings
-- Streamlit for UI framework
-- matplotlib/seaborn for visualizations
-
----
-
-**Built with ❤️ for personalized STEM education**
-
-For questions, open a GitHub issue or contact the maintainers.
