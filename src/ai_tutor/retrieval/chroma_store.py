@@ -516,13 +516,6 @@ class ChromaVectorStore(VectorStore):
                     # Documents ingested from data/raw/ will have full paths stored
                     source_paths.append(f"data/raw/{name}")
                     source_paths.append(f"data/raw/{filename_only}")
-                    # Try with nested folder structure (common for course folders)
-                    source_paths.append(f"data/raw/CMPE249Fa25Shared-2025/CMPE249Fa25Shared/{filename_only}")
-                    source_paths.append(f"data/raw/CMPE249Fa25Shared-2025/CMPE249Fa25Shared/{name}")
-                    # Also try with just the folder name
-                    if "CMPE249" in filename_only:
-                        source_paths.append(f"CMPE249Fa25Shared/{filename_only}")
-                        source_paths.append(f"CMPE249Fa25Shared-2025/CMPE249Fa25Shared/{filename_only}")
                     # CRITICAL: Add temp path variations (UI uploads use /tmp/aitutor_ingest_*/)
                     # The filename_only should match the temp path's filename
                     source_paths.append(f"/tmp/aitutor_ingest_*/{filename_only}")
@@ -603,8 +596,11 @@ class ChromaVectorStore(VectorStore):
                         source_filter
                     )
                     try:
-                        # Get all chunks and filter by filename (partial match)
-                        all_data = collection.get(include=["documents", "metadatas"], limit=10000)
+                        # Get chunks with reasonable limit for fuzzy matching (performance optimization)
+                        # Use 2000 limit instead of 10000 to avoid memory issues with large collections
+                        # If document not found in first 2000 chunks, it's likely not in the collection
+                        FUZZY_MATCH_LIMIT = 2000
+                        all_data = collection.get(include=["documents", "metadatas"], limit=FUZZY_MATCH_LIMIT)
                         
                         # Normalize filter names for matching
                         filter_names = set()

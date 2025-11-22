@@ -530,19 +530,8 @@ Please answer based only on the provided context."""
                         # Try with data/raw prefix
                         filename_variations.append(f"data/raw/{hint}")
                         filename_variations.append(f"data/raw/{filename_only}")
-                        # Try with nested folder structure (common for course folders)
-                        filename_variations.append(f"data/raw/CMPE249Fa25Shared-2025/CMPE249Fa25Shared/{filename_only}")
-                        filename_variations.append(f"data/raw/CMPE249Fa25Shared-2025/CMPE249Fa25Shared/{hint}")
-                    # Also try partial matches (e.g., "Lecture7" should match "CMPE249 Lecture7 final0911.pdf")
-                    if "lecture" in hint.lower() or "lecture" in filename_only.lower():
-                        # Extract lecture number if present
-                        import re
-                        lecture_match = re.search(r'lecture\s*(\d+)', hint, re.IGNORECASE)
-                        if lecture_match:
-                            lecture_num = lecture_match.group(1)
-                            # Try variations with lecture number
-                            filename_variations.append(f"CMPE249 Lecture{lecture_num} final*.pdf")
-                            filename_variations.append(f"*Lecture{lecture_num}*.pdf")
+                    # Note: Complex nested folder structures and lecture-specific patterns
+                    # are handled by fuzzy matching in fetch_full_document, not here
                 
                 # Remove duplicates while preserving order
                 seen = set()

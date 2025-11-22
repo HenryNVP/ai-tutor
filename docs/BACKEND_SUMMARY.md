@@ -275,15 +275,17 @@ data/
 
 ### Vector Store (ChromaDB)
 
-**Domain Collections:**
-- Separate collection per domain: `ai_tutor_{domain}`
-- Domains: math, physics, cs, chemistry, biology, general
-- Metadata: chunk_id, title, doc_id, page, source_path, domain
+**Single Master Collection:**
+- All chunks stored in `ai_tutor_master` collection (refactored from domain-based collections)
+- Domain stored as metadata for optional filtering
+- Metadata: chunk_id, title, doc_id, page, source_path, domain, chunk_index
+- Simpler architecture, no routing errors
 
 **Source Filtering:**
-- Pre-filter by filename before similarity search
+- Pre-filter by filename using ChromaDB `where` clause
 - 320x speedup for document-specific queries
 - Query format: `Query(text="...", source_filter=["file.pdf"])`
+- Fallback to fuzzy matching if exact path match fails
 
 ## Key Design Patterns
 
@@ -309,12 +311,13 @@ data/
 
 ## Performance Optimizations
 
-1. **Source Filtering**: 320x speedup for document queries
-2. **Domain Collections**: Reduced search space
+1. **Source Filtering**: 320x speedup for document queries via pre-filtering
+2. **Single Collection**: Simplified architecture, no multi-collection overhead
 3. **Embedding Caching**: Embeddings computed once during ingestion
 4. **Batch Processing**: Embeddings in batches (256 chunks)
 5. **In-Memory Session Cache**: Fast access to active sessions
 6. **History Pruning**: Only last 3 turns in context
+7. **Pre-Query Filtering**: ChromaDB `where` clause filters before similarity search
 
 ## Error Handling
 
@@ -353,12 +356,11 @@ TutorResponse(
 
 ## Documentation
 
-- **Implementation Review**: `docs/IMPLEMENTATION_REVIEW.md`
+- **Refactor Summary**: `docs/REFACTOR_COMPLETE.md`
+- **Remaining Issues**: `docs/REMAINING_ISSUES.md`
 - **Architecture Diagrams**: `docs/architecture.puml`
 - **Component Diagrams**: `docs/components.puml`
 - **Session Management**: `docs/session_management.puml`
-- **Backend API**: `docs/backend_api.md`
-- **Session API**: `docs/session_api.md`
 
 ## Quick Start
 
@@ -397,7 +399,7 @@ export MCP_USE_SERVER=true  # Optional, for MCP integration
 ---
 
 For detailed information, see:
-- [Implementation Review](IMPLEMENTATION_REVIEW.md) - Comprehensive architecture review
-- [Backend API](backend_api.md) - API documentation
-- [Session API](session_api.md) - Session management details
+- [Refactor Complete](REFACTOR_COMPLETE.md) - Architecture refactor summary
+- [Remaining Issues](REMAINING_ISSUES.md) - Known issues and improvements
+- [Ingestion Guide](INGESTION_GUIDE.md) - How to ingest documents
 
