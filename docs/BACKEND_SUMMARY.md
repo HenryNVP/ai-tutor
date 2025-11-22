@@ -276,7 +276,7 @@ data/
 ### Vector Store (ChromaDB)
 
 **Single Master Collection:**
-- All chunks stored in `ai_tutor_master` collection (refactored from domain-based collections)
+- All chunks stored in `ai_tutor_master` collection
 - Domain stored as metadata for optional filtering
 - Metadata: chunk_id, title, doc_id, page, source_path, domain, chunk_index
 - Simpler architecture, no routing errors
@@ -285,7 +285,12 @@ data/
 - Pre-filter by filename using ChromaDB `where` clause
 - 320x speedup for document-specific queries
 - Query format: `Query(text="...", source_filter=["file.pdf"])`
-- Fallback to fuzzy matching if exact path match fails
+- Fallback to fuzzy matching if exact path match fails (handles temp paths)
+
+**MCP Integration:**
+- Optional Chroma MCP server for collection management
+- Main system uses direct ChromaDB access (faster, more reliable)
+- MCP server uses separate database at `chroma_mcp_server/chroma.sqlite3`
 
 ## Key Design Patterns
 
@@ -356,11 +361,12 @@ TutorResponse(
 
 ## Documentation
 
-- **Refactor Summary**: `docs/REFACTOR_COMPLETE.md`
-- **Remaining Issues**: `docs/REMAINING_ISSUES.md`
+- **Project Status**: `docs/PROJECT_STATUS.md` - Current implementation and remaining issues
+- **Demo Guide**: `docs/demo.md` - Step-by-step use cases
 - **Architecture Diagrams**: `docs/architecture.puml`
 - **Component Diagrams**: `docs/components.puml`
 - **Session Management**: `docs/session_management.puml`
+- **MCP Servers**: `docs/mcp.md` - Micro-Agent Communication Protocol integration
 
 ## Quick Start
 
@@ -399,7 +405,7 @@ export MCP_USE_SERVER=true  # Optional, for MCP integration
 ---
 
 For detailed information, see:
-- [Refactor Complete](REFACTOR_COMPLETE.md) - Architecture refactor summary
-- [Remaining Issues](REMAINING_ISSUES.md) - Known issues and improvements
-- [Ingestion Guide](INGESTION_GUIDE.md) - How to ingest documents
+- [Project Status](PROJECT_STATUS.md) - Current implementation and remaining issues
+- [Demo Guide](demo.md) - Use cases and workflows
+- [MCP Servers](mcp.md) - Micro-Agent Communication Protocol integration
 

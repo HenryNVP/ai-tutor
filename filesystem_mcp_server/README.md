@@ -23,7 +23,7 @@ streamlit run apps/ui.py
 
 - **`list_directory(path, recursive, max_entries)`** - List files and directories
 - **`read_file(path)`** - Read file contents (max 128 KB)
-- **`write_text_file(path, content)`** - Create or update text files (auto-generates a timestamped name if the file exists and `overwrite=False`)
+- **`write_text_file(path, content, overwrite)`** - Create or update text files (auto-generates unique filename with timestamp if file exists and `overwrite=False`)
 - **`delete_path(path)`** - Delete files or directories
 
 ## Configuration

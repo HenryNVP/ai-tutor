@@ -82,7 +82,8 @@ The AI Tutor uses a **hybrid approach** combining direct access and MCP tools:
 **For semantic search:**
 - Uses direct Python API to vector store (ChromaDB)
 - Fast (~10-50ms), reliable, no network calls
-- Searches all domain collections automatically
+- Searches single `ai_tutor_master` collection
+- Pre-filtering via ChromaDB `where` clause for source filtering
 - Automatic filtering and deduplication
 - Structured output (RetrievalHit objects)
 

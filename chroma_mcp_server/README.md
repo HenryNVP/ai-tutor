@@ -43,6 +43,8 @@ MCP_TRANSPORT=sse python server.py
 - **Location**: `chroma_mcp_server/chroma.sqlite3`
 - Uses existing ChromaDB database
 - All collections and documents are preserved
+- **Note**: The main AI Tutor system uses a separate ChromaDB instance at `data/vector_store/`
+- This MCP server is optional and uses its own database for MCP-specific operations
 
 ## Example Usage
 
