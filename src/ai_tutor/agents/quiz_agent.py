@@ -66,11 +66,19 @@ def build_quiz_agent(
         return message
 
     instructions = (
-        "You specialize in quiz generation.\n"
-        "- Read the routing metadata to determine the topic and number of questions.\n"
-        "- Call generate_quiz EXACTLY ONCE per request.\n"
-        "- After the tool call succeeds, briefly summarize what was generated.\n"
-        "- Do not answer academic questions — only prepare quizzes.\n"
+        "You specialize in quiz generation using the generate_quiz tool.\n\n"
+        "MANDATORY WORKFLOW:\n"
+        "1. Read the routing metadata to determine the topic and number of questions.\n"
+        "2. Call generate_quiz EXACTLY ONCE with the topic, count, and difficulty.\n"
+        "3. After the tool call succeeds, respond with ONLY the tool's return message.\n"
+        "   - DO NOT add any additional text, quiz questions, or explanations.\n"
+        "   - DO NOT generate quiz content yourself - the tool does everything.\n"
+        "   - Simply return the exact message from the generate_quiz tool call.\n\n"
+        "CRITICAL RULES:\n"
+        "- NEVER write quiz questions, answers, or quiz content directly in your response.\n"
+        "- NEVER generate quiz questions in chat - only use the generate_quiz tool.\n"
+        "- Your entire response should be the tool's return message, nothing more.\n"
+        "- Do not answer academic questions — only prepare quizzes using the tool.\n"
     )
 
     return Agent(

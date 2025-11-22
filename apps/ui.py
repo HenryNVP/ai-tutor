@@ -370,7 +370,28 @@ def _visible_generated_files() -> List[Dict[str, Any]]:
     
     # Only return files that were added during this session
     # (via _add_generated_file() or explicitly loaded)
-    return [file for file in st.session_state.generated_files if not file.get("deleted")]
+    visible = []
+    for file in st.session_state.generated_files:
+        if file.get("deleted"):
+            continue
+        
+        # If file has a path but no content (e.g., after page refresh), reload from disk
+        file_path = file.get("file_path")
+        if file_path and (not file.get("content") or file.get("content") == ""):
+            try:
+                path_obj = Path(file_path)
+                if path_obj.exists():
+                    if file.get("binary", False):
+                        file["content"] = path_obj.read_bytes()
+                    else:
+                        file["content"] = path_obj.read_text(encoding="utf-8")
+                    logger.info(f"Reloaded file content from disk: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to reload file content from {file_path}: {e}")
+        
+        visible.append(file)
+    
+    return visible
 
 
 def _build_zip_archive(files: List[Dict[str, Any]]) -> bytes:
@@ -1081,10 +1102,16 @@ def render() -> None:
                         except Exception as e:
                             logger.warning(f"Failed to load saved file {saved_file_path}: {e}")
 
+                # For quiz responses, don't show quiz content in chat - just a simple confirmation
+                if session_response.route == "quiz":
+                    chat_content = "Quiz generated successfully. Please take the quiz below."
+                else:
+                    chat_content = session_response.answer
+                
                 st.session_state.messages.append(
                     {
                         "role": "assistant",
-                        "content": session_response.answer,
+                        "content": chat_content,
                         "citations": session_response.citations,
                         "route": session_response.route,
                     }
@@ -1160,17 +1187,37 @@ def render() -> None:
                             st.session_state.quiz = None
                             st.session_state.quiz_answers = {}
                             st.session_state.quiz_markdown = session_response.quiz_markdown
-                            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                            # Don't create a new file on submission - the file was already created when quiz was generated
+                            # Just update the existing file if it exists
                             if session_response.quiz_markdown:
-                                _add_generated_file(
-                                    name=f"quiz_{quiz.topic.replace(' ', '_')}_{timestamp}.md",
-                                    content=session_response.quiz_markdown,
-                                    kind="text",
-                                    mime="text/markdown",
-                                    binary=False,
-                                    language="markdown",
-                                    set_preview=False,
-                                )
+                                quiz_topic_slug = quiz.topic.replace(' ', '_')
+                                # Find existing quiz file for this topic
+                                existing_file = None
+                                for file in st.session_state.generated_files:
+                                    if (file.get("kind") == "text" 
+                                        and file.get("language") == "markdown"
+                                        and file.get("name", "").startswith(f"quiz_{quiz_topic_slug}_")
+                                        and not file.get("deleted")):
+                                        existing_file = file
+                                        break
+                                
+                                if existing_file:
+                                    # Update existing file content
+                                    existing_file["content"] = session_response.quiz_markdown
+                                    _update_file_on_disk(existing_file, session_response.quiz_markdown)
+                                    logger.info(f"Updated existing quiz file: {existing_file['name']}")
+                                else:
+                                    # Only create new file if none exists (shouldn't happen, but safety check)
+                                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                                    _add_generated_file(
+                                        name=f"quiz_{quiz_topic_slug}_{timestamp}.md",
+                                        content=session_response.quiz_markdown,
+                                        kind="text",
+                                        mime="text/markdown",
+                                        binary=False,
+                                        language="markdown",
+                                        set_preview=False,
+                                    )
                             st.session_state.quiz_edit_mode = False
                             st.success(
                                 f"Quiz scored {evaluation.correct_count}/{evaluation.total_questions} "
