@@ -193,6 +193,18 @@ def _add_generated_file(
         except Exception as e:
             logger.error(f"Failed to auto-save generated file {name}: {e}", exc_info=True)
             # Continue even if save fails - file is still in session state
+    else:
+        # If auto_save is False, try to find the file on disk
+        # Check common locations
+        possible_paths = [
+            Path("data/generated") / name,
+            Path("data/generated") / save_subdir / name,
+            Path("data/generated/text") / name,
+        ]
+        for possible_path in possible_paths:
+            if possible_path.exists():
+                file_path = possible_path
+                break
     
     # Register in session state
     file_entry = {
@@ -206,7 +218,7 @@ def _add_generated_file(
         "selected": True,
         "deleted": False,
         "created_at": datetime.utcnow().isoformat(),
-        "file_path": str(file_path) if file_path else None,  # Store disk path
+        "file_path": str(file_path.resolve()) if file_path and file_path.exists() else (str(file_path) if file_path else None),  # Store disk path
     }
     st.session_state.generated_files.append(file_entry)
     if set_preview:
@@ -254,9 +266,110 @@ def _update_file_on_disk(file: Dict[str, Any], new_content: Any) -> None:
             logger.error(f"Failed to update file on disk {file_path}: {e}", exc_info=True)
 
 
+def _load_files_from_disk() -> List[Dict[str, Any]]:
+    """
+    Scan data/generated/ directory and load files that aren't already in session state.
+    
+    Returns a list of file entries for files found on disk.
+    """
+    generated_dir = Path("data/generated")
+    if not generated_dir.exists():
+        return []
+    
+    disk_files = []
+    tracked_paths = {
+        Path(f.get("file_path")).resolve() 
+        for f in st.session_state.get("generated_files", []) 
+        if f.get("file_path")
+    }
+    
+    # Scan all subdirectories and root
+    for file_path in generated_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        
+        # Skip if already tracked
+        if file_path.resolve() in tracked_paths:
+            continue
+        
+        # Determine file kind based on extension and path
+        suffix = file_path.suffix.lower()
+        relative_path = file_path.relative_to(generated_dir)
+        
+        if suffix in [".png", ".jpg", ".jpeg", ".gif", ".svg"]:
+            kind = "image"
+            mime = f"image/{suffix[1:]}" if suffix != ".svg" else "image/svg+xml"
+            binary = True
+            try:
+                content = file_path.read_bytes()
+            except Exception as e:
+                logger.warning(f"Failed to read image file {file_path}: {e}")
+                continue
+        elif suffix in [".py", ".js", ".ts", ".java", ".cpp", ".c", ".html", ".css"]:
+            kind = "code"
+            mime = "text/plain"
+            binary = False
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"Failed to read code file {file_path}: {e}")
+                continue
+        elif suffix in [".txt", ".md"]:
+            kind = "text"
+            mime = "text/plain" if suffix == ".txt" else "text/markdown"
+            binary = False
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"Failed to read text file {file_path}: {e}")
+                continue
+        else:
+            # Unknown type - try as text
+            kind = "text"
+            mime = "text/plain"
+            binary = False
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                try:
+                    content = file_path.read_bytes()
+                    binary = True
+                    mime = "application/octet-stream"
+                except Exception as e:
+                    logger.warning(f"Failed to read file {file_path}: {e}")
+                    continue
+        
+        # Get file modification time
+        try:
+            mtime = file_path.stat().st_mtime
+            created_at = datetime.fromtimestamp(mtime).isoformat()
+        except Exception:
+            created_at = datetime.utcnow().isoformat()
+        
+        file_entry = {
+            "id": f"disk_{file_path.name}_{mtime}",
+            "name": file_path.name,
+            "kind": kind,
+            "mime": mime,
+            "content": content,
+            "binary": binary,
+            "language": suffix[1:] if suffix else None,
+            "selected": False,
+            "deleted": False,
+            "created_at": created_at,
+            "file_path": str(file_path),
+        }
+        disk_files.append(file_entry)
+    
+    return disk_files
+
+
 def _visible_generated_files() -> List[Dict[str, Any]]:
-    """Return non-deleted generated files."""
+    """Return non-deleted generated files from the current session only."""
     _ensure_generated_files_state()
+    
+    # Only return files that were added during this session
+    # (via _add_generated_file() or explicitly loaded)
     return [file for file in st.session_state.generated_files if not file.get("deleted")]
 
 
@@ -279,11 +392,27 @@ def _build_zip_archive(files: List[Dict[str, Any]]) -> bytes:
 def render_generated_files_manager() -> None:
     """Render the generated files manager UI components."""
     _ensure_generated_files_state()
+    
     visible_files = _visible_generated_files()
 
     if not visible_files:
-        st.caption("No generated files yet. Visualizations and other outputs will appear here.")
+        st.caption("No generated files in this session yet.")
+        st.info("💡 Files generated during this session (notes, summaries, quizzes, visualizations) will appear here automatically.")
         return
+    
+    # Show file count
+    st.caption(f"📊 {len(visible_files)} file(s) generated in this session")
+    
+    # Add filter by file type
+    file_types = sorted(set(f.get("kind", "other") for f in visible_files))
+    if len(file_types) > 1:
+        selected_types = st.multiselect(
+            "Filter by type",
+            options=file_types,
+            default=file_types,
+            key="generated_files_filter"
+        )
+        visible_files = [f for f in visible_files if f.get("kind") in selected_types]
 
     valid_ids = {file["id"] for file in visible_files}
     preview_id = st.session_state.get("generated_files_preview_id")
@@ -549,7 +678,8 @@ def render() -> None:
                     st.write(f"• {file.name} ({file_size_mb:.2f} MB)")
         
         st.subheader("🗂️ Generated Files")
-        with st.expander("Manage generated files", expanded=False):
+        st.caption("View and download notes, summaries, quizzes, and other generated content")
+        with st.expander("📁 Browse & Download Files", expanded=True):
             render_generated_files_manager()
         st.divider()
         
@@ -831,6 +961,125 @@ def render() -> None:
                             language="markdown",
                             set_preview=False,
                         )
+
+                # Detect when note agent saves a file and add it to generated files
+                # Check metadata for saved_file_path (cleaner than parsing text)
+                saved_file_path = session_response.metadata.get("saved_file_path")
+                
+                # If not in metadata, try to extract from response text as fallback
+                if not saved_file_path and session_response.route == "note" and session_response.answer:
+                    import re
+                    text = session_response.answer
+                    # Look for filename patterns in the response
+                    patterns = [
+                        r"saved to (?:the file: )?(data/generated/[^\s,\.\*\n\)]+\.(?:txt|md))",
+                        r"saved to (?:the file: )?([a-zA-Z0-9_\-]+\.(?:txt|md))",
+                        r"file:\s*([a-zA-Z0-9_\-]+\.(?:txt|md))",
+                        r"\(Saved to [^\*]*\*{0,2}([a-zA-Z0-9_\-]+\.(?:txt|md))",
+                        r'write_text_file\s*\([^)]*["\']path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # write_text_file({ "path": "data/generated/filename.txt"
+                        r'["\']path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # JSON-like: "path": "data/generated/filename.txt"
+                        r'path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # path: "data/generated/filename.txt" (no quotes around path)
+                    ]
+                    for pattern in patterns:
+                        match = re.search(pattern, text, re.IGNORECASE)
+                        if match:
+                            filename = match.group(1)
+                            # Try data/generated/ first
+                            candidate = f"data/generated/{filename}" if not filename.startswith("data/generated") else filename
+                            if Path(candidate).exists():
+                                saved_file_path = candidate
+                                logger.info(f"[UI] Found saved file via text parsing: {saved_file_path}")
+                                break
+                            # Try just the filename
+                            if Path(filename).exists():
+                                saved_file_path = str(Path(filename).resolve())
+                                logger.info(f"[UI] Found saved file via relative path: {saved_file_path}")
+                                break
+                
+                # If still not found and route is "note", try to find recently created files
+                if not saved_file_path and session_response.route == "note":
+                    try:
+                        generated_dir = Path("data/generated")
+                        if generated_dir.exists():
+                            import time
+                            # Get all .txt files, sort by modification time (newest first)
+                            txt_files = sorted(
+                                generated_dir.glob("*.txt"),
+                                key=lambda p: p.stat().st_mtime,
+                                reverse=True
+                            )
+                            # Check if any file was created in the last 5 minutes (more lenient window)
+                            current_time = time.time()
+                            for txt_file in txt_files[:10]:  # Check top 10 most recent
+                                file_age = current_time - txt_file.stat().st_mtime
+                                if file_age < 300:  # 5 minutes window
+                                    # Check if already in generated files
+                                    existing_paths = {
+                                        Path(f.get("file_path")).resolve() 
+                                        for f in st.session_state.get("generated_files", []) 
+                                        if f.get("file_path")
+                                    }
+                                    if txt_file.resolve() not in existing_paths:
+                                        saved_file_path = str(txt_file)
+                                        logger.info(f"[UI] Found recently created file: {saved_file_path}")
+                                        break
+                    except Exception as e:
+                        logger.debug(f"[UI] Failed to find recent files: {e}")
+                
+                if saved_file_path:
+                    file_path_obj = Path(saved_file_path)
+                    # If path is relative, try to resolve it
+                    if not file_path_obj.is_absolute():
+                        # Try data/generated/ first
+                        if not file_path_obj.exists():
+                            file_path_obj = Path("data/generated") / saved_file_path
+                        # If still not found, try just the filename in data/generated/
+                        if not file_path_obj.exists() and not saved_file_path.startswith("data/generated"):
+                            file_path_obj = Path("data/generated") / Path(saved_file_path).name
+                    
+                    # Check if file exists (it should, since agent just saved it)
+                    if file_path_obj.exists():
+                        try:
+                            # Load file content
+                            content = file_path_obj.read_text(encoding="utf-8")
+                            
+                            # Check if file is already in generated files
+                            existing_paths = {
+                                Path(f.get("file_path")).resolve() 
+                                for f in st.session_state.get("generated_files", []) 
+                                if f.get("file_path")
+                            }
+                            if file_path_obj.resolve() not in existing_paths:
+                                # Determine file type
+                                suffix = file_path_obj.suffix.lower()
+                                if suffix == ".md":
+                                    kind = "text"
+                                    mime = "text/markdown"
+                                    language = "markdown"
+                                else:
+                                    kind = "text"
+                                    mime = "text/plain"
+                                    language = None
+                                
+                                # Add file to generated files list
+                                _ensure_generated_files_state()
+                                file_entry = {
+                                    "id": str(uuid.uuid4()),
+                                    "name": file_path_obj.name,
+                                    "kind": kind,
+                                    "mime": mime,
+                                    "content": content,
+                                    "binary": False,
+                                    "language": language,
+                                    "selected": False,
+                                    "deleted": False,
+                                    "created_at": datetime.utcnow().isoformat(),
+                                    "file_path": str(file_path_obj.resolve()),
+                                }
+                                st.session_state.generated_files.append(file_entry)
+                                logger.info(f"Added saved file to generated files: {saved_file_path}")
+                        except Exception as e:
+                            logger.warning(f"Failed to load saved file {saved_file_path}: {e}")
 
                 st.session_state.messages.append(
                     {

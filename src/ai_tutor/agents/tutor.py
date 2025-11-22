@@ -86,6 +86,7 @@ class TutorResponse:
     source: Optional[str] = None
     quiz: Optional[Quiz] = None
     route: str = "qa"
+    saved_file_path: Optional[str] = None  # Path to file saved by note agent
 
 
 @dataclass
@@ -517,8 +518,15 @@ class TutorAgent:
                 quiz_payload = self.state.last_quiz
 
         saved_file_path = None
-        if decision.target == "note" and answer_text:
-            saved_file_path = await self._maybe_write_text_file(question, answer_text)
+        if decision.target == "note":
+            # Check if note agent already saved a file (stored in state)
+            saved_file_path = getattr(self.state, 'saved_file_path', None)
+            # Also try explicit file creation if requested (for explicit "create file" requests)
+            if not saved_file_path and answer_text:
+                saved_file_path = await self._maybe_write_text_file(question, answer_text)
+            # Clear saved_file_path from state after use
+            if hasattr(self.state, 'saved_file_path'):
+                delattr(self.state, 'saved_file_path')
 
         if quiz_payload is None and not self.state.last_citations:
             answer_text = self._strip_citation_markers(answer_text)
@@ -553,6 +561,7 @@ class TutorAgent:
             source=source,
             quiz=quiz_payload,
             route=decision.target,
+            saved_file_path=saved_file_path,  # Include saved file path in response
         )
 
     async def _maybe_write_text_file(self, question: str, content: str) -> Optional[str]:
@@ -858,9 +867,11 @@ class TutorAgent:
             return answer, None
 
         if decision.target == "note":
-            answer = await self._run_domain_agent(self.note_agent, prompt, session, on_delta)
+            answer, saved_file_path = await self._run_note_agent_with_file_detection(prompt, session, on_delta)
             if self.state.last_source is None:
                 self.state.last_source = "notes"
+            # Store saved file path in state for later retrieval
+            self.state.saved_file_path = saved_file_path  # type: ignore
             return answer, None
 
         answer = await self._run_domain_agent(
@@ -934,6 +945,110 @@ class TutorAgent:
             for char in text:
                 on_delta(char)
         return text or "I could not find relevant current information."
+
+    async def _run_note_agent_with_file_detection(
+        self,
+        prompt: str,
+        session: SQLiteSession,
+        on_delta: Optional[Callable[[str], None]],
+    ) -> tuple[str, Optional[str]]:
+        """Run note agent and detect if it saved a file via MCP write_text_file tool."""
+        if self.note_agent is None:
+            return "Note generation is currently unavailable.", None
+        
+        saved_file_path = None
+        try:
+            result = await Runner.run(self.note_agent, input=prompt, session=session)
+            
+            # Try to detect saved file from tool calls or response text
+            # Check if result has tool calls we can inspect
+            if hasattr(result, 'steps') and result.steps:
+                # Look through steps for write_text_file tool calls
+                for step in result.steps:
+                    if hasattr(step, 'tool_calls') and step.tool_calls:
+                        for tool_call in step.tool_calls:
+                            if hasattr(tool_call, 'name') and tool_call.name == "write_text_file":
+                                # Extract file path from tool call result
+                                if hasattr(tool_call, 'result'):
+                                    try:
+                                        result_data = json.loads(tool_call.result) if isinstance(tool_call.result, str) else tool_call.result
+                                        if isinstance(result_data, dict):
+                                            saved_file_path = result_data.get("path")
+                                        elif isinstance(result_data, str):
+                                            # Try parsing as JSON string
+                                            try:
+                                                parsed = json.loads(result_data)
+                                                saved_file_path = parsed.get("path") if isinstance(parsed, dict) else None
+                                            except (json.JSONDecodeError, TypeError):
+                                                pass
+                                    except Exception as e:
+                                        logger.debug(f"[TutorAgent] Failed to extract file path from tool call: {e}")
+            
+            # Fallback: Parse response text for file path if not found in tool calls
+            if not saved_file_path and result and result.final_output:
+                import re
+                text = result.final_output.strip()
+                # Look for patterns like "saved to data/generated/filename.txt" or "saved to the file: filename.txt"
+                # Also handle patterns like "saved to the file: regnety_notes.txt" or "file: regnety_notes.txt"
+                patterns = [
+                    r"saved to (?:the file: )?(data/generated/[^\s,\.\*\n\)]+\.(?:txt|md))",  # Handle data/generated/ paths
+                    r"saved to (?:the file: )?([a-zA-Z0-9_\-]+\.(?:txt|md))",  # Just filename
+                    r"file:\s*([a-zA-Z0-9_\-]+\.(?:txt|md))",  # "file: filename.txt"
+                    r"\(Saved to [^\*]*\*{0,2}([a-zA-Z0-9_\-]+\.(?:txt|md))",  # "(Saved to data/generated/**filename.txt)"
+                    r"data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))",  # Direct path mention
+                    r'write_text_file\s*\([^)]*["\']path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # write_text_file({ "path": "data/generated/filename.txt"
+                    r'["\']path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # JSON-like: "path": "data/generated/filename.txt"
+                    r'path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # path: "data/generated/filename.txt" (no quotes around path)
+                ]
+                for pattern in patterns:
+                    match = re.search(pattern, text, re.IGNORECASE)
+                    if match:
+                        filename = match.group(1)
+                        # Normalize path - always use data/generated/
+                        saved_file_path = f"data/generated/{filename}"
+                        # Verify file exists before using this path
+                        if Path(saved_file_path).exists():
+                            logger.info(f"[TutorAgent] Found saved file via text parsing: {saved_file_path}")
+                            break
+                        # If not found, try without data/generated prefix (might be relative)
+                        if not Path(saved_file_path).exists() and Path(filename).exists():
+                            saved_file_path = str(Path(filename).resolve())
+                            logger.info(f"[TutorAgent] Found saved file via relative path: {saved_file_path}")
+                            break
+                
+                # If still not found, try to find any .txt file in data/generated/ that was recently created
+                if not saved_file_path:
+                    try:
+                        generated_dir = Path("data/generated")
+                        if generated_dir.exists():
+                            # Get all .txt files, sort by modification time (newest first)
+                            txt_files = sorted(
+                                generated_dir.glob("*.txt"),
+                                key=lambda p: p.stat().st_mtime,
+                                reverse=True
+                            )
+                            # Check if any file was created in the last 5 minutes (more lenient window)
+                            import time
+                            current_time = time.time()
+                            for txt_file in txt_files[:10]:  # Check top 10 most recent
+                                file_age = current_time - txt_file.stat().st_mtime
+                                if file_age < 300:  # 5 minutes window
+                                    saved_file_path = str(txt_file)
+                                    logger.info(f"[TutorAgent] Found recently created file (age: {file_age:.1f}s): {saved_file_path}")
+                                    break
+                    except Exception as e:
+                        logger.debug(f"[TutorAgent] Failed to find recent files: {e}")
+            
+        except Exception as exc:
+            logger.error("[TutorAgent] Note agent failed: %s", exc, exc_info=True)
+            return f"Note generation failed: {exc}", None
+
+        text = result.final_output.strip() if result and result.final_output else ""
+        if on_delta and text:
+            for char in text:
+                on_delta(char)
+        
+        return text or "Created the requested notes.", saved_file_path
 
     async def _run_quiz_agent(
         self,

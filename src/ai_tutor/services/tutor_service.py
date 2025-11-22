@@ -446,6 +446,12 @@ Please answer based only on the provided context."""
             tutor_response.quiz.model_dump(mode="json") if tutor_response.quiz else None
         )
         quiz_markdown = quiz_to_markdown(tutor_response.quiz) if tutor_response.quiz else None
+        
+        # Include saved file path in metadata if present
+        metadata = {"event_type": event.type}
+        if tutor_response.saved_file_path:
+            metadata["saved_file_path"] = tutor_response.saved_file_path
+        
         response = SessionResponse(
             session_id=session_id,
             turn_id=turn_id,
@@ -455,7 +461,7 @@ Please answer based only on the provided context."""
             source=tutor_response.source,
             quiz=quiz_payload,
             quiz_markdown=quiz_markdown,
-            metadata={"event_type": event.type},
+            metadata=metadata,
         )
         self._session_responses[session_id].append(response)
         return response
@@ -682,13 +688,15 @@ Please answer based only on the provided context."""
                 f"{previous_notes}\n"
                 f"{'='*60}\n\n"
                 f"CRITICAL INSTRUCTIONS:\n"
-                f"1. Call write_text_file IMMEDIATELY with the notes above (exact text, no modifications)\n"
-                f"2. DO NOT call fetch_full_document or retrieve_local_context\n"
-                f"3. DO NOT regenerate, summarize, or modify the notes\n"
-                f"4. After write_text_file succeeds, respond with ONLY: 'Notes saved to [file path]'\n"
-                f"5. Keep your response under 20 words - just confirm the save\n"
-                f"6. DO NOT write a long explanation or repeat the notes\n\n"
-                f"Your response should be: 'Notes saved to data/generated/[filename].txt'"
+                f"1. Generate a descriptive filename based on the topic (e.g., 'regnet_notes.txt', 'tesla_regnet_notes.txt')\n"
+                f"2. Call write_text_file IMMEDIATELY with path: 'data/generated/[filename]'\n"
+                f"   - Use the exact notes text above (no modifications)\n"
+                f"3. DO NOT call fetch_full_document or retrieve_local_context\n"
+                f"4. DO NOT regenerate, summarize, or modify the notes\n"
+                f"5. After write_text_file succeeds, respond with ONLY: 'Notes saved to data/generated/[actual_file_path]'\n"
+                f"6. Keep your response under 20 words - just confirm the save\n"
+                f"7. DO NOT write a long explanation or repeat the notes\n\n"
+                f"Your response should be: 'Notes saved to data/generated/[filename]'"
             )
             # Don't include extra_context for save requests - we already have the notes
             extra_context = None
