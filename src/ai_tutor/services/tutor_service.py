@@ -420,7 +420,7 @@ Please answer based only on the provided context."""
             self._session_responses[session_id].append(response)
             return response
 
-        question, extra_context, source_hints = self._build_prompt_from_event(event)
+        question, extra_context, source_hints = self._build_prompt_from_event(event, session_id=session_id)
         logger.info(
             "[TutorService] Processing event: type=%s, question=%s, source_hints=%s",
             event.type,
@@ -467,9 +467,32 @@ Please answer based only on the provided context."""
             responses=self._session_responses.get(session_id, []),
         )
 
-    def _build_prompt_from_event(self, event: SessionEvent) -> tuple[str, Optional[str], Optional[List[str]]]:
+    def _build_prompt_from_event(self, event: SessionEvent, session_id: Optional[str] = None) -> tuple[str, Optional[str], Optional[List[str]]]:
         source_hints = event.source_hints or event.file_ids or []
         documents_phrase = " Please use the uploaded documents only." if event.documents_only else ""
+        
+        # CRITICAL FIX: Detect "save notes" or "create summary file" requests and include previous notes in prompt
+        content_lower = (event.content or "").lower()
+        is_save_request = any(keyword in content_lower for keyword in [
+            "save notes", "save to file", "write notes to file", "save the notes",
+            "save this", "save that", "save it", "write to file",
+            "create a summary file", "create summary file", "create a file",
+            "save summary", "export notes", "download notes"
+        ])
+        
+        previous_notes = None
+        if is_save_request and session_id:
+            # Get previous response from session history
+            previous_responses = self._session_responses.get(session_id, [])
+            # Look for the most recent note response
+            for response in reversed(previous_responses):
+                if response.route == "note" and response.answer:
+                    previous_notes = response.answer
+                    logger.info(
+                        "[TutorService] Detected save notes request, found previous notes (%d chars)",
+                        len(previous_notes)
+                    )
+                    break
 
         # CRITICAL FIX: If source_hints is empty but user is asking about uploaded documents,
         # try to extract from the message or use session context
@@ -492,8 +515,9 @@ Please answer based only on the provided context."""
                 )
 
         # Retrieve document content if source_hints are provided
+        # SKIP retrieval for save requests - we already have the notes
         extra_context = None
-        if source_hints:
+        if source_hints and not is_save_request:
             try:
                 # Use a broad query to retrieve all relevant content from the specified documents
                 # For notes/summaries, retrieve comprehensive content
@@ -509,29 +533,12 @@ Please answer based only on the provided context."""
                 )
                 
                 # Try multiple filename variations to handle path differences
+                # Use shared utility function to avoid code duplication
+                from ai_tutor.utils.path_utils import generate_filename_variations
+                
                 filename_variations = []
                 for hint in source_hints:
-                    from pathlib import Path
-                    # Add original
-                    filename_variations.append(hint)
-                    # Add filename only (no path)
-                    filename_only = Path(hint).name
-                    if filename_only != hint:
-                        filename_variations.append(filename_only)
-                    # Add with data/uploads prefix (common storage location)
-                    if not hint.startswith("data/uploads"):
-                        filename_variations.append(f"data/uploads/{hint}")
-                    # Add filename with data/uploads prefix
-                    if not filename_only.startswith("data/uploads"):
-                        filename_variations.append(f"data/uploads/{filename_only}")
-                    # REFACTOR: Add variations for ingestion paths (data/raw/...)
-                    # Documents ingested from data/raw/ will have full paths stored
-                    if not hint.startswith("data/raw"):
-                        # Try with data/raw prefix
-                        filename_variations.append(f"data/raw/{hint}")
-                        filename_variations.append(f"data/raw/{filename_only}")
-                    # Note: Complex nested folder structures and lecture-specific patterns
-                    # are handled by fuzzy matching in fetch_full_document, not here
+                    filename_variations.extend(generate_filename_variations(hint))
                 
                 # Remove duplicates while preserving order
                 seen = set()
@@ -664,7 +671,30 @@ Please answer based only on the provided context."""
 
         # Default: standard message
         content = event.content or ""
-        question = f"{content}{documents_phrase}" if content else documents_phrase.strip()
+        
+        # If this is a save request and we have previous notes, include them explicitly
+        if is_save_request and previous_notes:
+            question = (
+                f"SAVE NOTES TO FILE - IMMEDIATE ACTION REQUIRED\n\n"
+                f"User request: {content}\n\n"
+                f"NOTES TO SAVE (from your previous response):\n"
+                f"{'='*60}\n"
+                f"{previous_notes}\n"
+                f"{'='*60}\n\n"
+                f"CRITICAL INSTRUCTIONS:\n"
+                f"1. Call write_text_file IMMEDIATELY with the notes above (exact text, no modifications)\n"
+                f"2. DO NOT call fetch_full_document or retrieve_local_context\n"
+                f"3. DO NOT regenerate, summarize, or modify the notes\n"
+                f"4. After write_text_file succeeds, respond with ONLY: 'Notes saved to [file path]'\n"
+                f"5. Keep your response under 20 words - just confirm the save\n"
+                f"6. DO NOT write a long explanation or repeat the notes\n\n"
+                f"Your response should be: 'Notes saved to data/generated/[filename].txt'"
+            )
+            # Don't include extra_context for save requests - we already have the notes
+            extra_context = None
+        else:
+            question = f"{content}{documents_phrase}" if content else documents_phrase.strip()
+        
         return question, extra_context, source_hints
     
     def detect_quiz_request(self, message: str) -> bool:

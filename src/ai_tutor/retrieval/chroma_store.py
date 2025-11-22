@@ -45,8 +45,9 @@ class ChromaVectorStore(VectorStore):
             Legacy single collection name. If provided and use_domain_collections=False,
             uses a single collection. Otherwise, uses domain-based collections.
         use_domain_collections : bool
-            If True, uses separate collections per domain. If False, uses a single
-            collection (legacy mode).
+            **LEGACY MODE**: If True, uses separate collections per domain. 
+            Default is False (single collection mode). 
+            Domain collections are deprecated - all new code should use single collection.
         """
         if chromadb is None:
             raise ImportError(
@@ -501,26 +502,19 @@ class ChromaVectorStore(VectorStore):
             try:
                 
                 # Build where clause for source_path filtering
-                # Try multiple path variations to match stored paths
+                # Use shared utility function to generate path variations
+                from ai_tutor.utils.path_utils import generate_filename_variations
+                
                 source_paths = []
                 for name in source_filter:
-                    # Add original
-                    source_paths.append(name)
-                    # Add filename only (most important - matches temp paths)
-                    filename_only = Path(name).name
-                    source_paths.append(filename_only)
-                    # Add with data/uploads prefix (common for uploaded files)
-                    source_paths.append(f"data/uploads/{name}")
-                    source_paths.append(f"data/uploads/{filename_only}")
-                    # REFACTOR: Add variations for ingestion paths (data/raw/...)
-                    # Documents ingested from data/raw/ will have full paths stored
-                    source_paths.append(f"data/raw/{name}")
-                    source_paths.append(f"data/raw/{filename_only}")
+                    # Generate common variations
+                    variations = generate_filename_variations(name)
+                    source_paths.extend(variations)
                     # CRITICAL: Add temp path variations (UI uploads use /tmp/aitutor_ingest_*/)
                     # The filename_only should match the temp path's filename
+                    filename_only = Path(name).name
                     source_paths.append(f"/tmp/aitutor_ingest_*/{filename_only}")
-                    # Also try matching just the filename in any temp directory
-                    # (fuzzy matching will handle this, but try exact match first)
+                    # Note: Complex nested folder structures are handled by fuzzy matching fallback
                 
                 # Use ChromaDB get() with where clause to get ALL chunks
                 # Try each source path variation
@@ -732,7 +726,9 @@ class ChromaVectorStore(VectorStore):
         path : Path
             Directory path for ChromaDB storage
         use_domain_collections : bool
-            If True, uses domain-based collections. Default False (single collection).
+            **LEGACY MODE**: If True, uses domain-based collections. 
+            Default False (single collection). 
+            Domain collections are deprecated - use single collection for all new deployments.
         collection_name : str
             Name of the collection. Default "ai_tutor_master".
         

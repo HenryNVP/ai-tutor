@@ -7,6 +7,7 @@ from typing import Iterable, List, Tuple
 
 from ai_tutor.config.schema import ChunkingConfig
 from ai_tutor.data_models import Chunk, ChunkMetadata, Document
+from ai_tutor.utils.path_utils import normalize_source_path
 
 
 def _hash_chunk(text: str, doc_id: str, index: int) -> str:
@@ -55,33 +56,9 @@ def chunk_document(document: Document, config: ChunkingConfig) -> List[Chunk]:
         domain_tags = getattr(document.metadata, "domain_tags", []) or []
         domain_confidence = getattr(document.metadata, "domain_confidence", 0.5)
         
-        # CRITICAL FIX: Normalize source_path to just the filename
-        # This prevents temp paths like /tmp/aitutor_ingest_*/filename.pdf from being stored permanently
-        # We store just the filename, which is what we use for matching anyway
-        original_source_path = document.metadata.source_path
-        if original_source_path:
-            # Normalize to just the filename (handles temp paths, data/uploads, data/raw, etc.)
-            normalized_source_path = Path(original_source_path.name)
-            # If the file was from data/uploads, preserve that for clarity
-            if str(original_source_path).startswith("data/uploads/"):
-                normalized_source_path = Path("data/uploads") / original_source_path.name
-            # If the file was from data/raw, preserve the relative path structure
-            elif str(original_source_path).startswith("data/raw/"):
-                # Keep the relative path from data/raw (e.g., data/raw/physics/file.pdf)
-                try:
-                    relative_path = original_source_path.relative_to(Path("data/raw"))
-                    normalized_source_path = Path("data/raw") / relative_path
-                except ValueError:
-                    # If not relative to data/raw, just use filename
-                    normalized_source_path = Path(original_source_path.name)
-            # For temp paths (/tmp/aitutor_ingest_*/), just use filename
-            elif "/tmp/" in str(original_source_path) or "aitutor_ingest" in str(original_source_path):
-                normalized_source_path = Path(original_source_path.name)
-            else:
-                # For other paths, try to preserve relative structure if it's within project
-                normalized_source_path = Path(original_source_path.name)
-        else:
-            normalized_source_path = Path("unknown")
+        # Normalize source_path using centralized function for consistency
+        # This ensures all paths are stored in a standard format that matches retrieval expectations
+        normalized_source_path = normalize_source_path(document.metadata.source_path)
         
         chunk_metadata = ChunkMetadata(
             chunk_id=chunk_id,

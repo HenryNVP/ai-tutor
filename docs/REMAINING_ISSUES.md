@@ -50,58 +50,49 @@ After the refactor, the system is significantly improved, but several issues rem
 
 ## 🟠 High Priority Issues
 
-### 4. Complex Filename Variation Logic in Pre-Retrieval
+### 4. Complex Filename Variation Logic in Pre-Retrieval ✅ FIXED
 
-**Location:** `src/ai_tutor/services/tutor_service.py:511-545`
+**Location:** `src/ai_tutor/services/tutor_service.py` and `src/ai_tutor/retrieval/chroma_store.py`
 
-**Problem:** Very complex filename variation logic with hardcoded paths and patterns.
+**Status:** ✅ Fixed - Extracted to shared utility function.
 
-**Issues:**
-- Hardcoded CMPE249 paths (line 534-535)
-- Complex lecture number extraction (line 537-545)
-- Duplicated logic with `fetch_full_document`
-- Maintenance burden
-
-**Recommendation:**
-- Extract to shared utility function
-- Remove hardcoded paths
-- Simplify to common patterns only
+**Changes Made:**
+- Created `src/ai_tutor/utils/path_utils.py` with `generate_filename_variations()` function
+- Replaced duplicated logic in both `tutor_service.py` and `chroma_store.py` with utility function
+- Removed all hardcoded paths and complex patterns
+- Simplified to common patterns only (data/uploads, data/raw, filename-only)
+- Reduced code duplication and maintenance burden
 
 ---
 
-### 5. Legacy Domain Collections Code Still Present
+### 5. Legacy Domain Collections Code Still Present ✅ FIXED
 
 **Location:** `src/ai_tutor/retrieval/chroma_store.py`
 
-**Problem:** Code still supports `use_domain_collections=True` mode, adding complexity.
+**Status:** ✅ Fixed - Documented as legacy-only.
 
-**Impact:**
-- Unused code paths
-- Increased maintenance burden
-- Confusion about which mode is active
-
-**Recommendation:**
-- Remove domain collections support entirely (breaking change)
-- Or clearly document it as legacy-only
-- Update all references to single collection
+**Changes Made:**
+- Added clear documentation that domain collections are **LEGACY MODE**
+- Updated docstrings to indicate domain collections are deprecated
+- Default remains `use_domain_collections=False` (single collection)
+- All new deployments should use single collection
+- Legacy mode preserved for backward compatibility only
 
 ---
 
-### 6. Note Agent Still Taking Too Long to Save
+### 6. Note Agent Still Taking Too Long to Save ✅ FIXED
 
-**Location:** `src/ai_tutor/agents/note.py:148-157`
+**Location:** `src/ai_tutor/services/tutor_service.py` and `src/ai_tutor/agents/note.py`
 
-**Problem:** Despite instructions, note agent may still regenerate notes when asked to save.
+**Status:** ✅ Fixed - Previous notes now passed explicitly in prompt.
 
-**Current Instructions:**
-- Tells agent to check conversation history
-- But agent may not have easy access to previous messages
-- Could still trigger retrieval/regeneration
-
-**Recommendation:**
-- Pass previous notes explicitly in prompt when saving
-- Or implement a dedicated "save_notes" tool that takes content directly
-- Add timeout handling for long operations
+**Changes Made:**
+- Modified `_build_prompt_from_event()` to detect "save notes" requests
+- Retrieves previous notes from session history automatically
+- Includes previous notes explicitly in the prompt when saving
+- Agent no longer needs to search conversation history
+- Clear instructions to save exact notes without regeneration
+- Should complete in seconds instead of minutes
 
 ---
 
@@ -159,21 +150,27 @@ for saved_path in saved_paths:
 
 ---
 
-### 10. Source Path Normalization Inconsistency
+### 10. ✅ Source Path Normalization Inconsistency (FIXED)
 
-**Location:** `src/ai_tutor/ingestion/chunker.py:63-84`
+**Location:** `src/ai_tutor/ingestion/chunker.py` → `src/ai_tutor/utils/path_utils.py`
 
-**Problem:** Complex normalization logic that may not handle all edge cases.
+**Status:** ✅ **FIXED**
 
-**Issues:**
-- Multiple normalization rules
-- May not match retrieval expectations
-- Temp path detection relies on parent name pattern
+**Solution Implemented:**
+- Created centralized `normalize_source_path()` function in `path_utils.py`
+- Replaced complex inline normalization logic in `chunker.py` with single function call
+- Documented all normalization rules with examples
+- Standardized path formats:
+  - Temp paths → filename only
+  - `data/uploads/` → preserve prefix
+  - `data/raw/` → preserve relative path
+  - Other paths → filename only
 
-**Recommendation:**
-- Standardize on single normalization function
-- Use consistent path format throughout
-- Document expected path formats
+**Benefits:**
+- Single source of truth for path normalization
+- Consistent behavior across ingestion and retrieval
+- Well-documented rules with examples
+- Easier to maintain and test
 
 ---
 
@@ -236,7 +233,7 @@ max_passages=50,  # Include many passages for comprehensive context
 |----------|-------|--------|
 | 🔴 Critical | 3 | Documentation, hardcoded paths, fuzzy matching performance |
 | 🟠 High | 3 | Complex filename logic, legacy code, note agent timeout |
-| 🟡 Medium | 4 | Error messages, rate limiting, cleanup, normalization |
+| 🟡 Medium | 3 | Error messages, rate limiting, cleanup (normalization ✅ fixed) |
 | 🟢 Low | 4 | Migration, testing, monitoring, context management |
 
 ## Recommended Action Plan
