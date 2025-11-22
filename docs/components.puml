@@ -6,29 +6,32 @@ title Agent-First Orchestration
 package "Specialist Agents (gpt-4o-mini)" {
   component "QA Agent\nretrieve_local_context" as QAAgent #lightgreen
   component "Web Agent\nweb_search" as WebAgent #lightblue
-  component "Visualization Agent\ncreate_visualization" as VizAgent #lightpink
+  component "Quiz Agent\ngenerate_quiz tool" as QuizAgent #lightpink
+  component "Note Agent\nsummarize/create notes" as NoteAgent #lightcyan
   component "Ingestion Agent\ningest_corpus" as IngestionAgent #lightyellow
+  component "Routing Agent\nLLM fallback router" as RoutingAgent #lightgray
 }
 
-component "Orchestrator Agent\n(Function Tool Calling)" as Orchestrator #orange
-component "generate_quiz\nFunction Tool" as QuizTool #pink
+component "Orchestrator Agent\n(TutorAgent)" as Orchestrator #orange
 component "QuizService\n(Core Logic)" as QuizService #pink
 
 actor User
-User --> Orchestrator : "create 20 quizzes\nfrom documents"\n"plot revenue by month"
+User --> Orchestrator : "create 20 quizzes\nfrom documents"\n"create study notes"
 
+Orchestrator --> RoutingAgent : LLM fallback\n(when deterministic fails)
 Orchestrator --> QAAgent : STEM questions\n(math, physics, CS, etc.)
 Orchestrator --> WebAgent : Current events\nhistory, arts
+Orchestrator --> QuizAgent : Quiz requests\n(extract count & topic)
+Orchestrator --> NoteAgent : Note/summary requests
 Orchestrator --> IngestionAgent : File uploads
-Orchestrator --> QuizTool : Quiz requests\n(extract count & topic)
-Orchestrator --> VizAgent : Visualization requests\n(CSV analysis)
-QuizTool --> QuizService : Call service logic
+QuizAgent --> QuizService : generate_quiz tool call
 
 QAAgent --> User : Answer with\nlocal citations [1][2]
 WebAgent --> User : Answer with\nURL citations
+QuizAgent --> User : Interactive quiz\n(3-40 questions)
+NoteAgent --> User : Study notes\n(saved to file)
 IngestionAgent --> User : Ingestion summary
-QuizService --> User : Interactive quiz\n(3-40 questions)
-VizAgent --> User : Base64 plot\n+ generated code
+RoutingAgent --> Orchestrator : Routing decision\n(JSON response)
 
 note right of Orchestrator
   Agent-First Quiz Generation:
@@ -36,9 +39,10 @@ note right of Orchestrator
   Routing Rules:
   • Math/Science/Tech → qa_agent
   • News/Current → web_agent
+  • "create N quizzes" → quiz_agent
+  • "create notes/summarize" → note_agent
   • Upload → ingestion_agent
-  • "create N quizzes" → generate_quiz tool
-  • "plot/chart/graph" → viz_agent
+  • Fallback → routing_agent (LLM)
   
   Count Extraction:
   "create 20 quizzes" → count=20
@@ -52,39 +56,34 @@ note right of Orchestrator
   REQUIRED: ALWAYS call appropriate tool/agent
 end note
 
-note right of VizAgent
-  Visualization Agent:
+note right of NoteAgent
+  Note Agent:
   
-  Input:
-  • CSV filename
-  • User request ("plot X by Y")
-  
-  Process:
-  1. Inspect dataset structure
-  2. Generate matplotlib/seaborn code
-  3. Execute in safe environment
-  4. Return base64-encoded PNG
-  
-  Supports:
-  Line, bar, scatter, histogram,
-  pie, heatmap, box plots, etc.
-  
-  Performance: ~3-5 seconds
-end note
-
-note left of QuizTool
-  Function Tool:
-  
-  Parameters:
-  • topic: str (broad, searchable)
-  • count: int (3-40, enforced)
-  • source_filter: Optional[List[str]]
+  • Document summarization
+  • Study note generation
+  • Text file creation
+  • Source-filtered retrieval
+  • Saves notes to filesystem
   
   Features:
-  ✅ Uses user's exact count
-  ✅ Dynamic max_tokens
-  ✅ Source filtering for uploads
-  ✅ Topic inference from context
+  • Summarizes uploaded documents
+  • Creates structured study notes
+  • Saves to data/generated/notes/
+  • Supports source filtering
+end note
+
+note left of QuizAgent
+  Quiz Agent:
+  
+  • Calls generate_quiz function tool
+  • Tool parameters:
+    - topic: str (broad, searchable)
+    - count: int (3-40, enforced)
+    - difficulty: Optional[str]
+  • Uses QuizService for generation
+  • Stores quiz in AgentState
+  • Supports source filtering
+  • Topic/count extracted from context
   
   Called by orchestrator agent
 end note
@@ -98,7 +97,7 @@ title Quiz Generation with Source Filtering
 
 actor Learner
 component "Orchestrator Agent" as Orchestrator
-component "generate_quiz Tool" as QuizTool
+component "Quiz Agent" as QuizAgent
 component "QuizService" as QuizService
 component "Retriever" as Retriever
 component "VectorStore" as VectorStore
@@ -109,8 +108,9 @@ folder "Uploaded Files" as UploadedFiles
 
 Learner -> Orchestrator : "create 20 quizzes\nfrom uploaded document"
 Orchestrator -> Orchestrator : Extract:\n• count=20\n• source_filter=["doc.pdf"]
-Orchestrator -> QuizTool : Call tool with params
-QuizTool -> QuizService : generate_quiz(topic, count, source_filter)
+Orchestrator -> QuizAgent : Route to quiz agent
+QuizAgent -> QuizAgent : Call generate_quiz tool
+QuizAgent -> QuizService : generate_quiz(topic, count, source_filter)
 
 QuizService -> QuizService : Calculate max_tokens:\n(20 × 150) + 500 = 3500
 QuizService -> Retriever : Find content\n+ source_filter
@@ -121,10 +121,13 @@ Retriever --> QuizService : Relevant passages
 
 QuizService -> OpenAI : Generate 20 questions\nmax_tokens=3500
 OpenAI --> QuizService : Quiz with 20×4 choices
-QuizService --> Orchestrator : Return quiz object
+QuizService --> QuizAgent : Return quiz object
+QuizAgent --> QuizAgent : Store in AgentState
+QuizAgent --> Orchestrator : Return quiz via state
 Orchestrator --> Learner : Display interactive quiz
 
 Learner -> Orchestrator : Submit answers [0,2,1,3...]
+Orchestrator -> Orchestrator : evaluate_quiz(quiz, answers)\n(via TutorAgent)
 Orchestrator -> QuizService : evaluate_quiz(quiz, answers)
 QuizService -> QuizService : Grade answers
 QuizService -> ProgressTracker : Update profile (score, topic)
@@ -201,11 +204,10 @@ component "IngestionPipeline" as Ingestion
 component "Parsers\n(PDF, Markdown, TXT)" as Parsers
 component "Chunker" as Chunker
 component "EmbeddingClient\n(sentence-transformers)" as EmbeddingClient
-component "VectorStore\n(with source tracking)" as VectorStore
+component "VectorStore\n(ChromaDB with domain collections)" as VectorStore
 component "ChunkJsonlStore" as ChunkStore
-database "embeddings.npy" as EmbeddingsFile
-database "metadata.json\n(includes source paths)" as MetadataFile
-database "chunks.jsonl" as ChunksFile
+database "ChromaDB\n(data/vector_store)" as ChromaDB
+database "chunks.jsonl\n(data/processed)" as ChunksFile
 
 User --> UI : Upload PDF in chat
 UI -> UI : Store filename for filtering
@@ -217,8 +219,7 @@ Parsers --> Chunker : Extract text by page
 Chunker --> Chunker : Create 500-token chunks\n80-token overlap
 Chunker --> EmbeddingClient : Batch encode
 EmbeddingClient --> VectorStore : Store vectors\n+ source metadata
-VectorStore --> EmbeddingsFile : Append to numpy array
-VectorStore --> MetadataFile : Save chunk IDs + sources
+VectorStore --> ChromaDB : Persist to domain collections\n(ai_tutor_{domain})
 Ingestion --> ChunkStore : Save full chunks
 ChunkStore --> ChunksFile : Append JSONL
 
@@ -226,16 +227,20 @@ IngestionAgent --> UI : Summary: N chunks indexed
 UI --> User : "Ready! Try:\n'create 20 quizzes from this'"
 
 note right of VectorStore
-  Source Tracking:
+  ChromaDB with Domain Collections:
   
-  Each chunk metadata includes:
-  • source_path: "data/uploads/lecture9.pdf"
-  • filename: "lecture9.pdf"
+  • Separate collections per domain
+  • Collection name: ai_tutor_{domain}
+  • Metadata includes:
+    - source_path: "data/uploads/lecture9.pdf"
+    - filename: "lecture9.pdf"
+    - domain: math/physics/cs/etc.
   
-  Enables source filtering:
+  Source Filtering:
   • Query with source_filter=["lecture9.pdf"]
   • Only searches matching chunks
   • 320x faster, 100% relevant
+  • Pre-filters by filename before similarity
 end note
 
 note left of Chunker
@@ -266,85 +271,197 @@ end note
 @startuml
 skinparam componentStyle rectangle
 skinparam wrapWidth 240
-title Data Visualization Workflow
+title Note Generation Workflow
 
 actor User
 component "Streamlit UI\n(Chat & Learn)" as UI
 component "Orchestrator Agent" as Orchestrator
-component "Visualization Agent" as VizAgent
+component "Note Agent" as NoteAgent
+component "Retriever" as Retriever
+component "VectorStore" as VectorStore
 component "OpenAI API\n(gpt-4o-mini)" as OpenAI
-database "CSV Upload\n(data/uploads/*.csv)" as CSVFile
+database "Uploaded Documents" as Docs
 
-User --> UI : Upload CSV file
-UI --> CSVFile : Save to disk
-UI --> User : Show preview\n(columns, shape, first 5 rows)
+User --> UI : Upload PDF in chat
+User --> UI : "create study notes\nfrom uploaded documents"
 
-User --> UI : "plot revenue by month"
 UI --> Orchestrator : Natural language request
-Orchestrator --> Orchestrator : Detect visualization\nkeywords (plot, chart, graph)
-Orchestrator --> VizAgent : create_visualization(\ncsv_filename, user_request)
+Orchestrator --> Orchestrator : Detect note intent\n(summarize, notes, text file)
+Orchestrator --> NoteAgent : Route to note agent
 
-VizAgent --> CSVFile : Read CSV
-VizAgent --> VizAgent : Inspect dataset:\n• columns & types\n• sample rows\n• summary stats
+NoteAgent --> Retriever : Retrieve document content\n(with source filter)
+Retriever --> VectorStore : Search uploaded files
+VectorStore --> Retriever : Relevant chunks
+Retriever --> NoteAgent : Document passages
 
-VizAgent --> OpenAI : Generate matplotlib code\nwith dataset context
-OpenAI --> VizAgent : Python plotting code
+NoteAgent --> OpenAI : Generate structured notes\nwith document context
+OpenAI --> NoteAgent : Formatted study notes
 
-VizAgent --> VizAgent : Execute code safely\n(restricted environment)
-VizAgent --> VizAgent : Capture plot as\nbase64-encoded PNG
+NoteAgent --> NoteAgent : Save to filesystem\n(data/generated/notes/)
+NoteAgent --> Orchestrator : Return note summary
+Orchestrator --> UI : Display notes + file path
+UI --> User : Show study notes\n+ download link
 
-VizAgent --> Orchestrator : Return:\n• image_base64\n• code\n• success/error
-Orchestrator --> UI : Display plot + code
-UI --> User : Show visualization\n+ code expander
-
-note right of VizAgent
-  Dataset Inspection:
+note right of NoteAgent
+  Note Generation:
   
-  Analyzes CSV to extract:
-  • Column names & types
-  • Numeric vs categorical
-  • Sample rows (first 5)
-  • Basic statistics (mean, min, max)
-  • Value counts for categories
-  
-  Provides context to LLM for
-  intelligent code generation
-end note
-
-note left of VizAgent
-  Safe Execution:
-  
-  Restricted environment:
-  • Limited imports (pandas, matplotlib, seaborn)
-  • No file system access (except reading CSV)
-  • No network access
-  • No dangerous builtins (exec, eval, etc.)
-  • Only safe operations allowed
-  
-  Returns:
-  • Base64-encoded PNG (for display)
-  • Generated Python code (for viewing)
-  • Error message (if failed)
-end note
-
-note bottom of UI
-  Supported Visualizations:
-  
-  • Line charts
-  • Bar charts (single/grouped)
-  • Scatter plots
-  • Histograms
-  • Pie charts
-  • Heatmaps
-  • Box plots
-  
-  Performance: ~3-5 seconds per plot
+  • Summarizes uploaded documents
+  • Creates structured study notes
+  • Saves to filesystem
+  • Supports source filtering
+  • Multiple formats (markdown, text)
   
   Features:
-  • Natural language requests
-  • Code viewer (expandable)
-  • Plot persistence in chat history
-  • Multiple plots per session
+  • Document-based content
+  • Organized by topic/section
+  • Includes citations
+  • Auto-saved to files
+end note
+
+note left of Retriever
+  Source Filtering:
+  
+  • Searches only uploaded files
+  • 320x faster retrieval
+  • 100% relevance
+  • Guaranteed from user's documents
+end note
+
+@enduml
+
+@startuml Component_Communication
+skinparam componentStyle rectangle
+skinparam wrapWidth 240
+title Component Communication Patterns
+
+package "Service Layer" {
+    component "TutorService\n(Singleton)" as Service
+    component "Session Event\nProcessing" as EventProc
+}
+
+package "Core System" {
+    component "TutorSystem\n(Facade)" as System
+    component "TutorAgent\n(Orchestrator)" as Agent
+}
+
+package "Specialist Agents" {
+    component "QA Agent" as QA
+    component "Web Agent" as Web
+    component "Quiz Agent" as Quiz
+    component "Note Agent" as Note
+    component "Ingestion Agent" as Ingestion
+    component "Routing Agent" as Routing
+}
+
+package "Shared State" {
+    component "AgentState\n(Mutable Container)" as State
+}
+
+package "Infrastructure" {
+    component "Retriever" as Retriever
+    component "VectorStore\n(ChromaDB)" as VectorStore
+    component "LLM Client" as LLM
+    component "SQLiteSession" as Session
+    component "QuizService" as QuizService
+}
+
+Service --> System : answer_question()\ncreate_quiz()\nprocess_event()
+System --> Agent : answer()\ndelegate to orchestrator
+Agent --> State : Initialize/reset\nfor each query
+
+Agent --> Routing : LLM fallback routing\n(when deterministic fails)
+Agent --> QA : Route STEM questions
+Agent --> Web : Route current events
+Agent --> Quiz : Route quiz requests
+Agent --> Note : Route note requests
+Agent --> Ingestion : Route uploads
+
+QA --> Retriever : retrieve_local_context()
+Retriever --> VectorStore : cosine search\n+ source filter
+QA --> LLM : generate cited answer
+QA --> State : Store results\n(last_hits, last_citations)
+
+Web --> LLM : synthesize web results
+Web --> State : Store results\n(last_source = "web")
+
+Quiz --> QuizService : generate_quiz tool call
+QuizService --> Retriever : retrieve with source filter
+QuizService --> LLM : generate questions\n(dynamic max_tokens)
+Quiz --> State : Store quiz\n(last_quiz)
+
+Note --> Retriever : retrieve document content
+Note --> LLM : generate summary
+Note --> State : Store results
+
+Ingestion --> VectorStore : add chunks
+Ingestion --> State : Store ingestion summary
+
+Routing --> Agent : Return routing decision\n(JSON with route, confidence)
+
+Agent --> State : Collect all results
+Agent --> Agent : Format TutorResponse
+Agent --> Session : Save conversation turn
+Agent --> System : Return TutorResponse
+System --> Service : Return TutorResponse
+
+note right of State
+  AgentState Pattern:
+  
+  Purpose:
+  • Enable inter-agent communication
+  • Centralize result collection
+  • Loose coupling between agents
+  
+  Fields:
+  • last_hits: List[RetrievalHit]
+  • last_citations: List[str]
+  • last_source: Optional[str]
+  • last_quiz: Optional[Quiz]
+  
+  Lifecycle:
+  1. Reset at query start
+  2. Agents write results
+  3. Orchestrator reads results
+  4. Reset for next query
+end note
+
+note left of Agent
+  Routing Strategy:
+  
+  1. Deterministic Routing:
+     • Keyword-based rules
+     • Fast, no LLM calls
+     • Confidence = 1.0
+  
+  2. LLM-Based Routing:
+     • Fallback when deterministic fails
+     • Structured JSON output
+     • Confidence threshold: 0.45
+  
+  Routing Targets:
+  • "qa": STEM questions
+  • "web": Current events
+  • "quiz": Quiz generation
+  • "note": Summaries/notes
+  • "ingestion": File uploads
+  
+  Routing Agent:
+  • LLM-based fallback router
+  • Returns structured JSON
+  • Confidence threshold: 0.45
+  • Used when deterministic fails
+end note
+
+note bottom of Service
+  Service Layer Responsibilities:
+  
+  • Abstraction between UI and core
+  • Session event processing
+  • Source-filtered retrieval
+  • Context formatting
+  • Error handling
+  • MCP connection caching
+  • Tool list caching
 end note
 
 @enduml

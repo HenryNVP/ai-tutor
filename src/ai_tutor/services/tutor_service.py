@@ -67,6 +67,7 @@ class TutorService:
         This method handles all the complexity of:
         - Adjusting top_k for document-specific searches
         - Using source filters
+        - Domain filtering to search only relevant collections
         - Removing duplicates
         - Formatting results
         
@@ -85,11 +86,50 @@ class TutorService:
         original_top_k = retriever.config.top_k
         
         try:
-            # Temporarily increase top_k for document-specific search
-            retriever.config.top_k = top_k
+            # For document-specific searches, use a much larger top_k to ensure
+            # we get all chunks from sparse documents (e.g., documents with only 1-3 chunks)
+            # This is especially important for summaries where we need comprehensive coverage
+            retriever.config.top_k = max(top_k, 100)  # Ensure we get all chunks even for sparse docs
             
-            # Search with source filter
-            query = Query(text=query_text, source_filter=filenames)
+            # Try to determine domain from chunk store to optimize search
+            # This avoids searching all domains when we know which domain the file belongs to
+            domain = None
+            if hasattr(retriever.vector_store, "use_domain_collections") and retriever.vector_store.use_domain_collections:
+                try:
+                    # Look up domain from chunk store (more efficient than querying vector store)
+                    from pathlib import Path
+                    chunk_store = self.system.chunk_store
+                    all_chunks = chunk_store.load()
+                    
+                    # Find chunks matching the filenames
+                    for chunk in all_chunks:
+                        chunk_filename = Path(chunk.metadata.source_path).name.lower()
+                        # Check if this chunk matches any of the requested filenames
+                        if any(Path(f).name.lower() == chunk_filename for f in filenames):
+                            domain = chunk.metadata.primary_domain or chunk.metadata.domain
+                            if domain and domain != "general":
+                                logger.debug(
+                                    "[TutorService] Determined domain '%s' from chunk store for files %s. "
+                                    "Will search only this domain collection for efficiency.",
+                                    domain,
+                                    filenames
+                                )
+                                break
+                    
+                    if not domain:
+                        logger.debug(
+                            "[TutorService] Could not determine domain from chunk store for files %s. "
+                            "Will search all domains.",
+                            filenames
+                        )
+                except Exception as lookup_exc:
+                    logger.debug(
+                        "[TutorService] Could not determine domain from chunk store: %s. Will search all domains.",
+                        lookup_exc
+                    )
+            
+            # Search with source filter and domain filter (if available)
+            query = Query(text=query_text, source_filter=filenames, domain=domain)
             hits = retriever.retrieve(query)
             
             # Remove duplicates
@@ -99,6 +139,16 @@ class TutorService:
                 if hit.chunk.metadata.chunk_id not in seen_chunk_ids:
                     seen_chunk_ids.add(hit.chunk.metadata.chunk_id)
                     unique_hits.append(hit)
+            
+            # Log warning if very few chunks found (may indicate sparse document)
+            if len(unique_hits) <= 3 and filenames:
+                logger.warning(
+                    "[TutorService] Only found %d chunks for file(s) %s. "
+                    "This may indicate sparse content or parsing issues. "
+                    "Document may need OCR or have image-based content.",
+                    len(unique_hits),
+                    filenames
+                )
             
             return unique_hits
         finally:
@@ -417,26 +467,216 @@ Please answer based only on the provided context."""
             responses=self._session_responses.get(session_id, []),
         )
 
-    @staticmethod
-    def _build_prompt_from_event(event: SessionEvent) -> tuple[str, Optional[str], Optional[List[str]]]:
+    def _build_prompt_from_event(self, event: SessionEvent) -> tuple[str, Optional[str], Optional[List[str]]]:
         source_hints = event.source_hints or event.file_ids or []
         documents_phrase = " Please use the uploaded documents only." if event.documents_only else ""
+
+        # CRITICAL FIX: If source_hints is empty but user is asking about uploaded documents,
+        # try to extract from the message or use session context
+        if not source_hints and event.documents_only:
+            # Try to extract filename from the message content
+            from ai_tutor.agents.routing import extract_source_mentions
+            extracted = extract_source_mentions(event.content or "")
+            if extracted:
+                source_hints = extracted
+                logger.info(
+                    "[TutorService] Extracted source hints from message: %s",
+                    source_hints
+                )
+            # If still empty, check if we can infer from context
+            # For now, we'll let the agent handle it, but log a warning
+            if not source_hints:
+                logger.warning(
+                    "[TutorService] No source_hints provided but documents_only=True. "
+                    "Agent will need to infer from context or use fetch_full_document."
+                )
+
+        # Retrieve document content if source_hints are provided
+        extra_context = None
+        if source_hints:
+            try:
+                # Use a broad query to retrieve all relevant content from the specified documents
+                # For notes/summaries, retrieve comprehensive content
+                # For other queries, use the question text
+                query_text = event.content or "What does this document cover?"
+                if event.type in ["note", "quiz"] or event.documents_only:
+                    # For notes and quizzes, retrieve comprehensive content
+                    query_text = "What does this document cover?"
+                
+                logger.info(
+                    "[TutorService] Retrieving content from uploaded documents: %s",
+                    source_hints
+                )
+                
+                # Try multiple filename variations to handle path differences
+                filename_variations = []
+                for hint in source_hints:
+                    from pathlib import Path
+                    # Add original
+                    filename_variations.append(hint)
+                    # Add filename only (no path)
+                    filename_only = Path(hint).name
+                    if filename_only != hint:
+                        filename_variations.append(filename_only)
+                    # Add with data/uploads prefix (common storage location)
+                    if not hint.startswith("data/uploads"):
+                        filename_variations.append(f"data/uploads/{hint}")
+                    # Add filename with data/uploads prefix
+                    if not filename_only.startswith("data/uploads"):
+                        filename_variations.append(f"data/uploads/{filename_only}")
+                    # REFACTOR: Add variations for ingestion paths (data/raw/...)
+                    # Documents ingested from data/raw/ will have full paths stored
+                    if not hint.startswith("data/raw"):
+                        # Try with data/raw prefix
+                        filename_variations.append(f"data/raw/{hint}")
+                        filename_variations.append(f"data/raw/{filename_only}")
+                        # Try with nested folder structure (common for course folders)
+                        filename_variations.append(f"data/raw/CMPE249Fa25Shared-2025/CMPE249Fa25Shared/{filename_only}")
+                        filename_variations.append(f"data/raw/CMPE249Fa25Shared-2025/CMPE249Fa25Shared/{hint}")
+                    # Also try partial matches (e.g., "Lecture7" should match "CMPE249 Lecture7 final0911.pdf")
+                    if "lecture" in hint.lower() or "lecture" in filename_only.lower():
+                        # Extract lecture number if present
+                        import re
+                        lecture_match = re.search(r'lecture\s*(\d+)', hint, re.IGNORECASE)
+                        if lecture_match:
+                            lecture_num = lecture_match.group(1)
+                            # Try variations with lecture number
+                            filename_variations.append(f"CMPE249 Lecture{lecture_num} final*.pdf")
+                            filename_variations.append(f"*Lecture{lecture_num}*.pdf")
+                
+                # Remove duplicates while preserving order
+                seen = set()
+                unique_variations = []
+                for var in filename_variations:
+                    if var not in seen:
+                        seen.add(var)
+                        unique_variations.append(var)
+                
+                logger.debug(
+                    "[TutorService] Trying filename variations: %s",
+                    unique_variations
+                )
+                
+                hits = []
+                for variation_set in [source_hints, unique_variations]:
+                    if hits:
+                        break
+                    hits = self.retrieve_from_uploaded_documents(
+                        query_text=query_text,
+                        filenames=variation_set,
+                        top_k=50,  # Retrieve more content for comprehensive summaries
+                    )
+                    if hits:
+                        logger.info(
+                            "[TutorService] Found %d hits using filename variations: %s",
+                            len(hits),
+                            variation_set
+                        )
+                        break
+                
+                if hits:
+                    # Format the retrieved content as context
+                    context_str, _ = self.format_context_from_hits(
+                        hits,
+                        max_passages=50,  # Include many passages for comprehensive context
+                        passages_per_doc=None,  # Auto-calculate
+                    )
+                    
+                    if context_str:
+                        # Add SOURCE_FILTER_HINTS metadata for routing
+                        filename_hints = ", ".join(source_hints)
+                        extra_context = f"SOURCE_FILTER_HINTS: {filename_hints}\n\n{context_str}"
+                        logger.info(
+                            "[TutorService] Successfully retrieved %d passages from uploaded documents (%d chars of context)",
+                            len(hits),
+                            len(context_str)
+                        )
+                    else:
+                        logger.warning(
+                            "[TutorService] Retrieved %d hits but formatted context is empty",
+                            len(hits)
+                        )
+                else:
+                    logger.warning(
+                        "[TutorService] No hits found for source_hints %s after trying all variations. "
+                        "Possible causes: document not indexed, filename mismatch, empty chunks, or file was skipped.",
+                        source_hints
+                    )
+                    
+                    # Try a very generic query to see if ANY chunks exist for this file
+                    # This helps diagnose if the issue is semantic matching vs. filename matching
+                    # Use a generic query that should match any document content
+                    try:
+                        generic_queries = [
+                            "document content",  # Generic query
+                            "text",  # Very generic
+                            query_text,  # Original query
+                        ]
+                        for generic_query in generic_queries:
+                            diagnostic_hits = self.retrieve_from_uploaded_documents(
+                                query_text=generic_query,
+                                filenames=unique_variations if 'unique_variations' in locals() else source_hints,
+                                top_k=100,  # Get many results to check if file exists
+                            )
+                            if diagnostic_hits:
+                                logger.warning(
+                                    "[TutorService] Found %d chunks for file using generic query '%s' "
+                                    "(original query '%s' returned 0 hits). "
+                                    "This suggests the document content may be sparse or doesn't match the original query semantically.",
+                                    len(diagnostic_hits),
+                                    generic_query,
+                                    query_text
+                                )
+                                # Use diagnostic hits if available (even if not semantically relevant)
+                                hits = diagnostic_hits[:50]  # Limit to 50 for context
+                                break
+                    except Exception as diag_exc:
+                        logger.debug(
+                            "[TutorService] Diagnostic query failed: %s",
+                            diag_exc
+                        )
+                    
+                    if not hits:
+                        # Provide helpful error context for the agent to inform the user
+                        missing_files = ", ".join(f'"{f}"' for f in source_hints)
+                        extra_context = (
+                            f"IMPORTANT: The requested document(s) {missing_files} could not be found in the vector store. "
+                            f"Possible reasons:\n"
+                            f"1. File was not successfully ingested (check ingestion logs for skipped files)\n"
+                            f"2. File was ingested but chunks are empty or contain no searchable text\n"
+                            f"3. Filename mismatch between stored metadata and search filter\n"
+                            f"4. Document not yet indexed (wait a moment and try again)\n\n"
+                            f"Please inform the user and suggest:\n"
+                            f"- Verify the file was uploaded and ingested successfully\n"
+                            f"- Check if the file appears in the ingestion results\n"
+                            f"- If the file was ingested but has very few chunks (e.g., 3 chunks), the PDF may have failed to extract text\n"
+                            f"- Try re-uploading the file if it was skipped"
+                        )
+            except Exception as exc:
+                # Log but don't fail - fall back to source filtering without pre-retrieved content
+                logger.warning(
+                    "[TutorService] Failed to retrieve document content for source_hints %s: %s. "
+                    "Will rely on source filtering during agent execution.",
+                    source_hints,
+                    exc,
+                    exc_info=True
+                )
 
         if event.type == "note":
             topic = event.content or "the uploaded documents"
             question = f"Create detailed study notes about {topic}.{documents_phrase}"
-            return question, None, source_hints
+            return question, extra_context, source_hints
 
         if event.type == "quiz":
             topic = event.quiz_topic or event.content or "uploaded documents"
             count = event.quiz_count or 4
             question = f"Create {count} quiz questions about {topic}.{documents_phrase}"
-            return question, None, source_hints
+            return question, extra_context, source_hints
 
         # Default: standard message
         content = event.content or ""
         question = f"{content}{documents_phrase}" if content else documents_phrase.strip()
-        return question, None, source_hints
+        return question, extra_context, source_hints
     
     def detect_quiz_request(self, message: str) -> bool:
         """Detect if a message is a quiz request."""

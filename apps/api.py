@@ -328,25 +328,52 @@ async def ingest_documents(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="aitutor_ingest_"))
+    # Use data/uploads/ directory consistently
+    upload_dir = Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    saved_paths: List[Path] = []
     try:
+        # Save uploaded files to data/uploads/ with original filenames
+        # Files are cleaned up immediately after ingestion, so no need for timestamp prefixes
         for upload in files:
             if not upload.filename:
                 continue
-            destination = temp_dir / upload.filename
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Use original filename - will overwrite if exists (fine since we clean up)
+            destination = upload_dir / upload.filename
             contents = await upload.read()
             destination.write_bytes(contents)
+            saved_paths.append(destination)
+            logger.info(f"Saved uploaded file to: {destination}")
 
+        # Ingest only the specific files we just saved (not the entire directory)
+        # to avoid re-ingesting old files
         ingestion_result = await asyncio.to_thread(
-            service.ingest_directory,
-            temp_dir,
+            service.system.ingestion_pipeline.ingest_paths,
+            saved_paths,
         )
+        
+        # Clean up the files we just saved after ingestion completes
+        # (Optional: could keep them for a period, but for now we clean up immediately)
+        for saved_path in saved_paths:
+            try:
+                if saved_path.exists():
+                    saved_path.unlink()
+                    logger.debug(f"Cleaned up uploaded file: {saved_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up {saved_path}: {e}")
+                
     except Exception as exc:
         logger.exception("Error during ingestion: %s", exc)
+        # Clean up on error
+        for saved_path in saved_paths:
+            try:
+                if saved_path.exists():
+                    saved_path.unlink()
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        background_tasks.add_task(shutil.rmtree, temp_dir, ignore_errors=True)
 
     summary = _summarize_ingestion(ingestion_result)
     return IngestResponse(**summary)

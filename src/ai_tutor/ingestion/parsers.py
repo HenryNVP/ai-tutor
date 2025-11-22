@@ -63,17 +63,51 @@ class PdfParser(Parser):
         doc = fitz.open(path)
         pages: List[str] = []
         page_map: Dict[int, str] = {}
+        pages_with_text = 0
+        total_chars = 0
+        
         for page_idx, page in enumerate(doc):
             text = page.get_text()
+            text_len = len(text.strip())
             pages.append(text)
             page_map[page_idx] = f"p.{page_idx + 1}"
+            
+            if text_len > 0:
+                pages_with_text += 1
+                total_chars += text_len
 
         combined_text = "\n\n".join(pages)
+        
+        # Warn if PDF appears to have sparse or no text content
+        if len(pages) > 0:
+            text_ratio = pages_with_text / len(pages)
+            chars_per_page = total_chars / len(pages) if len(pages) > 0 else 0
+            
+            if text_ratio < 0.1:  # Less than 10% of pages have text
+                logger.warning(
+                    f"PDF {path.name} appears to be image-based or have parsing issues: "
+                    f"only {pages_with_text}/{len(pages)} pages contain text. "
+                    f"Average {chars_per_page:.0f} chars per page. "
+                    f"This may result in very few chunks."
+                )
+            elif chars_per_page < 100:  # Very sparse content
+                logger.warning(
+                    f"PDF {path.name} has sparse text content: "
+                    f"average {chars_per_page:.0f} chars per page. "
+                    f"This may result in very few chunks."
+                )
+        
         metadata = DocumentMetadata(
             doc_id=path.stem,
             title=path.stem.replace("_", " ").title(),
             source_path=path,
-            extra={"format": "pdf", "page_count": len(pages)},
+            extra={
+                "format": "pdf",
+                "page_count": len(pages),
+                "pages_with_text": pages_with_text,
+                "total_chars": total_chars,
+                "chars_per_page": total_chars / len(pages) if len(pages) > 0 else 0,
+            },
         )
         return Document(metadata=metadata, text=combined_text, page_map=page_map)
 

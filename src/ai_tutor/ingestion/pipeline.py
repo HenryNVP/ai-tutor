@@ -287,6 +287,35 @@ class IngestionPipeline:
             
             # Stage 3: Chunk document into overlapping segments
             doc_chunks = chunk_document(document, chunking_config)
+            
+            # Validate chunk quality - warn if document produces suspiciously few chunks
+            # This often indicates parsing failures, empty content, or image-based PDFs
+            if len(doc_chunks) > 0:
+                # Check average chunk size
+                avg_chunk_size = sum(len(chunk.text) for chunk in doc_chunks) / len(doc_chunks)
+                total_text_length = len(document.text.strip())
+                
+                # Warn if very few chunks for a multi-page document
+                page_count = document.metadata.extra.get("page_count", 0)
+                if page_count > 5 and len(doc_chunks) < 5:
+                    logger.warning(
+                        f"Document {path.name} produced only {len(doc_chunks)} chunks for {page_count} pages. "
+                        f"Average chunk size: {avg_chunk_size:.0f} chars. "
+                        f"Total text: {total_text_length} chars. "
+                        f"This may indicate parsing issues or image-based content."
+                    )
+                elif len(doc_chunks) == 0:
+                    logger.warning(
+                        f"Document {path.name} produced zero chunks. "
+                        f"Document text length: {total_text_length} chars. "
+                        f"This document will not be searchable."
+                    )
+                elif avg_chunk_size < 50:  # Very small chunks
+                    logger.warning(
+                        f"Document {path.name} produced {len(doc_chunks)} chunks with average size "
+                        f"{avg_chunk_size:.0f} chars. This may indicate sparse or empty content."
+                    )
+            
             chunks.extend(doc_chunks)
 
         # Early return if no chunks were produced

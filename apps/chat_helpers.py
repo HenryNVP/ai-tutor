@@ -33,6 +33,9 @@ def is_question_about_uploaded_docs(message: str) -> bool:
 		"the two files",
 		"this document",
 		"this file",
+		"the document",  # Added: "summarize the document"
+		"the file",  # Added: "summarize the file"
+		"the pdf",  # Added: "summarize the pdf"
 	]
 	message_lower = message.lower()
 	return any(keyword in message_lower for keyword in upload_keywords)

@@ -175,6 +175,21 @@ class Retriever:
             "source_filter": query.source_filter,
         }
         
+        # CRITICAL FIX: When source_filter is provided (uploaded documents),
+        # ALWAYS search all domains to find the document regardless of classification.
+        # This ensures uploaded documents are found even if they're in domain-specific
+        # collections (e.g., ai_tutor_cs) that wouldn't be searched by default.
+        if query.source_filter:
+            # Check if vector store supports search_all_domains parameter
+            if hasattr(self.vector_store, "search"):
+                import inspect
+                sig = inspect.signature(self.vector_store.search)
+                if "search_all_domains" in sig.parameters:
+                    search_kwargs["search_all_domains"] = True
+                    logger.info(
+                        "[Retriever] Source filter provided, forcing search across all domain collections"
+                    )
+        
         # Add domain filtering if supported (ChromaVectorStore)
         if hasattr(self.vector_store, "search") and query.domain:
             # Check if search method accepts domain_filter parameter
@@ -187,7 +202,8 @@ class Retriever:
         logger.debug(
             f"[Retriever] Search kwargs: top_k={search_kwargs['top_k']}, "
             f"source_filter={search_kwargs.get('source_filter')}, "
-            f"domain_filter={search_kwargs.get('domain_filter')}"
+            f"domain_filter={search_kwargs.get('domain_filter')}, "
+            f"search_all_domains={search_kwargs.get('search_all_domains', False)}"
         )
         
         hits = self.vector_store.search(**search_kwargs)
@@ -195,9 +211,10 @@ class Retriever:
         # Log retrieval statistics for monitoring
         if query.source_filter:
             logger.info(
-                "[Retriever] Retrieved %s hits (filtered to sources: %s).", 
+                "[Retriever] Retrieved %s hits (filtered to sources: %s, searched all domains: %s).", 
                 len(hits), 
-                query.source_filter
+                query.source_filter,
+                search_kwargs.get('search_all_domains', False)
             )
         else:
             logger.info("[Retriever] Retrieved %s hits.", len(hits))

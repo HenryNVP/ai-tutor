@@ -141,13 +141,14 @@ def detect_news_request(message: str) -> bool:
 def apply_deterministic_routing(
     question: str,
     extra_context: Optional[str] = None,
+    source_filter: Optional[List[str]] = None,
 ) -> Optional[RoutingDecision]:
     """Apply explicit routing rules before reaching for the LLM fallback."""
     if detect_quiz_request(question):
         return RoutingDecision(
             target="quiz",
             reason="Detected quiz intent keywords",
-            quiz_topic=extract_quiz_topic(question),
+            quiz_topic=extract_quiz_topic(question, extra_context=extra_context, source_filter=source_filter),
             quiz_count=extract_quiz_num_questions(question),
             confidence=1.0,
         )

@@ -33,7 +33,8 @@ def build_retrieve_local_context_tool(
         Identifier used in log statements so multiple agents can be differentiated.
     """
 
-    _retrieval_cache: dict[str, str] = {}
+    # REFACTOR: Removed module-level cache to eliminate stale data bugs
+    # ChromaDB is fast enough for local demo, simplicity > micro-optimization
 
     def _format_citation(hit: RetrievalHit, index: int) -> str:
         metadata = hit.chunk.metadata
@@ -58,11 +59,7 @@ def build_retrieve_local_context_tool(
             List of filenames or document identifiers to constrain the search to.
         """
 
-        cache_key = f"{question}:{top_k}:{','.join(source_filter or [])}"
-        if cache_key in _retrieval_cache:
-            logger.info("[%s Agent] Returning cached retrieval result for: %s", log_prefix, question)
-            return _retrieval_cache[cache_key]
-
+        # REFACTOR: Removed caching - always fetch fresh results
         logger.info("[%s Agent] Retrieving context (top_k=%s, filter=%s)", log_prefix, top_k, source_filter)
 
         def _run_query(filter_value):
@@ -142,7 +139,7 @@ def build_retrieve_local_context_tool(
                 "filter_applied": bool(source_filter) and not fallback_used,
             }
         )
-        _retrieval_cache[cache_key] = result_json
+        # REFACTOR: No caching - always return fresh results
 
         if not filtered:
             logger.warning(

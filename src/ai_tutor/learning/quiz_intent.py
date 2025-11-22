@@ -46,8 +46,21 @@ def extract_quiz_num_questions(message: str) -> int:
 	return 4
 
 
-def extract_quiz_topic(message: str) -> str:
-	"""Extract quiz topic from message; handle document-based phrasing; fallback to cleaned text."""
+def extract_quiz_topic(
+	message: str,
+	extra_context: Optional[str] = None,
+	source_filter: Optional[List[str]] = None,
+) -> str:
+	"""Extract quiz topic from message; handle document-based phrasing; fallback to cleaned text.
+	
+	Args:
+		message: User's quiz request message
+		extra_context: Optional context containing uploaded document content
+		source_filter: Optional list of filenames from uploaded documents
+		
+	Returns:
+		Extracted topic string, preferring actual document titles over generic "uploaded documents"
+	"""
 	message_lower = message.lower()
 	# If the user references explicit filenames (e.g., lecture_notes.pdf, "Module 3 Summary"),
 	# prefer those signals over generic "uploaded documents".
@@ -62,6 +75,50 @@ def extract_quiz_topic(message: str) -> str:
 	if title_matches:
 		return title_matches[0].strip()
 
+	# Try to extract document titles from extra_context
+	# Format: "[1] Title\n{text}" or "SOURCE_FILTER_HINTS: filename1, filename2"
+	if extra_context:
+		# Extract from SOURCE_FILTER_HINTS if present
+		hints_match = re.search(r"SOURCE_FILTER_HINTS:\s*([^\n\r]+)", extra_context, re.IGNORECASE)
+		if hints_match:
+			hints_str = hints_match.group(1).strip()
+			# Extract first filename (remove extension for cleaner topic)
+			filenames = [f.strip() for f in re.split(r"[,\|]", hints_str)]
+			if filenames:
+				first_file = filenames[0]
+				# Remove extension for cleaner topic name
+				topic = re.sub(r"\.(?:pdf|pptx|ppt|docx|md|txt)$", "", first_file, flags=re.IGNORECASE)
+				if topic and topic.lower() not in ["uploaded documents", "documents", "files"]:
+					return topic
+		
+		# Extract from formatted document content: "[1] Title\n{text}"
+		# Look for patterns like "[1] Document Title\n" or "[1] Title (Doc: ...)\n"
+		title_patterns = [
+			r"\[\d+\]\s+([^\n]+?)(?:\s+\(Doc:|\n)",  # "[1] Title (Doc: ...)" or "[1] Title\n"
+			r"\[\d+\]\s+([^\n]+?)(?:\n|$)",  # Fallback: "[1] Title\n"
+		]
+		for pattern in title_patterns:
+			matches = re.findall(pattern, extra_context)
+			if matches:
+				# Use first non-generic title found
+				for match in matches:
+					title = match.strip()
+					# Skip generic titles
+					if title.lower() not in ["uploaded documents", "documents", "files", "unknown"]:
+						# Clean up any trailing metadata
+						title = re.sub(r"\s*\(Doc:.*?\)", "", title).strip()
+						if title:
+							return title
+	
+	# Use source_filter (filenames) if available
+	if source_filter:
+		for filename in source_filter:
+			if filename:
+				# Remove extension for cleaner topic name
+				topic = re.sub(r"\.(?:pdf|pptx|ppt|docx|md|txt)$", "", filename, flags=re.IGNORECASE)
+				if topic and topic.lower() not in ["uploaded documents", "documents", "files"]:
+					return topic
+
 	# document-based hints
 	doc_patterns = [
 		r"(?:from|using)\s+(?:the|my|these|uploaded)?\s*(?:document|documents|files|pdfs)",
@@ -70,6 +127,7 @@ def extract_quiz_topic(message: str) -> str:
 		r"(?:the|my|these)\s+uploaded\s+(?:document|documents|files|pdfs)",
 	]
 	if any(re.search(p, message_lower) for p in doc_patterns):
+		# Only return generic if we couldn't extract a specific title
 		return "uploaded documents"
 
 	patterns = [

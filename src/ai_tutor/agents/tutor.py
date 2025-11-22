@@ -428,7 +428,14 @@ class TutorAgent:
             decision.source_filter = extract_source_mentions(question)
 
         if decision.target == "quiz":
-            decision.quiz_topic = decision.quiz_topic or self._infer_topic_from_request(question)
+            # Use extract_quiz_topic if topic wasn't set by routing, passing context for better extraction
+            if not decision.quiz_topic:
+                from ai_tutor.learning.quiz_intent import extract_quiz_topic
+                decision.quiz_topic = extract_quiz_topic(
+                    question,
+                    extra_context=extra_context,
+                    source_filter=decision.source_filter or source_hints,
+                )
             decision.quiz_count = decision.quiz_count or self._infer_count_from_request(question)
 
         prompt = self._build_agent_prompt(
@@ -467,11 +474,18 @@ class TutorAgent:
             logger.info(
                 "[TutorAgent] Quiz request detected but missed by routing. Re-routing through quiz agent."
             )
+            # Use extract_quiz_topic with context for better topic extraction
+            from ai_tutor.learning.quiz_intent import extract_quiz_topic
+            fallback_topic = extract_quiz_topic(
+                question,
+                extra_context=extra_context,
+                source_filter=decision.source_filter or source_hints,
+            )
             # Create a proper routing decision for quiz
             quiz_decision = RoutingDecision(
                 target="quiz",
                 reason="Fallback: detected quiz intent keywords",
-                quiz_topic=self._infer_topic_from_request(question),
+                quiz_topic=fallback_topic,
                 quiz_count=self._infer_count_from_request(question),
                 deterministic=False,
                 confidence=0.8,
@@ -611,7 +625,7 @@ class TutorAgent:
         source_hints: Optional[List[str]],
         profile: Optional[LearnerProfile],
     ) -> RoutingDecision:
-        decision = apply_deterministic_routing(question, extra_context)
+        decision = apply_deterministic_routing(question, extra_context=extra_context, source_filter=source_hints)
         if decision:
             return self._apply_document_hints(decision, question, extra_context, source_hints)
         routed = await self._route_with_llm(question, extra_context, profile)

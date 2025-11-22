@@ -73,7 +73,31 @@ def _prepare_uploaded_files(
     if saved_paths:
         ingestion_result = session_client.ingest_files(saved_paths)
 
-    ingested_filenames = [path.name for path in saved_paths]
+    # Extract successfully ingested filenames from ingestion result
+    ingested_filenames = []
+    if ingestion_result:
+        # Get list of successfully ingested document titles/filenames
+        ingested_docs = ingestion_result.get("documents", [])
+        skipped_files = ingestion_result.get("skipped_files", [])
+        
+        # Map document titles back to filenames (titles are usually derived from filenames)
+        # Also include all uploaded files that weren't skipped
+        for path in saved_paths:
+            path_str = str(path)
+            # Check if this file was skipped
+            if path_str not in skipped_files:
+                # File was either successfully ingested or not in skipped list
+                ingested_filenames.append(path.name)
+        
+        # Also track successfully ingested documents by their titles
+        # (in case title differs from filename)
+        if ingested_docs:
+            logger.debug(f"Successfully ingested documents: {ingested_docs}")
+    
+    # Fallback: if no ingestion result, assume all files were ingested
+    if not ingested_filenames and saved_paths:
+        ingested_filenames = [path.name for path in saved_paths]
+    
     return ingested_filenames, ingestion_result
 
 
@@ -643,16 +667,92 @@ def render() -> None:
                 with st.chat_message("assistant"):
                     doc_count = ingestion_result.get("document_count", 0)
                     chunk_count = ingestion_result.get("chunk_count", 0)
-                    st.success(
-                        f"✅ Ingested {doc_count} document(s) into "
-                        f"{chunk_count} chunks! Now answering your question..."
-                    )
+                    skipped_files = ingestion_result.get("skipped_files", [])
+                    
+                    if skipped_files:
+                        st.warning(
+                            f"⚠️ {len(skipped_files)} file(s) were skipped during ingestion:\n"
+                            + "\n".join(f"  - {f}" for f in skipped_files)
+                            + "\n\nThese files may be corrupted, empty, or in an unsupported format."
+                        )
+                    
+                    if doc_count > 0:
+                        st.success(
+                            f"✅ Ingested {doc_count} document(s) into "
+                            f"{chunk_count} chunks! Now answering your question..."
+                        )
+                    elif skipped_files:
+                        st.error(
+                            "❌ No documents were successfully ingested. "
+                            "Please check the file formats and try again."
+                        )
 
+            # CRITICAL FIX: Automatically extract and use uploaded filenames
+            # When user says "summarize the uploaded document", we should use the uploaded filenames
+            # without requiring them to explicitly mention the filename
+            
+            # Check if user is asking about uploaded documents
+            is_about_uploaded_docs = is_question_about_uploaded_docs(prompt)
+            has_uploaded_files = bool(st.session_state.chat_uploaded_filenames)
+            
+            # Extract specific filenames if mentioned in the message
             doc_hints = extract_document_hints(
                 prompt,
                 st.session_state.chat_uploaded_filenames or [],
             )
-            documents_only = bool(doc_hints and is_question_about_uploaded_docs(prompt))
+            
+            # Set documents_only if user is asking about uploaded docs AND there are uploaded files
+            documents_only = is_about_uploaded_docs and has_uploaded_files
+            
+            # CRITICAL FIX: Automatically use uploaded filenames as file_ids when:
+            # 1. User is asking about uploaded documents (documents_only=True)
+            # 2. OR if doc_hints were extracted (user mentioned specific files)
+            # This ensures "summarize the uploaded document" works without requiring explicit filename
+            file_ids_to_use = None
+            if documents_only or doc_hints:
+                if doc_hints:
+                    # User mentioned specific files, use those
+                    file_ids_to_use = doc_hints
+                elif st.session_state.chat_uploaded_filenames:
+                    # User is asking about uploaded docs but didn't specify which file
+                    # Use all uploaded filenames automatically
+                    file_ids_to_use = st.session_state.chat_uploaded_filenames
+                    logger.info(
+                        "[UI] User asked about uploaded documents but didn't specify filename. "
+                        "Automatically using all uploaded files as file_ids: %s",
+                        file_ids_to_use
+                    )
+            
+            # Validate that requested files were actually ingested
+            if doc_hints and ingestion_result:
+                skipped_files = ingestion_result.get("skipped_files", [])
+                ingested_docs = ingestion_result.get("documents", [])
+                
+                # Check if any requested files were skipped
+                missing_files = []
+                for hint in doc_hints:
+                    # Check if file was skipped (by full path or filename)
+                    hint_skipped = any(
+                        hint in skipped or Path(skipped).name == hint 
+                        for skipped in skipped_files
+                    )
+                    # Also check if it's in the ingested documents list
+                    hint_ingested = any(
+                        hint.lower() in doc.lower() or Path(hint).stem.lower() in doc.lower()
+                        for doc in ingested_docs
+                    )
+                    
+                    if hint_skipped or (ingested_docs and not hint_ingested):
+                        missing_files.append(hint)
+                
+                if missing_files:
+                    with st.chat_message("assistant"):
+                        st.warning(
+                            f"⚠️ The following file(s) were not successfully ingested and cannot be accessed:\n"
+                            + "\n".join(f"  - {f}" for f in missing_files)
+                            + "\n\nThese files may have been skipped due to errors, empty content, or unsupported format. "
+                            "Please check the ingestion results above."
+                        )
             
             # Check if this is a visualization request
             is_viz_request = is_visualization_request(prompt) and st.session_state.csv_filename
@@ -683,6 +783,7 @@ def render() -> None:
                             content=prompt,
                             quiz_topic=quiz_topic,
                             quiz_count=quiz_count,
+                            file_ids=file_ids_to_use,  # CRITICAL FIX: Pass uploaded filenames automatically
                             source_hints=doc_hints or None,
                             documents_only=documents_only,
                         )

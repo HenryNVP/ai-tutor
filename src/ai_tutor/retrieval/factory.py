@@ -38,7 +38,9 @@ def create_vector_store(path: Path) -> VectorStore:
     if store_type == "chroma":
         try:
             from ai_tutor.retrieval.chroma_store import ChromaVectorStore
-            return ChromaVectorStore.from_path(path)
+            # REFACTOR: Use single collection (ai_tutor_master) instead of domain-based collections
+            # This simplifies retrieval and eliminates routing errors
+            return ChromaVectorStore.from_path(path, use_domain_collections=False, collection_name="ai_tutor_master")
         except ImportError as e:
             logger.error(
                 "ChromaDB is required but not installed. "

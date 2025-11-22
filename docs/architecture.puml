@@ -21,8 +21,10 @@ node "TutorSystem" as TutorSystem {
   component "Orchestrator Agent\n(tutor_orchestrator)" as Orchestrator
   component "QA Agent\n(qa_agent)" as QA
   component "Web Agent\n(web_agent)" as Web
-  component "Visualization Agent\n(viz_agent)" as VizAgent
+  component "Quiz Agent\n(quiz_agent)" as QuizAgent
+  component "Note Agent\n(note_agent)" as NoteAgent
   component "Ingestion Agent\n(ingestion_agent)" as IngestionAgent
+  component "Routing Agent\n(routing_agent)" as RoutingAgent
   component "Retriever" as Retriever
   component "EmbeddingClient" as EmbeddingClient
   component "VectorStore\n(with source filtering)" as VectorStore
@@ -39,7 +41,6 @@ database "Chunks Index\n(data/processed/chunks.jsonl)" as ChunkFS
 database "Learner Profiles\n(data/processed/profiles/*.json)" as ProfileFS
 database "Session History\n(data/processed/sessions.sqlite)" as SessionFS
 folder "Raw Documents\n(data/raw)" as RawDocs
-folder "CSV Uploads\n(data/uploads)" as CSVUploads
 cloud "OpenAI API\n(gpt-4o-mini)" as OpenAI
 cloud "Embedding Provider\n(sentence-transformers)" as EmbeddingProvider
 
@@ -56,7 +57,6 @@ PythonAPI --> TutorService : programmatic calls
 TutorService --> TutorSystem : orchestrated operations
 
 UI --> Ingestion : Upload PDFs
-UI --> VizAgent : Upload CSV
 
 Ingestion --> Parsers : parse PDFs/Markdown
 Parsers --> RawDocs : read documents
@@ -68,26 +68,28 @@ VectorStore --> VectorFS : persist .npy + metadata
 Ingestion --> ChunkStore : save chunks
 ChunkStore --> ChunkFS : persist .jsonl
 
+Orchestrator --> RoutingAgent : LLM fallback routing\n(when deterministic fails)
 Orchestrator --> QA : STEM questions
 Orchestrator --> Web : current events/non-STEM
+Orchestrator --> QuizAgent : quiz requests
+Orchestrator --> NoteAgent : note/summary requests
 Orchestrator --> IngestionAgent : file uploads
-Orchestrator --> QuizService : generate_quiz tool
-Orchestrator --> VizAgent : visualization requests
-Orchestrator --> SessionFS : maintain context
+Orchestrator --> SessionFS : maintain context\n(daily rotation + turn pruning)
+TutorService --> SessionFS : session event processing
 
 QA --> Retriever : retrieve_local_context
 Retriever --> EmbeddingClient : embed query
 Retriever --> VectorStore : cosine search\n+ source filter
 
+QuizAgent --> QuizService : generate_quiz tool call
 QuizService --> Retriever : find relevant content\n(with source filtering)
 QuizService --> OpenAI : generate questions\n(dynamic max_tokens)
 QuizService --> ProgressTracker : update profiles
 ProgressTracker --> ProfileFS : save learner data
 ProgressTracker --> Personalizer : track mastery
 
-VizAgent --> CSVUploads : read CSV files
-VizAgent --> OpenAI : generate plot code
-VizAgent --> VizAgent : execute code safely
+NoteAgent --> Retriever : retrieve document content
+NoteAgent --> OpenAI : generate summaries/notes
 
 Orchestrator --> OpenAI : stream responses
 QA --> OpenAI : generate cited answers
@@ -95,14 +97,20 @@ Web --> OpenAI : synthesize web results
 
 note right of Orchestrator
   Agent-First Architecture:
+  • Two-tier routing: deterministic + LLM fallback
   • Routes via natural language understanding
   • Extracts parameters from user messages
   • Calls specialized tools/agents
-  • NEVER answers quiz/viz requests with text
+  • Shared AgentState for inter-agent communication
+  • NEVER answers quiz/note requests with text
   • Supports "create 20 quizzes from documents"
-  • Supports "plot revenue by month"
+  • Supports "create study notes"
   
-  Daily session rotation prevents token overflow
+  Session Management:
+  • Daily rotation: ai_tutor_{learner_id}_{YYYYMMDD}_{batch}
+  • Turn-based pruning (last 3 turns kept)
+  • Prevents token overflow and prompt poisoning
+  • SQLite persistence + in-memory cache
 end note
 
 note bottom of TutorService
@@ -110,6 +118,9 @@ note bottom of TutorService
   • Caches MCP connections (Chroma retrieval + Filesystem workspace) & tool lists
   • Reused by Streamlit, FastAPI, CLI, and Python API
   • Handles retrieval, quizzes, ingestion, and errors
+  • Session event processing (/sessions/{id}/events)
+  • Source-filtered document retrieval
+  • Context formatting and citation generation
 end note
 
 note right of QuizService
@@ -127,35 +138,42 @@ note right of QuizService
   • <40%: +struggle, easier difficulty
 end note
 
-note right of VizAgent
-  Visualization Agent:
-  • Inspects CSV dataset structure
-  • LLM generates matplotlib/seaborn code
-  • Safe execution (restricted environment)
-  • Returns base64-encoded PNG
-  • Supports: line, bar, scatter, histogram,
-    pie, heatmap, box plots, etc.
-  
-  Performance: ~3-5 seconds per plot
+note right of NoteAgent
+  Note Agent:
+  • Document summarization
+  • Study note generation
+  • Text file creation
+  • Source-filtered retrieval
+  • Saves notes to filesystem
+end note
+
+note right of QuizAgent
+  Quiz Agent:
+  • Calls generate_quiz tool
+  • Uses QuizService for generation
+  • Extracts topic and count from context
+  • Supports source filtering
+  • Stores quiz in AgentState
 end note
 
 note left of VectorStore
-  Source Filtering:
-  • Can search ONLY specific files
-  • 320x faster for uploaded docs
-  • Pre-filters by filename before similarity
+  ChromaDB with Domain Collections:
+  • Separate collections per domain (math, physics, cs, etc.)
+  • Collection name: ai_tutor_{domain}
+  • Source filtering: 320x faster for uploaded docs
+  • Pre-filters by filename before similarity search
   • Guarantees relevance to user uploads
-  
-  Semantic search with cosine similarity
-  Optional source_filter parameter
+  • Cosine similarity search
+  • Persistent SQLite backend
 end note
 
 note bottom of UI
   Chat & Learn Tab:
   • Document upload (PDF/TXT/MD)
-  • CSV upload for visualization
   • Interactive Q&A + quizzes
+  • Study notes generation
   • Generated Files Manager\n    - Rename / delete / per-file download\n    - ZIP export for all artifacts\n    - Syncs quiz markdown edits
+  • Visualization (standalone agent)
   
   Corpus Management Tab:
   • Bulk ingestion & indexing

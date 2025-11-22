@@ -41,6 +41,7 @@ class ChunkMetadata(BaseModel):
     title: str
     page: Optional[str] = None
     section: Optional[str] = None
+    chunk_index: Optional[int] = None  # REFACTOR: Added for sequential retrieval
     domain: str = "general"  # Deprecated: use primary_domain instead
     primary_domain: str = "general"
     secondary_domains: List[str] = Field(default_factory=list)

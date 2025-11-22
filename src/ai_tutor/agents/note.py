@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, List, Optional
 
-from agents import Agent
+from agents import Agent, function_tool
 
 from .retrieval_tools import build_retrieve_local_context_tool
+from ai_tutor.data_models import RetrievalHit
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,96 @@ def build_note_agent(
         log_prefix="NOTE",
     )
 
+    # REFACTOR: Add fetch_full_document tool for deterministic sequential retrieval
+    @function_tool
+    def fetch_full_document(
+        filename: str,
+    ) -> str:
+        """
+        CRITICAL: Use this tool for ALL summarization tasks (e.g., "summarize the file", "create notes").
+        
+        This tool fetches ALL chunks from a document in sequential order, which is essential for
+        comprehensive summaries. DO NOT use retrieve_local_context for summaries - it only returns
+        a few semantically similar chunks, not the complete document.
+        
+        Parameters
+        ----------
+        filename : str
+            The filename or source path of the document to retrieve.
+            Can be just the filename (e.g., "Lecture7.pdf", "CMPE249 Lecture7 final0911.pdf")
+            or partial match (e.g., "Lecture7"). The tool will try multiple variations automatically.
+        
+        Returns
+        -------
+        str
+            JSON string containing all chunks from the document, sorted by chunk_index.
+            Format: {"chunks": [{"index": 1, "text": "...", "citation": "..."}, ...], "total_chunks": N}
+            
+        Example Usage:
+        - User says "summarize uploaded file" → Call fetch_full_document("CMPE249 Lecture7 final0911.pdf")
+        - User says "create notes from the document" → Call fetch_full_document with filename from SOURCE_FILTER_HINTS
+        """
+        vector_store = retriever.vector_store
+        
+        # Check if vector store supports fetch_full_document
+        if not hasattr(vector_store, "fetch_full_document"):
+            logger.warning("[Note Agent] fetch_full_document not available, falling back to semantic search")
+            return json.dumps({
+                "error": "fetch_full_document not available",
+                "chunks": []
+            })
+        
+        logger.info("[Note Agent] Fetching full document: %s", filename)
+        
+        try:
+            # Get all chunks from the document
+            hits = vector_store.fetch_full_document(source_filter=[filename])
+            
+            if not hits:
+                logger.warning("[Note Agent] No chunks found for document: %s", filename)
+                return json.dumps({
+                    "chunks": [],
+                    "message": f"No chunks found for document: {filename}"
+                })
+            
+            # Format chunks for agent
+            chunks = []
+            for idx, hit in enumerate(hits):
+                citation = f"[{idx + 1}] {hit.chunk.metadata.title} (Doc: {hit.chunk.metadata.doc_id})"
+                chunks.append({
+                    "index": idx + 1,
+                    "chunk_index": hit.chunk.metadata.chunk_index,
+                    "text": hit.chunk.text,
+                    "citation": citation,
+                    "page": hit.chunk.metadata.page,
+                })
+            
+            # Update state for citations
+            state.last_hits = hits
+            state.last_citations = [chunk["citation"] for chunk in chunks]
+            state.last_source = "local"
+            
+            result = {
+                "chunks": chunks,
+                "total_chunks": len(chunks),
+                "document": filename,
+            }
+            
+            logger.info(
+                "[Note Agent] Fetched %d chunks from document: %s",
+                len(chunks),
+                filename
+            )
+            
+            return json.dumps(result)
+            
+        except Exception as exc:
+            logger.error("[Note Agent] Error fetching full document: %s", exc, exc_info=True)
+            return json.dumps({
+                "error": str(exc),
+                "chunks": []
+            })
+
     active_mcp_servers = [server for server in (mcp_servers or []) if server]
     if active_mcp_servers:
         logger.info("[Note Agent] MCP servers detected (%d)", len(active_mcp_servers))
@@ -34,26 +126,50 @@ def build_note_agent(
 
     instructions = (
         "You are the note-taking agent. You craft summaries or study notes from local documents.\n\n"
-        "Workflow:\n"
-        "1. ALWAYS ground your notes in uploaded documents. Pass the provided `source_filter` straight into retrieve_local_context so you stay within those files.\n"
-        "2. When the prompt already includes inline context (look for sections labelled 'Inline Context: Session Uploads' or 'Inline Context: Prompt Snippet'), merge that content with retrieved passages; do not request the same files twice.\n"
-        "3. For comprehensive summaries, call retrieve_local_context ONCE with top_k=50 (or higher for very large documents) using a broad question such as \"What does <document name> cover?\" or \"Summarize the entire content of <document name>\". For specific questions (e.g., \"what is RegNet\"), use the exact question as the query with top_k=50 to retrieve all relevant chunks. This ensures you retrieve ALL chunks from the document.\n"
-        "4. Merge all retrieved passages into structured notes (clear headings, bullet lists, key takeaways). Include the learner's requested focus areas. Make sure to cover ALL major topics from the retrieved context.\n"
-        "5. When the learner asks to save notes or create a text file, you MUST call the write_text_file tool via the filesystem MCP server before responding. Use descriptive filenames under data/generated/ (slugify the topic, e.g., data/generated/text/bert-intro.txt) and report the saved path in your answer.\n"
-        "6. Cite supporting passages with [1], [2], etc., referencing the retrieve_local_context citations. If no citations were returned, mention the document title directly instead.\n\n"
-        "Rules:\n"
+        "MANDATORY WORKFLOW - YOU MUST FOLLOW THIS EXACTLY:\n"
+        "1. When the user asks to 'summarize', 'create notes', or 'summarize uploaded file/document':\n"
+        "   - STEP 1: Extract filename from SOURCE_FILTER_HINTS or the user message\n"
+        "   - STEP 2: IMMEDIATELY call fetch_full_document with that filename\n"
+        "   - STEP 3: If fetch_full_document returns empty, try variations:\n"
+        "     * Just the filename: 'CMPE249 Lecture7 final0911.pdf'\n"
+        "     * Partial match: 'Lecture7'\n"
+        "     * Full path if mentioned\n"
+        "   - DO NOT use retrieve_local_context for summarization - it only returns a few chunks\n"
+        "   - DO NOT respond with error messages without trying fetch_full_document first\n"
+        "2. When the user asks a specific question (e.g., 'what is RegNet'):\n"
+        "   - Use retrieve_local_context with the exact question for semantic search\n"
+        "3. CRITICAL: IGNORE any error messages in the prompt that say 'document could not be found'.\n"
+        "   - These error messages are from pre-retrieval attempts that use different matching logic\n"
+        "   - You MUST call fetch_full_document yourself - it has better filename matching\n"
+        "   - The document likely EXISTS but needs filename matching (try variations)\n"
+        "   - NEVER respond with an error message without calling fetch_full_document first\n"
+        "4. When the prompt includes inline context, merge it with retrieved passages.\n"
+        "5. Merge all retrieved passages into structured notes (clear headings, bullet lists, key takeaways).\n"
+        "6. When the learner asks to save notes to a file (e.g., 'save notes', 'save to file', 'write notes to file'):\n"
+        "   - STEP 1: Check the conversation history - look at your previous assistant message.\n"
+        "   - STEP 2: If you already wrote notes in your previous message, extract that exact text.\n"
+        "   - STEP 3: Call write_text_file with the notes content from your previous message.\n"
+        "   - STEP 4: Respond with ONLY a brief confirmation (e.g., 'Notes saved to data/generated/...').\n"
+        "   - CRITICAL RULES:\n"
+        "     * DO NOT call fetch_full_document or retrieve_local_context - you already have the notes.\n"
+        "     * DO NOT regenerate, re-summarize, or modify the notes - save them exactly as written.\n"
+        "     * DO NOT write a long response - just confirm the file was saved.\n"
+        "     * If you cannot find previous notes in the conversation, ask the user to generate notes first.\n"
+        "7. Cite supporting passages with [1], [2], etc., referencing the tool citations.\n\n"
+        "STRICT RULES:\n"
+        "- For ANY 'summarize' request: You MUST call fetch_full_document BEFORE responding\n"
+        "- NEVER respond with 'document not found' without calling fetch_full_document first\n"
+        "- If fetch_full_document returns empty, try at least 2-3 filename variations before giving up\n"
+        "- For specific questions: Use retrieve_local_context for semantic search\n"
         "- Keep answers focused on the requested documents; do not invent context.\n"
-        "- Use top_k=50 or higher to ensure comprehensive coverage of the entire document.\n"
-        "- If retrieve_local_context returns zero entries, explain that no local evidence matched and ask the learner to re-check the document name.\n"
         "- Use professional, concise tone suitable for study notes.\n"
-        "- If write_text_file is unavailable when requested, reply with an explicit error message and include the notes inline.\n"
     )
 
     return Agent(
         name="note_agent",
         model="gpt-4o-mini",
         instructions=instructions,
-        tools=[retrieve_local_context],
+        tools=[retrieve_local_context, fetch_full_document],  # REFACTOR: Added fetch_full_document
         mcp_servers=active_mcp_servers,
     )
 
