@@ -9,7 +9,6 @@ actor User
 package "Entry Points" {
   component "Streamlit UI\n(apps/ui.py)" as UI
   component "FastAPI Backend\n(apps/api.py)" as API
-  component "CLI (`ai-tutor`)" as CLI
   component "Python API" as PythonAPI
 }
 
@@ -46,12 +45,10 @@ cloud "Embedding Provider\n(sentence-transformers)" as EmbeddingProvider
 
 User --> UI : Chat interface
 User --> API : REST requests
-User --> CLI
 User --> PythonAPI
 
 UI --> TutorService : Natural language\n"create 20 quizzes"\n"plot revenue by month"
 API --> TutorService : JSON payloads\n/answer, /quiz, /ingest
-CLI --> TutorService : `ingest`, `ask`
 PythonAPI --> TutorService : programmatic calls
 
 TutorService --> TutorSystem : orchestrated operations
@@ -116,7 +113,7 @@ end note
 note bottom of TutorService
   Shared Backend Layer:
   • Caches MCP connections (Chroma retrieval + Filesystem workspace) & tool lists
-  • Reused by Streamlit, FastAPI, CLI, and Python API
+  • Reused by Streamlit, FastAPI, and Python API
   • Handles retrieval, quizzes, ingestion, and errors
   • Session event processing (/sessions/{id}/events)
   • Source-filtered document retrieval

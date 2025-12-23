@@ -52,8 +52,9 @@ dev = [
   "mypy>=1.8.0"
 ]
 
-[project.scripts]
-ai-tutor = "ai_tutor.cli:app"
+# CLI removed - using Streamlit UI for demo
+# [project.scripts]
+# ai-tutor = "ai_tutor.cli:app"
 
 [tool.black]
 line-length = 88

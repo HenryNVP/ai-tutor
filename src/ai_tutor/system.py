@@ -37,8 +37,8 @@ class TutorSystem:
     
     This class provides a high-level API for the entire AI tutoring system,
     wiring together ingestion, retrieval, generation, personalization, and
-    assessment components. It serves as the primary entry point for both
-    CLI and web interfaces.
+    assessment components. It serves as the primary entry point for web
+    interfaces (Streamlit UI and FastAPI backend).
     
     The system follows a configuration-driven design where all parameters
     (model names, chunking settings, retrieval thresholds) are defined in

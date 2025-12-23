@@ -11,7 +11,6 @@ The AI Tutor backend is a multi-layered system providing intelligent STEM tutori
 │   Entry Points (Presentation)        │
 │   - Streamlit UI                     │
 │   - FastAPI REST API                 │
-│   - CLI                              │
 │   - Python API                       │
 └──────────────┬───────────────────────┘
                │
@@ -224,11 +223,11 @@ Example: `ai_tutor_student123_20251023_0`
 # API
 POST /sessions/{learner_id}/reset
 
-# CLI
-python scripts/clear_sessions.py student123
-
 # Python
 system.clear_conversation_history(learner_id)
+
+# Utility Script
+python scripts/clear_sessions.py student123
 ```
 
 ## Component Communication
