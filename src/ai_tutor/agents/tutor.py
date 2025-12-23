@@ -139,10 +139,9 @@ class TutorAgent:
     """
     Multi-agent tutoring coordinator using the OpenAI Agents SDK.
     
-    This class implements an agent-first architecture with a thin router that
-    applies deterministic rules (document references, quizzes, ingestion, news)
-    before delegating to specialist agents. When heuristics are inconclusive,
-    a lightweight routing agent produces structured JSON to guide delegation.
+    This class implements an agent-first architecture with simplified keyword-based
+    routing that applies deterministic rules (document references, quizzes, ingestion, news)
+    before delegating to specialist agents. Defaults to QA agent if no specific route detected.
     
     Supported capabilities:
     - STEM Q&A with retrieval-augmented generation (qa_agent)
@@ -151,9 +150,8 @@ class TutorAgent:
     - Summaries and note files (note_agent)
     - Quiz generation/evaluation (quiz_agent + QuizService)
     
-    Conversation context is maintained via SQLite sessions that rotate
-    automatically to prevent prompt bloat. Specialist results are stored in
-    AgentState and formatted into TutorResponse objects.
+    Conversation context is maintained via SQLite sessions (one per learner).
+    Specialist results are stored in AgentState and formatted into TutorResponse objects.
     
     Attributes
     ----------
@@ -176,7 +174,6 @@ class TutorAgent:
     """
 
     MIN_CONFIDENCE = 0.2  # Minimum retrieval score for accepting local results
-    MIN_ROUTING_CONFIDENCE = 0.45  # Below this, fall back to QA for safety
 
     def __init__(
         self,
@@ -257,7 +254,7 @@ class TutorAgent:
         - note_agent: summaries and note files
         - web_agent: current events via web search
         - quiz_agent: quiz generation via QuizService
-        - routing_agent: LLM fallback router that emits structured JSON
+        - routing: Simplified keyword-based routing (LLM routing removed)
         """
         logger.debug("[TutorAgent] Building specialist agents with persistent MCP context")
         self.ingestion_agent = build_ingestion_agent(self.ingest_fn)
@@ -291,25 +288,10 @@ class TutorAgent:
             logger.info("[TutorAgent] Agents built with MCP tool access (%d server(s))", len(self.mcp_servers))
         else:
             logger.info("[TutorAgent] Agents built without MCP servers (direct vector store access)")
-        routing_instructions = (
-            "You are the routing agent. You must decide which specialist agent should handle a learner request.\n"
-            "- Valid routes: qa, note, quiz, web, ingestion, visualization.\n"
-            "- Respond ONLY with compact JSON: "
-            '{"route": "...", "reason": "...", "source_mentions": [], "quiz_topic": null, "quiz_count": null, "confidence": 0-1}.\n'
-            "- Prefer deterministic rules: quizzes/tests -> quiz, summaries/notes/text-file creation/saving -> note, news/current events -> web, ingestion/upload/indexing of learner documents -> ingestion, "
-            "plot/chart/graph/visualize requests -> visualization, otherwise default to qa.\n"
-            "- Preserve exact document titles or filenames in source_mentions; never use placeholders like 'uploaded documents'.\n"
-            "- If unsure, pick the most likely route but lower confidence."
-        )
-        self.routing_agent = Agent(
-            name="routing_agent",
-            model="gpt-4o-mini",
-            instructions=routing_instructions,
-        )
-        self._routing_session = SQLiteSession(
-            "ai_tutor_router",
-            db_path=str(self.session_db_path),
-        )
+        # Routing agent removed - using keyword-based routing only for simplicity
+        # LLM-based routing fallback removed to reduce latency and complexity
+        self.routing_agent = None
+        self._routing_session = None
 
 
     def evaluate_quiz(
@@ -634,148 +616,30 @@ class TutorAgent:
         source_hints: Optional[List[str]],
         profile: Optional[LearnerProfile],
     ) -> RoutingDecision:
+        """
+        Simplified routing: keyword-based only, defaults to QA if no match.
+        
+        Removed LLM-based routing fallback for simplicity and faster responses.
+        """
         decision = apply_deterministic_routing(question, extra_context=extra_context, source_filter=source_hints)
+        
+        # If deterministic routing found a match, use it
         if decision:
             return self._apply_document_hints(decision, question, extra_context, source_hints)
-        routed = await self._route_with_llm(question, extra_context, profile)
-        if (
-            not routed.deterministic
-            and routed.confidence is not None
-            and routed.confidence < self.MIN_ROUTING_CONFIDENCE
-        ):
-            logger.warning(
-                "[TutorAgent] Low-confidence routing decision (route=%s, confidence=%.2f). Falling back to QA.",
-                routed.target,
-                routed.confidence,
-            )
-            fallback_decision = RoutingDecision(
-                target="qa",
-                reason=f"Low routing confidence for '{routed.target}', defaulting to QA",
-                deterministic=False,
-                confidence=routed.confidence,
-                source_filter=routed.source_filter,
-            )
-            return self._apply_document_hints(fallback_decision, question, extra_context, source_hints)
-        return self._apply_document_hints(routed, question, extra_context, source_hints)
-
-    async def _route_with_llm(
-        self,
-        question: str,
-        extra_context: Optional[str],
-        profile: Optional[LearnerProfile],
-    ) -> RoutingDecision:
-        if not self.routing_agent:
-            return RoutingDecision(
-                target="qa",
-                reason="Routing agent unavailable; defaulting to QA",
-                deterministic=False,
-                confidence=0.0,
-            )
-
-        routing_prompt = self._build_routing_prompt(
-            question=question,
-            extra_context=extra_context,
-            profile=profile,
+        
+        # Default to QA agent if no specific route detected
+        logger.debug("[TutorAgent] No specific route detected, defaulting to QA")
+        default_decision = RoutingDecision(
+            target="qa",
+            reason="No specific intent detected, defaulting to Q&A",
+            deterministic=True,
+            confidence=1.0,
+            source_filter=extract_source_mentions(question) if source_hints is None else source_hints,
         )
-        session = self._get_routing_session()
+        return self._apply_document_hints(default_decision, question, extra_context, source_hints)
 
-        try:
-            result = await Runner.run(self.routing_agent, input=routing_prompt, session=session)
-        except Exception as exc:
-            logger.error("[TutorAgent] Routing agent failed: %s", exc, exc_info=True)
-            return RoutingDecision(
-                target="qa",
-                reason="Routing agent failure; default to QA",
-                deterministic=False,
-                confidence=0.0,
-            )
-
-        payload_text = result.final_output.strip() if result and result.final_output else ""
-        decision = self._parse_routing_response(payload_text)
-        if decision is None:
-            logger.warning("[TutorAgent] Failed to parse routing response: %s", payload_text)
-            return RoutingDecision(
-                target="qa",
-                reason="Routing response unreadable; default to QA",
-                deterministic=False,
-                confidence=0.0,
-            )
-        decision.deterministic = False
-        return decision
-
-    def _build_routing_prompt(
-        self,
-        question: str,
-        extra_context: Optional[str],
-        profile: Optional[LearnerProfile],
-    ) -> str:
-        sections = [
-            "Decide the best agent route for the learner request. Remember to output compact JSON.",
-            "",
-            "Learner request:",
-            question,
-            "",
-        ]
-        if profile:
-            sections.append("Learner profile summary:")
-            sections.append(self._render_profile_summary(profile))
-            sections.append("")
-        if extra_context:
-            sections.append("Session uploads summary:")
-            sections.append(extra_context[:1000])
-            sections.append("")
-        sections.append("Return JSON with keys route, reason, source_mentions, quiz_topic, quiz_count, confidence.")
-        return "\n".join(sections)
-
-    def _parse_routing_response(self, text: str) -> Optional[RoutingDecision]:
-        if not text:
-            return None
-        try:
-            start = text.index("{")
-            end = text.rindex("}") + 1
-            payload = json.loads(text[start:end])
-        except (ValueError, json.JSONDecodeError):
-            logger.debug("[TutorAgent] Unable to parse routing JSON: %s", text)
-            return None
-
-        route = str(payload.get("route", "qa")).strip().lower()
-        if route not in {"qa", "note", "quiz", "web", "ingestion"}:
-            route = "qa"
-
-        reason = str(payload.get("reason") or "LLM routing fallback")
-        source_mentions_raw = payload.get("source_mentions") or []
-        source_mentions = [
-            str(item).strip()
-            for item in source_mentions_raw
-            if isinstance(item, str) and item.strip()
-        ] or None
-
-        quiz_topic = payload.get("quiz_topic")
-        if isinstance(quiz_topic, str):
-            quiz_topic = quiz_topic.strip()
-        else:
-            quiz_topic = None
-        quiz_count = payload.get("quiz_count")
-        try:
-            quiz_count_int = int(quiz_count) if quiz_count is not None else None
-        except (TypeError, ValueError):
-            quiz_count_int = None
-
-        confidence = payload.get("confidence")
-        try:
-            confidence_value = float(confidence)
-        except (TypeError, ValueError):
-            confidence_value = 0.5
-
-        return RoutingDecision(
-            target=route,  # type: ignore[arg-type]
-            reason=reason,
-            source_filter=source_mentions,
-            quiz_topic=quiz_topic or None,
-            quiz_count=quiz_count_int,
-            deterministic=False,
-            confidence=confidence_value,
-        )
+    # LLM-based routing removed - using keyword-based routing only for simplicity
+    # Methods _route_with_llm, _build_routing_prompt, _parse_routing_response removed
 
     def _apply_document_hints(
         self,
@@ -1109,13 +973,7 @@ class TutorAgent:
         normalized = answer.strip().lower()
         return normalized.startswith("handoff to web_agent") or normalized.startswith("handoff to web agent")
 
-    def _get_routing_session(self) -> SQLiteSession:
-        if self._routing_session is None:
-            self._routing_session = SQLiteSession(
-                "ai_tutor_router",
-                db_path=str(self.session_db_path),
-            )
-        return self._routing_session
+    # Routing session removed - no longer needed with simplified routing
 
     def _get_session(self, learner_id: str) -> SQLiteSession:
         """

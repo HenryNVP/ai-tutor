@@ -47,3 +47,6 @@ course_defaults:
     - "math"
     - "physics"
     - "cs"
+
+# Demo Mode Configuration
+demo_mode: true  # Enable demo mode: disables personalization, simplifies features for demo showcase

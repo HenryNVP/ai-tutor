@@ -132,11 +132,11 @@ class QuizService:
         self,
         retriever: Retriever,
         llm_client: LLMClient,
-        progress_tracker: ProgressTracker,
+        progress_tracker: ProgressTracker | None,
     ):
         self.retriever = retriever
         self.llm = llm_client
-        self.progress_tracker = progress_tracker
+        self.progress_tracker = progress_tracker  # None in demo mode
 
     def generate_quiz(
         self,
@@ -336,6 +336,10 @@ class QuizService:
         evaluation: QuizEvaluation,
     ) -> None:
         """Update learner profile based on quiz evaluation results."""
+        # Skip profile updates if progress_tracker is None (demo mode)
+        if self.progress_tracker is None or profile is None:
+            return
+        
         domain = quiz.topic.lower()
         
         # Simplified 3-level scoring

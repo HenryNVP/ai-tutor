@@ -92,6 +92,10 @@ class Settings(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     course_defaults: CourseDefaults = Field(default_factory=CourseDefaults)
+    demo_mode: bool = Field(
+        False,
+        description="Enable demo mode: disables personalization, simplifies routing, uses static difficulty/style"
+    )
 
     @validator("paths")
     def ensure_paths_are_dirs(cls, value: PathsConfig) -> PathsConfig:

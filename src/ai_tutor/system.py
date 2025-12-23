@@ -147,9 +147,14 @@ class TutorSystem:
         self.vector_store = create_vector_store(settings.paths.vector_store_dir)
         self.chunk_store = ChunkJsonlStore(settings.paths.chunks_index)
         
-        # Initialize learner tracking and personalization
-        self.progress_tracker = ProgressTracker(settings.paths.profiles_dir)
-        self.personalizer = PersonalizationManager(self.progress_tracker)
+        # Initialize learner tracking and personalization (disabled in demo mode)
+        if settings.demo_mode:
+            logger.info("Demo mode enabled: personalization disabled, using static difficulty/style")
+            self.progress_tracker = None
+            self.personalizer = None
+        else:
+            self.progress_tracker = ProgressTracker(settings.paths.profiles_dir)
+            self.personalizer = PersonalizationManager(self.progress_tracker)
         
         # Initialize LLM client
         self.llm_client = LLMClient(settings.model, api_key=api_key)
@@ -160,7 +165,7 @@ class TutorSystem:
         self.quiz_service = QuizService(
             retriever=quiz_retriever,
             llm_client=self.llm_client,
-            progress_tracker=self.progress_tracker,
+            progress_tracker=self.progress_tracker,  # None in demo mode
         )
 
         # Build document ingestion pipeline
@@ -353,6 +358,29 @@ class TutorSystem:
         - Citations are only included for local answers; web answers use URLs
         
         """
+        # In demo mode, skip personalization and use static values
+        if self.settings.demo_mode:
+            # Use static style and no profile updates
+            style_hint = "stepwise"  # Balanced default for demo
+            profile = None
+            
+            # Delegate to multi-agent orchestrator for answer generation
+            response = self.tutor_agent.answer(
+                learner_id=learner_id,
+                question=question,
+                mode=mode,
+                style_hint=style_hint,
+                profile=profile,
+                extra_context=extra_context,
+                source_hints=source_hints,
+                on_delta=on_delta,
+            )
+            
+            # In demo mode, don't update profiles or add personalization hints
+            response.style = style_hint
+            return response
+        
+        # Production mode: use full personalization
         # Load learner profile (creates new one if doesn't exist)
         profile = self.personalizer.load_profile(learner_id)
         
@@ -406,6 +434,25 @@ class TutorSystem:
         on_delta: Optional[Callable[[str], None]] = None,
     ) -> TutorResponse:
         """Asynchronously answer a learner's question (for use in async contexts)."""
+        # In demo mode, skip personalization and use static values
+        if self.settings.demo_mode:
+            style_hint = "stepwise"  # Balanced default for demo
+            profile = None
+            
+            response = await self.tutor_agent.answer_async(
+                learner_id=learner_id,
+                question=question,
+                mode=mode,
+                style_hint=style_hint,
+                profile=profile,
+                extra_context=extra_context,
+                on_delta=on_delta,
+            )
+            
+            response.style = style_hint
+            return response
+        
+        # Production mode: use full personalization
         # Load learner profile (creates new one if doesn't exist)
         profile = self.personalizer.load_profile(learner_id)
         
@@ -456,14 +503,23 @@ class TutorSystem:
         answers: List[int],
     ) -> QuizEvaluation:
         """Evaluate a learner's quiz submission, returning detailed feedback."""
-        profile = self.personalizer.load_profile(learner_id)
+        # In demo mode, skip profile updates
+        if self.settings.demo_mode:
+            profile = None
+        else:
+            profile = self.personalizer.load_profile(learner_id)
+        
         quiz = quiz_payload if isinstance(quiz_payload, Quiz) else Quiz.model_validate(quiz_payload)
         evaluation = self.tutor_agent.evaluate_quiz(
             quiz=quiz,
             answers=answers,
             profile=profile,
         )
-        self.personalizer.save_profile(profile)
+        
+        # Only save profile in production mode
+        if not self.settings.demo_mode and profile:
+            self.personalizer.save_profile(profile)
+        
         return evaluation
 
     # --- Quiz API (UI-thin wrappers) ---
@@ -493,7 +549,12 @@ class TutorSystem:
         difficulty: Optional[str] = None,
         extra_context: Optional[str] = None,
     ) -> Quiz:
-        profile = self.personalizer.load_profile(learner_id)
+        # In demo mode, skip profile loading
+        if self.settings.demo_mode:
+            profile = None
+        else:
+            profile = self.personalizer.load_profile(learner_id)
+        
         quiz = self.quiz_service.generate_quiz(
             topic=topic,
             profile=profile,
@@ -501,7 +562,7 @@ class TutorSystem:
             difficulty=difficulty,
             extra_context=extra_context,
         )
-        # No immediate profile mutation; evaluation will update mastery
+        # No immediate profile mutation; evaluation will update mastery (only in production mode)
         return quiz
 
     def clear_conversation_history(self, learner_id: str) -> None:
