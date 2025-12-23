@@ -29,11 +29,27 @@ pip install -r requirements.txt
 export OPENAI_API_KEY=your_key_here
 ```
 
+### Demo Mode
+
+The system includes demo mode (enabled by default in `config/default.yaml`) which:
+- ✅ Disables personalization (faster startup, simpler code)
+- ✅ Uses static difficulty/style (consistent experience)
+- ✅ Simplified routing (keyword-based only)
+- ✅ Focuses on core RAG capabilities
+
+**Alternative**: Use `config/demo.yaml` for minimal configuration:
+```bash
+# Use demo config (minimal settings)
+python -c "from ai_tutor.system import TutorSystem; system = TutorSystem.from_config('config/demo.yaml')"
+```
+
 ### Launch the Streamlit App
 
 ```bash
 streamlit run apps/ui.py
 ```
+
+The app uses `config/default.yaml` by default (demo mode enabled).
 
 The app opens at `http://localhost:8501` with two tabs:
 - **💬 Chat & Learn** – Q&A, quizzes, visualizations, generated files manager

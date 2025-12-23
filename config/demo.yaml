@@ -1,0 +1,57 @@
+# AI Tutor - Demo Configuration
+# Minimal configuration for showcasing RAG capabilities (quiz, notes, QA)
+
+project_name: "AI Tutor Demo"
+
+# LLM Configuration (Essential)
+model:
+  name: "gpt-4o-mini"           # Fast and cost-effective for demo
+  provider: "openai"
+  temperature: 0.7              # Slightly higher for more natural responses
+  max_output_tokens: 2048
+  mode: "chat"
+
+# Embedding Model (Essential for RAG)
+embeddings:
+  model: "BAAI/bge-base-en"      # Local embeddings, no API calls
+  provider: "sentence-transformers"
+  batch_size: 256
+  normalize: true
+  dimension: null                # Auto-detect
+
+# Document Chunking (Essential for RAG)
+chunking:
+  chunk_size: 500                # Balanced chunk size
+  chunk_overlap: 80              # Context continuity
+  tokenizer: null                # Auto-detect
+
+# Retrieval (Essential for RAG)
+retrieval:
+  top_k: 5                       # Default results per query
+
+# Data Paths (Essential)
+paths:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  vector_store_dir: "data/vector_store"
+  chunks_index: "data/processed/chunks.jsonl"
+  logs_dir: "logs"
+  profiles_dir: "data/processed/profiles"  # Not used in demo mode, but required by schema
+
+# Logging (Simplified for demo)
+logging:
+  level: INFO                    # Less verbose than DEBUG
+  use_json: false
+
+# Course Defaults (Not used in demo mode, but required by schema)
+course_defaults:
+  weeks: 12
+  lessons_per_week: 3
+  domains:
+    - "math"
+    - "physics"
+    - "cs"
+
+# Demo Mode (Enabled - simplifies features)
+demo_mode: true                  # Disables personalization, uses static defaults
+
