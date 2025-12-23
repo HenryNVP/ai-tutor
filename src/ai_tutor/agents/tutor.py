@@ -25,6 +25,7 @@ from .routing import (
     extract_source_mentions,
     should_use_source_filter,
 )
+from .viz_agent import build_visualization_agent
 from .web import build_web_agent
 
 from ai_tutor.config.schema import RetrievalConfig
@@ -87,6 +88,7 @@ class TutorResponse:
     quiz: Optional[Quiz] = None
     route: str = "qa"
     saved_file_path: Optional[str] = None  # Path to file saved by note agent
+    visualization: Optional[Dict[str, Any]] = None  # Visualization result from visualization agent
 
 
 @dataclass
@@ -118,6 +120,7 @@ class AgentState:
     last_citations: List[str] = field(default_factory=list)
     last_source: Optional[str] = None
     last_quiz: Optional[Quiz] = None
+    last_visualization: Optional[Dict[str, Any]] = None
 
     def reset(self) -> None:
         """
@@ -130,6 +133,7 @@ class AgentState:
         self.last_citations.clear()
         self.last_source = None
         self.last_quiz = None
+        self.last_visualization = None
 
 
 class TutorAgent:
@@ -240,6 +244,7 @@ class TutorAgent:
         self.note_agent: Agent | None = None
         self.web_agent: Agent | None = None
         self.quiz_agent: Agent | None = None
+        self.visualization_agent: Agent | None = None
         self.routing_agent: Agent | None = None
         self._routing_session: SQLiteSession | None = None
 
@@ -282,17 +287,20 @@ class TutorAgent:
             get_source_filter=lambda: self._active_source_filter,
             get_documents_only=lambda: self._documents_only_request,
         )
+        self.visualization_agent = build_visualization_agent(
+            state=self.state,
+        )
         if self.mcp_servers:
             logger.info("[TutorAgent] Agents built with MCP tool access (%d server(s))", len(self.mcp_servers))
         else:
             logger.info("[TutorAgent] Agents built without MCP servers (direct vector store access)")
         routing_instructions = (
             "You are the routing agent. You must decide which specialist agent should handle a learner request.\n"
-            "- Valid routes: qa, note, quiz, web, ingestion.\n"
+            "- Valid routes: qa, note, quiz, web, ingestion, visualization.\n"
             "- Respond ONLY with compact JSON: "
             '{"route": "...", "reason": "...", "source_mentions": [], "quiz_topic": null, "quiz_count": null, "confidence": 0-1}.\n'
             "- Prefer deterministic rules: quizzes/tests -> quiz, summaries/notes/text-file creation/saving -> note, news/current events -> web, ingestion/upload/indexing of learner documents -> ingestion, "
-            "otherwise default to qa.\n"
+            "plot/chart/graph/visualize requests -> visualization, otherwise default to qa.\n"
             "- Preserve exact document titles or filenames in source_mentions; never use placeholders like 'uploaded documents'.\n"
             "- If unsure, pick the most likely route but lower confidence."
         )
@@ -542,6 +550,8 @@ class TutorAgent:
             source = "notes"
         elif decision.target == "ingestion":
             source = "ingestion"
+        elif decision.target == "visualization":
+            source = "visualization"
         else:
             source = self.state.last_source
 
@@ -553,6 +563,9 @@ class TutorAgent:
             if note_suffix not in answer_text:
                 answer_text = f"{answer_text}{note_suffix}"
 
+        # Get visualization result from state if available
+        visualization_result = self.state.last_visualization
+
         return TutorResponse(
             answer=answer_text,
             hits=hits,
@@ -562,6 +575,7 @@ class TutorAgent:
             quiz=quiz_payload,
             route=decision.target,
             saved_file_path=saved_file_path,  # Include saved file path in response
+            visualization=visualization_result,  # Include visualization result
         )
 
     async def _maybe_write_text_file(self, question: str, content: str) -> Optional[str]:
@@ -874,6 +888,12 @@ class TutorAgent:
             self.state.saved_file_path = saved_file_path  # type: ignore
             return answer, None
 
+        if decision.target == "visualization":
+            answer = await self._run_visualization_agent(prompt, session, on_delta)
+            if self.state.last_source is None:
+                self.state.last_source = "visualization"
+            return answer, None
+
         answer = await self._run_domain_agent(
             self.qa_agent,
             prompt,
@@ -1063,6 +1083,35 @@ class TutorAgent:
         except Exception as exc:
             logger.error("[TutorAgent] Quiz agent failed: %s", exc, exc_info=True)
             return f"Quiz generation failed: {exc}"
+
+        text = result.final_output.strip() if result and result.final_output else ""
+        if on_delta and text:
+            for char in text:
+                on_delta(char)
+        
+        return text or "Quiz generated successfully."
+
+    async def _run_visualization_agent(
+        self,
+        prompt: str,
+        session: SQLiteSession,
+        on_delta: Optional[Callable[[str], None]],
+    ) -> str:
+        """Run the visualization agent to create plots from CSV data."""
+        if self.visualization_agent is None:
+            return "Visualization is currently unavailable."
+        try:
+            result = await Runner.run(self.visualization_agent, input=prompt, session=session)
+        except Exception as exc:
+            logger.error("[TutorAgent] Visualization agent failed: %s", exc, exc_info=True)
+            return f"Visualization failed: {exc}"
+
+        text = result.final_output.strip() if result and result.final_output else ""
+        if on_delta and text:
+            for char in text:
+                on_delta(char)
+        
+        return text or "Visualization created successfully."
 
         text = result.final_output.strip() if result and result.final_output else ""
         if on_delta and text:

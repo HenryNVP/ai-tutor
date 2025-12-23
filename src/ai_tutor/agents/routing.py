@@ -10,7 +10,7 @@ from ai_tutor.learning.quiz_intent import (
     extract_quiz_topic,
 )
 
-RouteTarget = Literal["qa", "note", "quiz", "web", "ingestion"]
+RouteTarget = Literal["qa", "note", "quiz", "web", "ingestion", "visualization"]
 
 GENERIC_SOURCE_TOKENS = {
     "uploaded documents",
@@ -138,6 +138,30 @@ def detect_news_request(message: str) -> bool:
     return any(keyword in lowered for keyword in keywords)
 
 
+def detect_visualization_request(message: str) -> bool:
+    """Detect if the user is asking for data visualization."""
+    lowered = message.lower()
+    keywords = [
+        "plot",
+        "chart",
+        "graph",
+        "visualize",
+        "visualization",
+        "histogram",
+        "scatter",
+        "bar chart",
+        "line chart",
+        "pie chart",
+        "heatmap",
+        "box plot",
+        "show me a",
+        "draw",
+        "create a plot",
+        "make a chart",
+    ]
+    return any(keyword in lowered for keyword in keywords)
+
+
 def apply_deterministic_routing(
     question: str,
     extra_context: Optional[str] = None,
@@ -172,6 +196,13 @@ def apply_deterministic_routing(
         return RoutingDecision(
             target="web",
             reason="Detected news/current events intent",
+            confidence=1.0,
+        )
+
+    if detect_visualization_request(question):
+        return RoutingDecision(
+            target="visualization",
+            reason="Detected visualization/plot intent",
             confidence=1.0,
         )
 

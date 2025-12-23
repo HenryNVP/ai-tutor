@@ -762,12 +762,52 @@ def render() -> None:
                 content = str(message.get("content", ""))
                 if role == "assistant":
                     # Check if this is a visualization message
-                    if message.get("image_base64"):
-                        st.markdown(content)
-                        img_data = base64.b64decode(message["image_base64"])
-                        st.image(img_data, use_container_width=True)
+                    has_image = bool(message.get("image_base64"))
+                    is_viz_type = message.get("type") == "visualization"
+                    is_viz_route = message.get("route") == "visualization"
+                    
+                    if has_image or is_viz_type or is_viz_route:
+                        # Display content text
+                        if content:
+                            st.markdown(content)
+                        elif is_viz_type and not has_image:
+                            # Show message even if image is missing
+                            st.info("Visualization was created. Check the Generated Files tab to view the image and code.")
+                        
+                        # Display image if available
+                        if has_image:
+                            try:
+                                img_data = base64.b64decode(message["image_base64"])
+                                st.image(img_data, use_container_width=True)
+                            except Exception as e:
+                                logger.error(f"[UI] Failed to decode/display image: {e}")
+                                st.error("Failed to display visualization image")
+                        elif is_viz_type:
+                            # Visualization type but no image - might be in generated files
+                            st.info("💡 Visualization image and code are available in the Generated Files tab.")
+                        
+                        # Show dataset info if available
+                        if message.get("dataset_info"):
+                            info = message["dataset_info"]
+                            # Handle both dict and object formats
+                            if isinstance(info, dict):
+                                filename = info.get('filename', 'Unknown')
+                                shape = info.get('shape', (0, 0))
+                                columns = info.get('columns', [])
+                            else:
+                                # It's a DatasetInfo object
+                                filename = getattr(info, 'filename', 'Unknown')
+                                shape = getattr(info, 'shape', (0, 0))
+                                columns = getattr(info, 'columns', [])
+                            
+                            with st.expander("📊 Dataset Info"):
+                                st.write(f"**File:** {filename}")
+                                st.write(f"**Shape:** {shape[0]} rows × {shape[1]} columns")
+                                st.write(f"**Columns:** {', '.join(columns)}")
+                        
+                        # Show generated code
                         if message.get("code"):
-                            with st.expander("📝 View generated code"):
+                            with st.expander("🐍 Generated Code"):
                                 st.code(message["code"], language="python")
                     else:
                         st.markdown(format_answer(content))
@@ -905,219 +945,280 @@ def render() -> None:
                             "Please check the ingestion results above."
                         )
             
-            # Check if this is a visualization request
-            is_viz_request = is_visualization_request(prompt) and st.session_state.csv_filename
+            # Visualization requests now go through the backend like other features
+            # No special handling needed - backend will route to visualization agent
             
-            if is_viz_request:
-                st.warning("Visualization handling currently bypasses session API. TODO: convert to session events.")
-            else:
-                if not ingestion_happened:
-                    with st.chat_message("user"):
-                        st.markdown(prompt)
+            if not ingestion_happened:
+                with st.chat_message("user"):
+                    st.markdown(prompt)
             
             with st.chat_message("assistant"):
-                placeholder = st.empty()
-                citations_container = st.empty()
-                
-                with st.spinner("Thinking..."):
-                    try:
-                        event_type = "message"
-                        quiz_topic = None
-                        quiz_count = None
-                        if "quiz" in prompt.lower():
-                            event_type = "quiz"
-                            quiz_topic = prompt
-                            quiz_count = 5
-
-                        session_response = session_client.post_event(
-                            event_type=event_type,
-                            content=prompt,
-                            quiz_topic=quiz_topic,
-                            quiz_count=quiz_count,
-                            file_ids=file_ids_to_use,  # CRITICAL FIX: Pass uploaded filenames automatically
-                            source_hints=doc_hints or None,
-                            documents_only=documents_only,
-                        )
-                    except Exception as e:
-                        error_msg = str(e)
-                        st.error(f"❌ Error generating answer: {error_msg}")
-                        logger.exception("Error in answer_question")
-                        session_response = SessionResponse(
-                            session_id=st.session_state.get("learner_id_global", "s1"),
-                            turn_id=0,
-                            route="error",
-                            answer=f"I encountered an error: {error_msg}",
-                            citations=[],
-                            source="error",
-                            quiz=None,
-                            metadata={},
-                        )
-                
-                if session_response.answer:
-                    placeholder.markdown(format_answer(session_response.answer))
-                else:
-                    placeholder.error("No answer was generated. Please try again.")
+                    placeholder = st.empty()
+                    citations_container = st.empty()
                     
-                if session_response.citations:
-                    citations_container.markdown(
-                        "**Citations:**\n" + "\n".join(f"- {c}" for c in session_response.citations)
-                    )
-                else:
-                    citations_container.caption("No citations provided.")
-
-                if session_response.quiz:
-                    quiz_model = Quiz.model_validate(session_response.quiz)
-                    st.session_state.quiz = quiz_model.model_dump(mode="json")
-                    st.session_state.quiz_markdown = session_response.quiz_markdown
-                    st.session_state.quiz_answers = {}
-                    st.session_state.quiz_result = None
-                    if session_response.quiz_markdown:
-                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                        _add_generated_file(
-                            name=f"quiz_{quiz_model.topic.replace(' ', '_')}_{timestamp}.md",
-                            content=session_response.quiz_markdown,
-                            kind="text",
-                            mime="text/markdown",
-                            binary=False,
-                            language="markdown",
-                            set_preview=False,
-                        )
-
-                # Detect when note agent saves a file and add it to generated files
-                # Check metadata for saved_file_path (cleaner than parsing text)
-                saved_file_path = session_response.metadata.get("saved_file_path")
-                
-                # If not in metadata, try to extract from response text as fallback
-                if not saved_file_path and session_response.route == "note" and session_response.answer:
-                    import re
-                    text = session_response.answer
-                    # Look for filename patterns in the response
-                    patterns = [
-                        r"saved to (?:the file: )?(data/generated/[^\s,\.\*\n\)]+\.(?:txt|md))",
-                        r"saved to (?:the file: )?([a-zA-Z0-9_\-]+\.(?:txt|md))",
-                        r"file:\s*([a-zA-Z0-9_\-]+\.(?:txt|md))",
-                        r"\(Saved to [^\*]*\*{0,2}([a-zA-Z0-9_\-]+\.(?:txt|md))",
-                        r'write_text_file\s*\([^)]*["\']path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # write_text_file({ "path": "data/generated/filename.txt"
-                        r'["\']path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # JSON-like: "path": "data/generated/filename.txt"
-                        r'path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # path: "data/generated/filename.txt" (no quotes around path)
-                    ]
-                    for pattern in patterns:
-                        match = re.search(pattern, text, re.IGNORECASE)
-                        if match:
-                            filename = match.group(1)
-                            # Try data/generated/ first
-                            candidate = f"data/generated/{filename}" if not filename.startswith("data/generated") else filename
-                            if Path(candidate).exists():
-                                saved_file_path = candidate
-                                logger.info(f"[UI] Found saved file via text parsing: {saved_file_path}")
-                                break
-                            # Try just the filename
-                            if Path(filename).exists():
-                                saved_file_path = str(Path(filename).resolve())
-                                logger.info(f"[UI] Found saved file via relative path: {saved_file_path}")
-                                break
-                
-                # If still not found and route is "note", try to find recently created files
-                if not saved_file_path and session_response.route == "note":
-                    try:
-                        generated_dir = Path("data/generated")
-                        if generated_dir.exists():
-                            import time
-                            # Get all .txt files, sort by modification time (newest first)
-                            txt_files = sorted(
-                                generated_dir.glob("*.txt"),
-                                key=lambda p: p.stat().st_mtime,
-                                reverse=True
-                            )
-                            # Check if any file was created in the last 5 minutes (more lenient window)
-                            current_time = time.time()
-                            for txt_file in txt_files[:10]:  # Check top 10 most recent
-                                file_age = current_time - txt_file.stat().st_mtime
-                                if file_age < 300:  # 5 minutes window
-                                    # Check if already in generated files
-                                    existing_paths = {
-                                        Path(f.get("file_path")).resolve() 
-                                        for f in st.session_state.get("generated_files", []) 
-                                        if f.get("file_path")
-                                    }
-                                    if txt_file.resolve() not in existing_paths:
-                                        saved_file_path = str(txt_file)
-                                        logger.info(f"[UI] Found recently created file: {saved_file_path}")
-                                        break
-                    except Exception as e:
-                        logger.debug(f"[UI] Failed to find recent files: {e}")
-                
-                if saved_file_path:
-                    file_path_obj = Path(saved_file_path)
-                    # If path is relative, try to resolve it
-                    if not file_path_obj.is_absolute():
-                        # Try data/generated/ first
-                        if not file_path_obj.exists():
-                            file_path_obj = Path("data/generated") / saved_file_path
-                        # If still not found, try just the filename in data/generated/
-                        if not file_path_obj.exists() and not saved_file_path.startswith("data/generated"):
-                            file_path_obj = Path("data/generated") / Path(saved_file_path).name
-                    
-                    # Check if file exists (it should, since agent just saved it)
-                    if file_path_obj.exists():
+                    with st.spinner("Thinking..."):
                         try:
-                            # Load file content
-                            content = file_path_obj.read_text(encoding="utf-8")
-                            
-                            # Check if file is already in generated files
-                            existing_paths = {
-                                Path(f.get("file_path")).resolve() 
-                                for f in st.session_state.get("generated_files", []) 
-                                if f.get("file_path")
-                            }
-                            if file_path_obj.resolve() not in existing_paths:
-                                # Determine file type
-                                suffix = file_path_obj.suffix.lower()
-                                if suffix == ".md":
-                                    kind = "text"
-                                    mime = "text/markdown"
-                                    language = "markdown"
-                                else:
-                                    kind = "text"
-                                    mime = "text/plain"
-                                    language = None
-                                
-                                # Add file to generated files list
-                                _ensure_generated_files_state()
-                                file_entry = {
-                                    "id": str(uuid.uuid4()),
-                                    "name": file_path_obj.name,
-                                    "kind": kind,
-                                    "mime": mime,
-                                    "content": content,
-                                    "binary": False,
-                                    "language": language,
-                                    "selected": False,
-                                    "deleted": False,
-                                    "created_at": datetime.utcnow().isoformat(),
-                                    "file_path": str(file_path_obj.resolve()),
-                                }
-                                st.session_state.generated_files.append(file_entry)
-                                logger.info(f"Added saved file to generated files: {saved_file_path}")
-                        except Exception as e:
-                            logger.warning(f"Failed to load saved file {saved_file_path}: {e}")
+                            event_type = "message"
+                            quiz_topic = None
+                            quiz_count = None
+                            if "quiz" in prompt.lower():
+                                event_type = "quiz"
+                                quiz_topic = prompt
+                                quiz_count = 5
 
-                # For quiz responses, don't show quiz content in chat - just a simple confirmation
-                if session_response.route == "quiz":
-                    chat_content = "Quiz generated successfully. Please take the quiz below."
-                else:
-                    chat_content = session_response.answer
-                
-                st.session_state.messages.append(
-                    {
+                            # For visualization requests, include CSV filename
+                            csv_filename = None
+                            if is_visualization_request(prompt) and st.session_state.get("csv_filename"):
+                                csv_filename = st.session_state.csv_filename
+                            
+                            session_response = session_client.post_event(
+                                event_type=event_type,
+                                content=prompt,
+                                quiz_topic=quiz_topic,
+                                quiz_count=quiz_count,
+                                file_ids=file_ids_to_use,  # CRITICAL FIX: Pass uploaded filenames automatically
+                                source_hints=doc_hints or None,
+                                documents_only=documents_only,
+                                csv_filename=csv_filename,
+                            )
+                        except Exception as e:
+                            error_msg = str(e)
+                            st.error(f"❌ Error generating answer: {error_msg}")
+                            logger.exception("Error in answer_question")
+                            session_response = SessionResponse(
+                                session_id=st.session_state.get("learner_id_global", "s1"),
+                                turn_id=0,
+                                route="error",
+                                answer=f"I encountered an error: {error_msg}",
+                                citations=[],
+                                source="error",
+                                quiz=None,
+                                metadata={},
+                            )
+                    
+                    # For visualization, don't show answer text in placeholder - it will be in message history
+                    if session_response.route != "visualization":
+                        if session_response.answer:
+                            placeholder.markdown(format_answer(session_response.answer))
+                        else:
+                            placeholder.error("No answer was generated. Please try again.")
+                    else:
+                        # For visualization, show a simple message
+                        placeholder.markdown("Creating visualization...")
+                        
+                    if session_response.citations:
+                        citations_container.markdown(
+                            "**Citations:**\n" + "\n".join(f"- {c}" for c in session_response.citations)
+                        )
+                    else:
+                        citations_container.caption("No citations provided.")
+
+                    # Handle visualization results from backend
+                    # Note: Visualization will be displayed from message history after rerun
+                    # We just save files here, display happens in message history loop
+                    viz_metadata = session_response.metadata.get("visualization")
+                    if viz_metadata and viz_metadata.get("success"):
+                        # Save image and code to generated files
+                        if viz_metadata.get("image_base64"):
+                            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                            csv_name = Path(st.session_state.csv_filename).stem if st.session_state.get("csv_filename") else "data"
+                            # Save image
+                            img_bytes = base64.b64decode(viz_metadata["image_base64"])
+                            img_filename = f"viz_{csv_name}_{timestamp}.png"
+                            _add_generated_file(
+                                name=img_filename,
+                                content=img_bytes,
+                                kind="image",
+                                mime="image/png",
+                                binary=True,
+                                set_preview=True,
+                            )
+                            
+                            # Save code
+                            if viz_metadata.get("code"):
+                                code_filename = f"viz_{csv_name}_{timestamp}.py"
+                                _add_generated_file(
+                                    name=code_filename,
+                                    content=viz_metadata["code"],
+                                    kind="code",
+                                    mime="text/plain",
+                                    binary=False,
+                                    language="python",
+                                    set_preview=False,
+                                )
+
+                    if session_response.quiz:
+                        quiz_model = Quiz.model_validate(session_response.quiz)
+                        st.session_state.quiz = quiz_model.model_dump(mode="json")
+                        st.session_state.quiz_markdown = session_response.quiz_markdown
+                        st.session_state.quiz_answers = {}
+                        st.session_state.quiz_result = None
+                        if session_response.quiz_markdown:
+                            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                            _add_generated_file(
+                                name=f"quiz_{quiz_model.topic.replace(' ', '_')}_{timestamp}.md",
+                                content=session_response.quiz_markdown,
+                                kind="text",
+                                mime="text/markdown",
+                                binary=False,
+                                language="markdown",
+                                set_preview=False,
+                            )
+
+                    # Detect when note agent saves a file and add it to generated files
+                    # Check metadata for saved_file_path (cleaner than parsing text)
+                    saved_file_path = session_response.metadata.get("saved_file_path")
+                    
+                    # If not in metadata, try to extract from response text as fallback
+                    if not saved_file_path and session_response.route == "note" and session_response.answer:
+                        import re
+                        text = session_response.answer
+                        # Look for filename patterns in the response
+                        patterns = [
+                            r"saved to (?:the file: )?(data/generated/[^\s,\.\*\n\)]+\.(?:txt|md))",
+                            r"saved to (?:the file: )?([a-zA-Z0-9_\-]+\.(?:txt|md))",
+                            r"file:\s*([a-zA-Z0-9_\-]+\.(?:txt|md))",
+                            r"\(Saved to [^\*]*\*{0,2}([a-zA-Z0-9_\-]+\.(?:txt|md))",
+                            r'write_text_file\s*\([^)]*["\']path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # write_text_file({ "path": "data/generated/filename.txt"
+                            r'["\']path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # JSON-like: "path": "data/generated/filename.txt"
+                            r'path["\']?\s*:\s*["\']data/generated/([a-zA-Z0-9_\-]+\.(?:txt|md))',  # path: "data/generated/filename.txt" (no quotes around path)
+                        ]
+                        for pattern in patterns:
+                            match = re.search(pattern, text, re.IGNORECASE)
+                            if match:
+                                filename = match.group(1)
+                                # Try data/generated/ first
+                                candidate = f"data/generated/{filename}" if not filename.startswith("data/generated") else filename
+                                if Path(candidate).exists():
+                                    saved_file_path = candidate
+                                    logger.info(f"[UI] Found saved file via text parsing: {saved_file_path}")
+                                    break
+                                # Try just the filename
+                                if Path(filename).exists():
+                                    saved_file_path = str(Path(filename).resolve())
+                                    logger.info(f"[UI] Found saved file via relative path: {saved_file_path}")
+                                    break
+                    
+                    # If still not found and route is "note", try to find recently created files
+                    if not saved_file_path and session_response.route == "note":
+                        try:
+                            generated_dir = Path("data/generated")
+                            if generated_dir.exists():
+                                import time
+                                # Get all .txt files, sort by modification time (newest first)
+                                txt_files = sorted(
+                                    generated_dir.glob("*.txt"),
+                                    key=lambda p: p.stat().st_mtime,
+                                    reverse=True
+                                )
+                                # Check if any file was created in the last 5 minutes (more lenient window)
+                                current_time = time.time()
+                                for txt_file in txt_files[:10]:  # Check top 10 most recent
+                                    file_age = current_time - txt_file.stat().st_mtime
+                                    if file_age < 300:  # 5 minutes window
+                                        # Check if already in generated files
+                                        existing_paths = {
+                                            Path(f.get("file_path")).resolve() 
+                                            for f in st.session_state.get("generated_files", []) 
+                                            if f.get("file_path")
+                                        }
+                                        if txt_file.resolve() not in existing_paths:
+                                            saved_file_path = str(txt_file)
+                                            logger.info(f"[UI] Found recently created file: {saved_file_path}")
+                                            break
+                        except Exception as e:
+                            logger.debug(f"[UI] Failed to find recent files: {e}")
+                    
+                    if saved_file_path:
+                        file_path_obj = Path(saved_file_path)
+                        # If path is relative, try to resolve it
+                        if not file_path_obj.is_absolute():
+                            # Try data/generated/ first
+                            if not file_path_obj.exists():
+                                file_path_obj = Path("data/generated") / saved_file_path
+                            # If still not found, try just the filename in data/generated/
+                            if not file_path_obj.exists() and not saved_file_path.startswith("data/generated"):
+                                file_path_obj = Path("data/generated") / Path(saved_file_path).name
+                        
+                        # Check if file exists (it should, since agent just saved it)
+                        if file_path_obj.exists():
+                            try:
+                                # Load file content
+                                content = file_path_obj.read_text(encoding="utf-8")
+                                
+                                # Check if file is already in generated files
+                                existing_paths = {
+                                    Path(f.get("file_path")).resolve() 
+                                    for f in st.session_state.get("generated_files", []) 
+                                    if f.get("file_path")
+                                }
+                                if file_path_obj.resolve() not in existing_paths:
+                                    # Determine file type
+                                    suffix = file_path_obj.suffix.lower()
+                                    if suffix == ".md":
+                                        kind = "text"
+                                        mime = "text/markdown"
+                                        language = "markdown"
+                                    else:
+                                        kind = "text"
+                                        mime = "text/plain"
+                                        language = None
+                                    
+                                    # Add file to generated files list
+                                    _ensure_generated_files_state()
+                                    file_entry = {
+                                        "id": str(uuid.uuid4()),
+                                        "name": file_path_obj.name,
+                                        "kind": kind,
+                                        "mime": mime,
+                                        "content": content,
+                                        "binary": False,
+                                        "language": language,
+                                        "selected": False,
+                                        "deleted": False,
+                                        "created_at": datetime.utcnow().isoformat(),
+                                        "file_path": str(file_path_obj.resolve()),
+                                    }
+                                    st.session_state.generated_files.append(file_entry)
+                                    logger.info(f"Added saved file to generated files: {saved_file_path}")
+                            except Exception as e:
+                                logger.warning(f"Failed to load saved file {saved_file_path}: {e}")
+
+                    # For quiz responses, don't show quiz content in chat - just a simple confirmation
+                    if session_response.route == "quiz":
+                        chat_content = "Quiz generated successfully. Please take the quiz below."
+                    elif session_response.route == "visualization":
+                        # For visualization, use a simple message - the image will be displayed from message data
+                        chat_content = "Here's your visualization:"
+                    else:
+                        chat_content = session_response.answer
+                    
+                    # Include visualization data in message if present
+                    message_data = {
                         "role": "assistant",
                         "content": chat_content,
                         "citations": session_response.citations,
                         "route": session_response.route,
                     }
-                )
+                    
+                    # Add visualization data to message for chat history
+                    viz_metadata = session_response.metadata.get("visualization")
+                    if viz_metadata and viz_metadata.get("success"):
+                        message_data["image_base64"] = viz_metadata.get("image_base64")
+                        message_data["code"] = viz_metadata.get("code")
+                        message_data["dataset_info"] = viz_metadata.get("dataset_info")
+                        message_data["type"] = "visualization"
+                        logger.info(f"[UI] Added visualization message with image_base64: {bool(viz_metadata.get('image_base64'))}")
+                    elif session_response.route == "visualization":
+                        # Even if metadata is missing, mark it as visualization type
+                        message_data["type"] = "visualization"
+                        logger.warning(f"[UI] Visualization route detected but no visualization metadata in response. Metadata keys: {list(session_response.metadata.keys())}, route={session_response.route}")
+                    
+                    # Always add message to history
+                    st.session_state.messages.append(message_data)
+                    logger.info(f"[UI] Added message to history: role={message_data['role']}, route={message_data.get('route')}, has_image={bool(message_data.get('image_base64'))}, type={message_data.get('type')}, content='{message_data.get('content', '')[:50]}'")
 
-                st.rerun()
+                    st.rerun()
 
         if st.session_state.quiz:
             quiz = Quiz.model_validate(st.session_state.quiz)

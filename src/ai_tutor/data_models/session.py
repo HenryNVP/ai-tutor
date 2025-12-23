@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class SessionEvent(BaseModel):
-    type: Literal["message", "upload", "quiz", "note", "quiz_submission"]
+    type: Literal["message", "upload", "quiz", "note", "quiz_submission", "visualization"]
     content: Optional[str] = Field(default=None, description="User text payload")
     quiz_topic: Optional[str] = Field(default=None, description="Topic for quiz events")
     quiz_count: Optional[int] = Field(default=None, description="Requested number of questions")
@@ -15,6 +15,7 @@ class SessionEvent(BaseModel):
     documents_only: bool = Field(default=False, description="Restrict processing to uploaded docs only")
     quiz: Optional[Dict[str, Any]] = Field(default=None, description="Serialized quiz payload")
     answers: Optional[List[int]] = Field(default=None, description="Selected quiz answers (0-indexed)")
+    csv_filename: Optional[str] = Field(default=None, description="CSV filename for visualization")
 
 
 class SessionEventRequest(BaseModel):

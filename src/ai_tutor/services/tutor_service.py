@@ -447,10 +447,39 @@ Please answer based only on the provided context."""
         )
         quiz_markdown = quiz_to_markdown(tutor_response.quiz) if tutor_response.quiz else None
         
-        # Include saved file path in metadata if present
+        # Include saved file path and visualization in metadata if present
         metadata = {"event_type": event.type}
         if tutor_response.saved_file_path:
             metadata["saved_file_path"] = tutor_response.saved_file_path
+        if tutor_response.visualization:
+            # Store visualization result in metadata
+            viz_result = tutor_response.visualization
+            dataset_info = viz_result.get("dataset_info") if isinstance(viz_result, dict) else getattr(viz_result, "dataset_info", None)
+            
+            dataset_info_dict = None
+            if dataset_info:
+                # Handle both dict and DatasetInfo object
+                if isinstance(dataset_info, dict):
+                    dataset_info_dict = {
+                        "filename": dataset_info.get("filename"),
+                        "shape": dataset_info.get("shape"),
+                        "columns": dataset_info.get("columns"),
+                    }
+                else:
+                    # It's a DatasetInfo object
+                    dataset_info_dict = {
+                        "filename": getattr(dataset_info, "filename", None),
+                        "shape": getattr(dataset_info, "shape", None),
+                        "columns": getattr(dataset_info, "columns", None),
+                    }
+            
+            metadata["visualization"] = {
+                "success": viz_result.get("success", False) if isinstance(viz_result, dict) else getattr(viz_result, "success", False),
+                "image_base64": viz_result.get("image_base64") if isinstance(viz_result, dict) else getattr(viz_result, "image_base64", None),
+                "code": viz_result.get("code") if isinstance(viz_result, dict) else getattr(viz_result, "code", None),
+                "error": viz_result.get("error") if isinstance(viz_result, dict) else getattr(viz_result, "error", None),
+                "dataset_info": dataset_info_dict,
+            }
         
         response = SessionResponse(
             session_id=session_id,
@@ -476,6 +505,11 @@ Please answer based only on the provided context."""
     def _build_prompt_from_event(self, event: SessionEvent, session_id: Optional[str] = None) -> tuple[str, Optional[str], Optional[List[str]]]:
         source_hints = event.source_hints or event.file_ids or []
         documents_phrase = " Please use the uploaded documents only." if event.documents_only else ""
+        
+        # Add CSV filename to context for visualization requests
+        extra_context_parts = []
+        if event.csv_filename:
+            extra_context_parts.append(f"CSV_FILENAME: {event.csv_filename}")
         
         # CRITICAL FIX: Detect "save notes" or "create summary file" requests and include previous notes in prompt
         content_lower = (event.content or "").lower()
@@ -587,12 +621,20 @@ Please answer based only on the provided context."""
                     if context_str:
                         # Add SOURCE_FILTER_HINTS metadata for routing
                         filename_hints = ", ".join(source_hints)
-                        extra_context = f"SOURCE_FILTER_HINTS: {filename_hints}\n\n{context_str}"
+                        context_parts = []
+                        if extra_context_parts:
+                            context_parts.extend(extra_context_parts)
+                        context_parts.append(f"SOURCE_FILTER_HINTS: {filename_hints}")
+                        context_parts.append(context_str)
+                        extra_context = "\n\n".join(context_parts)
                         logger.info(
                             "[TutorService] Successfully retrieved %d passages from uploaded documents (%d chars of context)",
                             len(hits),
                             len(context_str)
                         )
+                    elif extra_context_parts:
+                        # If no document context but we have CSV filename, include it
+                        extra_context = "\n\n".join(extra_context_parts)
                     else:
                         logger.warning(
                             "[TutorService] Retrieved %d hits but formatted context is empty",
@@ -667,12 +709,22 @@ Please answer based only on the provided context."""
         if event.type == "note":
             topic = event.content or "the uploaded documents"
             question = f"Create detailed study notes about {topic}.{documents_phrase}"
+            # Combine extra_context_parts with existing extra_context
+            if extra_context_parts and extra_context:
+                extra_context = "\n\n".join(extra_context_parts) + "\n\n" + extra_context
+            elif extra_context_parts:
+                extra_context = "\n\n".join(extra_context_parts)
             return question, extra_context, source_hints
 
         if event.type == "quiz":
             topic = event.quiz_topic or event.content or "uploaded documents"
             count = event.quiz_count or 4
             question = f"Create {count} quiz questions about {topic}.{documents_phrase}"
+            # Combine extra_context_parts with existing extra_context
+            if extra_context_parts and extra_context:
+                extra_context = "\n\n".join(extra_context_parts) + "\n\n" + extra_context
+            elif extra_context_parts:
+                extra_context = "\n\n".join(extra_context_parts)
             return question, extra_context, source_hints
 
         # Default: standard message
@@ -702,6 +754,13 @@ Please answer based only on the provided context."""
             extra_context = None
         else:
             question = f"{content}{documents_phrase}" if content else documents_phrase.strip()
+        
+        # Combine extra_context_parts with existing extra_context for visualization requests
+        if extra_context_parts:
+            if extra_context:
+                extra_context = "\n\n".join(extra_context_parts) + "\n\n" + extra_context
+            else:
+                extra_context = "\n\n".join(extra_context_parts)
         
         return question, extra_context, source_hints
     

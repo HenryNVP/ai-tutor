@@ -37,6 +37,7 @@ class SessionClient:
         file_ids: Optional[List[str]] = None,
         source_hints: Optional[List[str]] = None,
         documents_only: bool = False,
+        csv_filename: Optional[str] = None,
     ) -> SessionResponse:
         url = f"{self.base_url}/sessions/{self.session_id}/events"
         payload = {
@@ -49,6 +50,7 @@ class SessionClient:
                 "file_ids": file_ids,
                 "source_hints": source_hints,
                 "documents_only": documents_only,
+                "csv_filename": csv_filename,
             },
         }
         response = self._http.post(url, json=payload, timeout=self._timeout)
