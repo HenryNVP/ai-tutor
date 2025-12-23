@@ -7,7 +7,7 @@
 - **Agent-First Design**: Orchestrator routes to specialized agents (QA, Quiz, Note, Visualization, Web, Ingestion)
 - **Source-Filtered Retrieval**: Pre-filtering via ChromaDB `where` clause for uploaded documents (320x faster)
 - **Full Document Retrieval**: `fetch_full_document` tool retrieves all chunks sequentially for summaries
-- **Session Management**: SQLite-based with daily rotation and turn-based pruning
+- **Session Management**: SQLite-based, one session per learner (simplified, no rotation/pruning)
 
 ### Key Features
 - **Document Ingestion**: PDF/TXT/MD → chunking → embeddings → ChromaDB storage

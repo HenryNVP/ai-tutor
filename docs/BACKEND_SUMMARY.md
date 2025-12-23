@@ -204,15 +204,16 @@ _execute_decision() → Specialist Agent
 
 ### Session Key Format
 ```
-ai_tutor_{learner_id}_{YYYYMMDD}_{turn_batch}
+ai_tutor_{learner_id}
 ```
 
-Example: `ai_tutor_student123_20251023_0`
+Example: `ai_tutor_student123`
 
-### Automatic Rotation
-- **Daily rotation**: New session key each day
-- **Turn-based pruning**: New session after `max_turns_per_session` turns (default: 3)
-- **History pruning**: Only last 3 turns kept in context
+### Session Management
+- **One session per learner**: Simple, persistent session (no rotation)
+- **In-memory cache**: Fast access to active sessions
+- **SQLite persistence**: Conversation history stored in database
+- **Manual clearing**: Sessions can be cleared via API or script
 
 ### Storage
 - **SQLite**: `data/processed/sessions.sqlite`
@@ -308,10 +309,10 @@ data/
 - Pre-filtering before similarity search
 - Filename variation handling
 
-### 4. Session Rotation
-- Automatic daily rotation
-- Turn-based pruning
-- Prevents token overflow
+### 4. Session Management
+- One session per learner (simplified)
+- SQLite persistence for conversation history
+- Manual clearing available
 
 ## Performance Optimizations
 

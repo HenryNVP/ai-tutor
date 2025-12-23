@@ -5,7 +5,6 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
 import json
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -224,10 +223,8 @@ class TutorAgent:
         
         # Session and state management
         self.sessions: Dict[str, SQLiteSession] = {}  # Learner ID → Active session
-        self.session_turn_counts: Dict[str, int] = {}  # Track turns per session for pruning
         self.state = AgentState()  # Shared state for agent communication
         self.session_db_path = session_db_path
-        self.max_turns_per_session = 3  # Prune history: create new session after 3 turns
         
         # Quiz and assessment infrastructure
         self.quiz_service = quiz_service
@@ -405,19 +402,8 @@ class TutorAgent:
         answer_start = time.time()
         logger.info("[TutorAgent] Starting answer generation for learner=%s", learner_id)
 
-        current_turn = self.session_turn_counts.get(learner_id, 0)
-        if current_turn > 0 and current_turn % self.max_turns_per_session == 0:
-            logger.info(
-                "[TutorAgent] Pruning history for %s after %s turns",
-                learner_id,
-                current_turn,
-            )
-            if learner_id in self.sessions:
-                del self.sessions[learner_id]
-
         session = self._get_session(learner_id)
         self.state.reset()
-        self.session_turn_counts[learner_id] = current_turn + 1
 
         decision = await self._route_question(
             question=question,
@@ -1133,21 +1119,16 @@ class TutorAgent:
 
     def _get_session(self, learner_id: str) -> SQLiteSession:
         """
-        Get or create a conversation session with automatic daily rotation and history pruning.
+        Get or create a conversation session for a learner.
         
-        This method implements token overflow prevention through:
-        1. Date-based session keys (daily rotation)
-        2. Turn-based pruning (new session after max_turns_per_session turns)
-        
-        This prevents prompt length from growing unbounded while maintaining recent context
-        for anti-loop detection and conversation coherence.
+        Simplified session management: one session per learner, no rotation or pruning.
+        Sessions are cached in memory for performance and persist to SQLite for history.
         
         Session Key Format
         ------------------
-        ai_tutor_{learner_id}_{YYYYMMDD}_{turn_batch}
+        ai_tutor_{learner_id}
         
-        Example: "ai_tutor_student123_20251023_0" (first 3 turns)
-                 "ai_tutor_student123_20251023_1" (next 3 turns)
+        Example: "ai_tutor_student123"
         
         Parameters
         ----------
@@ -1157,44 +1138,30 @@ class TutorAgent:
         Returns
         -------
         SQLiteSession
-            Active session object for this learner. History is pruned to last 3 turns
-            to prevent prompt poisoning and reduce synthesis time.
+            Active session object for this learner. Session persists across requests
+            until manually cleared via clear_session().
         
         Notes
         -----
         - Sessions are cached in memory for performance
-        - Automatic rotation occurs at midnight (based on server timezone)
-        - History pruning: new session created after max_turns_per_session turns
-        - Previous sessions remain in SQLite but are not loaded into context
+        - One session per learner (no automatic rotation)
         - Manual clearing available via clear_session() or clear_sessions.py script
+        - SQLite stores conversation history for persistence
         """
-        # Use date-based session IDs to auto-rotate daily (prevents token accumulation)
-        today = datetime.now().strftime("%Y%m%d")
-        
-        # Check current turn count for this learner
-        turn_count = self.session_turn_counts.get(learner_id, 0)
-        turn_batch = turn_count // self.max_turns_per_session
-        
-        # Create session key with turn batch to enable pruning
-        session_key = f"ai_tutor_{learner_id}_{today}_{turn_batch}"
+        # Simple session key: one session per learner
+        session_key = f"ai_tutor_{learner_id}"
         
         # Check if we have a cached session for this learner
         session = self.sessions.get(learner_id)
         
-        # Create new session if:
-        # 1. None exists
-        # 2. Session key changed (new day or new turn batch)
-        if (session is None or 
-            getattr(session, '_session_key', None) != session_key):
-            
+        # Create new session if none exists
+        if session is None:
             session = SQLiteSession(
                 session_key,
                 db_path=str(self.session_db_path),
             )
-            # Store session key for comparison on next access
-            session._session_key = session_key  # type: ignore
             self.sessions[learner_id] = session
-            logger.debug(f"Created new session for {learner_id}: {session_key} (turn batch {turn_batch})")
+            logger.debug(f"Created new session for {learner_id}: {session_key}")
         
         return session
     
@@ -1219,8 +1186,6 @@ class TutorAgent:
         """
         if learner_id in self.sessions:
             del self.sessions[learner_id]
-        if learner_id in self.session_turn_counts:
-            del self.session_turn_counts[learner_id]
         # Note: This doesn't delete from SQLite, just removes from memory
         # The session will start fresh on next question
 

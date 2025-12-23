@@ -71,7 +71,7 @@ Orchestrator --> Web : current events/non-STEM
 Orchestrator --> QuizAgent : quiz requests
 Orchestrator --> NoteAgent : note/summary requests
 Orchestrator --> IngestionAgent : file uploads
-Orchestrator --> SessionFS : maintain context\n(daily rotation + turn pruning)
+Orchestrator --> SessionFS : maintain context\n(one session per learner)
 TutorService --> SessionFS : session event processing
 
 QA --> Retriever : retrieve_local_context
@@ -104,10 +104,10 @@ note right of Orchestrator
   • Supports "create study notes"
   
   Session Management:
-  • Daily rotation: ai_tutor_{learner_id}_{YYYYMMDD}_{batch}
-  • Turn-based pruning (last 3 turns kept)
-  • Prevents token overflow and prompt poisoning
+  • One session per learner: ai_tutor_{learner_id}
+  • Simplified: no rotation or pruning
   • SQLite persistence + in-memory cache
+  • Manual clearing available
 end note
 
 note bottom of TutorService
