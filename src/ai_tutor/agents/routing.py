@@ -114,7 +114,17 @@ def detect_note_request(message: str) -> bool:
 
 
 def detect_ingestion_request(message: str) -> bool:
+    """Detect if the user wants to ingest/upload documents.
+    
+    Note: Questions about document content (e.g., "what is the document about?")
+    should NOT route to ingestion - they should go to QA agent.
+    """
     lowered = message.lower()
+    
+    # Exclude questions about document content
+    if any(phrase in lowered for phrase in ["what is", "what does", "tell me about", "explain", "summarize"]):
+        return False
+    
     keywords = [
         "upload",
         "ingest",

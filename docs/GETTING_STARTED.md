@@ -101,6 +101,7 @@ streamlit run apps/ui.py
 ## Next Steps
 
 - See [ARCHITECTURE.md](ARCHITECTURE.md) for system design
-- See [TESTING.md](TESTING.md) for running tests
+- See [TESTING.md](TESTING.md) for automated testing
+- See [MANUAL_TESTING.md](MANUAL_TESTING.md) for manual testing guide
 - See [README.md](../README.md) for full documentation
 

@@ -185,6 +185,19 @@ User Message → Orchestrator Agent → Specialized Tools/Agents
     └─→ Ingestion Agent → Document processing
 ```
 
+### Multi-Agent System
+
+The system uses **6 specialized agents** with keyword-based routing:
+
+- **QA Agent** (`qa`) - Answers questions using RAG from documents (default route)
+- **Quiz Agent** (`quiz`) - Generates quizzes from document content (3-40 questions)
+- **Note Agent** (`note`) - Creates structured study notes and summaries, can save to files
+- **Visualization Agent** (`visualization`) - Generates data visualizations from CSV files
+- **Web Agent** (`web`) - Fetches current information from the web
+- **Ingestion Agent** (`ingestion`) - Processes and stores uploaded documents
+
+Requests are automatically routed based on keywords (e.g., "quiz" → Quiz Agent, "summarize" → Note Agent).
+
 ### Core Components
 
 **1. Document Ingestion**
@@ -201,35 +214,16 @@ User Message → Orchestrator Agent → Specialized Tools/Agents
 - Citation generation with page numbers
 - Automatic persistence (SQLite backend)
 
-**3. QA Agent**
-- Retrieval-augmented generation
-- Context-aware responses
-- Multi-document support
-- Automatic citation tracking
-
-**4. Note Agent**
-- Automatic context retrieval from uploaded documents
-- Structured note generation (headings, bullet points, key takeaways)
-- File saving capability
-- Supports both topic-based and document-based note creation
-
-**5. Quiz Generation**
+**3. Quiz Generation**
 - Dynamic question count (3-40)
 - Topic extraction from context
 - Multiple choice format
 - Source-filtered retrieval
 - Interactive UI + Markdown export
 
-**6. Visualization Agent**
-- CSV dataset inspection
-- LLM-powered code generation (matplotlib/seaborn)
-- Safe execution environment
-- Base64 image encoding
-- Code display in UI
+**4. Adaptive Learning**
 
-**7. Adaptive Learning**
-
-**8. Tutor Service Layer**
+**5. Tutor Service Layer**
 - Shared backend API used by Streamlit and FastAPI
 - Manages retrieval, ingestion, quiz creation, and error handling
 - Ensures UI stays presentation-only
@@ -358,8 +352,10 @@ quiz:
 ## 📚 Documentation
 
 - **[Getting Started](docs/GETTING_STARTED.md)** – Quick start guide and core use cases
+- **[Agents](docs/AGENTS.md)** – Detailed documentation of all 6 specialized agents
+- **[Manual Testing](docs/MANUAL_TESTING.md)** – Step-by-step manual testing guide for use cases and multi-agent system
 - **[Architecture](docs/ARCHITECTURE.md)** – System design and data flow
-- **[Testing](docs/TESTING.md)** – Test documentation and running tests
+- **[Testing](docs/TESTING.md)** – Automated test documentation
 - **[Simplification](docs/SIMPLIFICATION.md)** – Simplification guide and demo mode
 - **[MCP Servers](docs/mcp.md)** – MCP server setup (optional)
 

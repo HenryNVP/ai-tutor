@@ -774,6 +774,22 @@ class TutorAgent:
             )
         except Exception as exc:
             logger.error("[TutorAgent] Agent %s failed: %s", agent.name, exc, exc_info=True)
+            # Provide user-friendly error messages
+            error_str = str(exc)
+            if "429" in error_str or "rate_limit" in error_str.lower() or "tokens per min" in error_str.lower():
+                if agent.name == "ingestion_agent":
+                    return (
+                        "I encountered a rate limit error while processing the documents. "
+                        "The document(s) may be too large. Please try:\n"
+                        "1. Processing smaller documents or fewer files at once\n"
+                        "2. Waiting a moment and trying again\n"
+                        "3. Using the /ingest API endpoint directly for large files"
+                    )
+                else:
+                    return (
+                        f"I encountered a rate limit error. Please wait a moment and try again, "
+                        f"or break your request into smaller parts."
+                    )
             return f"I encountered an error while delegating to {agent.name}: {exc}"
 
         text = result.final_output.strip() if result and result.final_output else ""

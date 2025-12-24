@@ -31,6 +31,7 @@ from apps.chat_helpers import (
     format_answer,
     is_question_about_uploaded_docs,
     extract_document_hints,
+    deduplicate_citations,
 )
 from apps.session_client import SessionClient
 from apps.file_utils import extract_text, summarize_documents
@@ -240,7 +241,7 @@ def _messages_from_history(history: SessionHistoryResponse) -> List[Dict[str, An
                 {
                     "role": "assistant",
                     "content": content,
-                    "citations": resp.citations,
+                    "citations": deduplicate_citations(resp.citations) if resp.citations else [],
                     "route": resp.route,
                 }
             )
@@ -813,9 +814,12 @@ def render() -> None:
                         st.markdown(format_answer(content))
                         citations = message.get("citations")
                         if isinstance(citations, (list, tuple)) and citations:
-                            st.markdown("**Citations:**")
-                            for cite in citations:
-                                st.markdown(f"- {cite}")
+                            # Deduplicate citations before displaying
+                            unique_citations = deduplicate_citations(citations)
+                            if unique_citations:
+                                st.markdown("**Citations:**")
+                                for cite in unique_citations:
+                                    st.markdown(f"- {cite}")
                 else:
                     st.markdown(content)
 
@@ -1007,9 +1011,14 @@ def render() -> None:
                         placeholder.markdown("Creating visualization...")
                         
                     if session_response.citations:
-                        citations_container.markdown(
-                            "**Citations:**\n" + "\n".join(f"- {c}" for c in session_response.citations)
-                        )
+                        # Deduplicate citations before displaying
+                        unique_citations = deduplicate_citations(session_response.citations)
+                        if unique_citations:
+                            citations_container.markdown(
+                                "**Citations:**\n" + "\n".join(f"- {c}" for c in unique_citations)
+                            )
+                        else:
+                            citations_container.caption("No citations provided.")
                     else:
                         citations_container.caption("No citations provided.")
 

@@ -4,6 +4,46 @@ import re
 from typing import List
 
 
+def deduplicate_citations(citations: List[str]) -> List[str]:
+	"""
+	Remove duplicate citations from a list.
+	
+	Duplicates are identified by comparing the citation content (title and doc_id).
+	Keeps the first occurrence of each unique citation.
+	
+	Args:
+		citations: List of citation strings in format "[N] Title (Doc: doc_id)"
+		
+	Returns:
+		List of unique citations, preserving order
+	"""
+	if not citations:
+		return []
+	
+	seen = set()
+	unique_citations = []
+	
+	for citation in citations:
+		# Extract the core content (title and doc_id) for comparison
+		# Format: "[N] Title (Doc: doc_id)" -> "Title (Doc: doc_id)"
+		# Remove the index number to compare actual content
+		match = re.match(r'\[\d+\]\s*(.+)', citation)
+		if match:
+			core_content = match.group(1).strip()
+		else:
+			# Fallback: use full citation if pattern doesn't match
+			core_content = citation.strip()
+		
+		# Normalize for comparison (case-insensitive, whitespace normalized)
+		normalized = re.sub(r'\s+', ' ', core_content.lower())
+		
+		if normalized not in seen:
+			seen.add(normalized)
+			unique_citations.append(citation)
+	
+	return unique_citations
+
+
 def format_answer(text: str) -> str:
 	normalized = re.sub(r"(?<=\S)\s+(?=(?:[-•*]|\d+\.)\s)", "\n", text)
 	normalized = re.sub(r"\n{3,}", "\n\n", normalized)
@@ -53,6 +93,7 @@ __all__ = [
 	"format_answer",
 	"is_question_about_uploaded_docs",
 	"extract_document_hints",
+	"deduplicate_citations",
 ]
 
 

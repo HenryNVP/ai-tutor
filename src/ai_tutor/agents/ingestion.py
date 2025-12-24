@@ -27,7 +27,9 @@ def build_ingestion_agent(ingest_fn: Callable[[Path], object]) -> Agent:
         name="ingestion_agent",
         instructions=(
             "You ingest new learner materials. Use the ingest_corpus tool to process directories. "
-            "Always summarize the ingestion result briefly after calling the tool."
+            "After calling the tool, provide a brief summary (1-2 sentences) with only the key statistics: "
+            "number of documents ingested, number of chunks created, and any skipped files. "
+            "Keep your response concise and do not include detailed content from the documents."
         ),
         tools=[ingest_corpus],
     )
