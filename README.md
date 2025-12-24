@@ -61,7 +61,7 @@ The app opens at `http://localhost:8501` with two tabs:
 uvicorn apps.api:app --reload --port 8080
 ```
 
-Endpoints (see [`docs/backend_api.md`](docs/backend_api.md) for details):
+Endpoints:
 - `POST /answer` — answer questions with citations
 - `POST /quiz` — create quizzes
 - `POST /ingest` — upload & ingest documents
@@ -357,14 +357,11 @@ quiz:
 
 ## 📚 Documentation
 
-- **[Demo Guide](docs/demo.md)** – Step-by-step use cases including:
-  - Greetings and general questions
-  - Document upload and Q&A
-  - Lesson notes generation
-  - Quiz creation from documents
-  - Data visualization workflows
-
-- **[Architecture Diagrams](docs/architecture.puml)** – PlantUML diagrams
+- **[Getting Started](docs/GETTING_STARTED.md)** – Quick start guide and core use cases
+- **[Architecture](docs/ARCHITECTURE.md)** – System design and data flow
+- **[Testing](docs/TESTING.md)** – Test documentation and running tests
+- **[Simplification](docs/SIMPLIFICATION.md)** – Simplification guide and demo mode
+- **[MCP Servers](docs/mcp.md)** – MCP server setup (optional)
 
 ## 📝 License
 
