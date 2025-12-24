@@ -353,6 +353,7 @@ quiz:
 
 - **[Getting Started](docs/GETTING_STARTED.md)** – Quick start guide and core use cases
 - **[Agents](docs/AGENTS.md)** – Detailed documentation of all 6 specialized agents
+- **[Gemini Setup](docs/GEMINI_SETUP.md)** – Using Gemini for Note Agent with large context window
 - **[Manual Testing](docs/MANUAL_TESTING.md)** – Step-by-step manual testing guide for use cases and multi-agent system
 - **[Architecture](docs/ARCHITECTURE.md)** – System design and data flow
 - **[Testing](docs/TESTING.md)** – Automated test documentation

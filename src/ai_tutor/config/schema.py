@@ -14,6 +14,25 @@ class ModelConfig(BaseModel):
     mode: str = Field("chat", description="chat or completion style.")
 
 
+class NoteAgentConfig(BaseModel):
+    """Configuration for the Note Agent (summarization)."""
+    
+    model: str | None = Field(
+        None,
+        description="Model name for Note Agent. If None, uses default model. "
+        "For Gemini via LiteLLM, use 'gemini/gemini-1.5-pro' or 'gemini/gemini-1.5-flash'."
+    )
+    api_key: str | None = Field(
+        None,
+        description="API key for Note Agent model. If None, reads from environment variable "
+        "(GEMINI_API_KEY for Gemini, or model-specific env var)."
+    )
+    use_full_context: bool = Field(
+        True,
+        description="Use full document context for summarization (requires large context window model like Gemini)."
+    )
+
+
 class EmbeddingConfig(BaseModel):
     """Configuration describing which embedding provider and parameters to use."""
 
@@ -95,6 +114,10 @@ class Settings(BaseModel):
     demo_mode: bool = Field(
         False,
         description="Enable demo mode: disables personalization, simplifies routing, uses static difficulty/style"
+    )
+    note_agent: NoteAgentConfig = Field(
+        default_factory=NoteAgentConfig,
+        description="Configuration for Note Agent (summarization with large context window)."
     )
 
     @validator("paths")

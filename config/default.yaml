@@ -50,3 +50,17 @@ course_defaults:
 
 # Demo Mode Configuration
 demo_mode: true  # Enable demo mode: disables personalization, simplifies features for demo showcase
+
+# Note Agent Configuration (for summarization with large context window)
+note_agent:
+  # Model for Note Agent. Use Gemini for large context window (1M tokens):
+  #   - "gemini/gemini-1.5-pro" (best quality, slower)
+  #   - "gemini/gemini-1.5-flash" (faster, cost-effective)
+  # Set to null to use default model (gpt-4o-mini)
+  model: null  # Example: "gemini/gemini-1.5-pro"
+  
+  # API key for Note Agent model. If null, reads from GEMINI_API_KEY env var
+  api_key: null  # Example: "your-gemini-api-key"
+  
+  # Use full document context for summarization (requires large context window model)
+  use_full_context: true

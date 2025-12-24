@@ -27,7 +27,7 @@ from .routing import (
 from .viz_agent import build_visualization_agent
 from .web import build_web_agent
 
-from ai_tutor.config.schema import RetrievalConfig
+from ai_tutor.config.schema import RetrievalConfig, NoteAgentConfig
 from ai_tutor.data_models import RetrievalHit
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.learning.models import LearnerProfile
@@ -184,6 +184,7 @@ class TutorAgent:
         session_db_path: Path,
         quiz_service: QuizService,
         mcp_servers: Optional[Dict[str, Any]] = None,
+        note_agent_config: Optional[NoteAgentConfig] = None,
     ):
         """
         Initialize the multi-agent system with all required dependencies.
@@ -226,6 +227,9 @@ class TutorAgent:
         # Quiz and assessment infrastructure
         self.quiz_service = quiz_service
         
+        # Note Agent configuration (for Gemini support)
+        self.note_agent_config = note_agent_config
+        
         # Temporary context for quiz generation (set during answer() calls)
         self._active_profile: Optional[LearnerProfile] = None
         self._active_extra_context: Optional[str] = None
@@ -266,12 +270,21 @@ class TutorAgent:
             mcp_servers=list(self.mcp_servers.values()),  # Pass persistent MCP connections (tools cached per session)
             mcp_server_names=list(self.mcp_servers.keys()),  # Pass server names for proper detection
         )
+        # Configure Note Agent model (Gemini via LiteLLM or default)
+        note_model_name = None
+        note_api_key = None
+        if self.note_agent_config:
+            note_model_name = self.note_agent_config.model
+            note_api_key = self.note_agent_config.api_key
+        
         self.note_agent = build_note_agent(
             self.retriever,
             self.state,
             self.MIN_CONFIDENCE,
             mcp_servers=list(self.mcp_servers.values()),
             mcp_server_names=list(self.mcp_servers.keys()),
+            model_name=note_model_name,
+            model_api_key=note_api_key,
         )
         self.quiz_agent = build_quiz_agent(
             self.quiz_service,

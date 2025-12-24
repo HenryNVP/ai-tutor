@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, List, Optional
+import os
+from typing import Any, List, Optional, Union
 
 from agents import Agent, function_tool
 
@@ -12,14 +13,98 @@ from ai_tutor.data_models import RetrievalHit
 logger = logging.getLogger(__name__)
 
 
+def _create_note_agent_model(
+    model_name: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> Union[str, Any]:
+    """
+    Create model for Note Agent.
+    
+    If model_name starts with 'gemini/', uses LiteLLM with Gemini.
+    Otherwise, returns the model name string for default OpenAI model.
+    
+    Parameters
+    ----------
+    model_name : Optional[str]
+        Model identifier. For Gemini via LiteLLM, use 'gemini/gemini-1.5-pro' or 'gemini/gemini-1.5-flash'.
+        If None, uses default 'gpt-4o-mini'.
+    api_key : Optional[str]
+        API key for the model. If None, reads from environment variables.
+        
+    Returns
+    -------
+    Union[str, Any]
+        Model name string (for OpenAI) or LitellmModel instance (for Gemini).
+    """
+    if not model_name:
+        return "gpt-4o-mini"
+    
+    # Check if using Gemini via LiteLLM
+    if model_name.startswith("gemini/"):
+        try:
+            from agents.extensions.models.litellm_model import LitellmModel
+            
+            # Get API key from parameter or environment
+            gemini_api_key = api_key or os.getenv("GEMINI_API_KEY")
+            if not gemini_api_key:
+                logger.warning(
+                    "[Note Agent] Gemini model specified but GEMINI_API_KEY not found. "
+                    "Falling back to default model."
+                )
+                return "gpt-4o-mini"
+            
+            logger.info(
+                "[Note Agent] Using Gemini model via LiteLLM: %s",
+                model_name
+            )
+            return LitellmModel(model=model_name, api_key=gemini_api_key)
+        except ImportError:
+            logger.warning(
+                "[Note Agent] litellm not installed. Install with: pip install 'openai-agents[litellm]'. "
+                "Falling back to default model."
+            )
+            return "gpt-4o-mini"
+        except Exception as e:
+            logger.error(
+                "[Note Agent] Error creating LiteLLM model: %s. Falling back to default model.",
+                e
+            )
+            return "gpt-4o-mini"
+    
+    # Default: return model name string (for OpenAI)
+    return model_name
+
+
 def build_note_agent(
     retriever,
     state,
     min_confidence: float,
     mcp_servers: Optional[List[Any]] = None,
     mcp_server_names: Optional[List[str]] = None,
+    model_name: Optional[str] = None,
+    model_api_key: Optional[str] = None,
 ) -> Agent:
-    """Create the note-taking/summarization agent."""
+    """
+    Create the note-taking/summarization agent.
+    
+    Parameters
+    ----------
+    retriever
+        Vector retriever for document search.
+    state
+        Agent state for storing context and citations.
+    min_confidence : float
+        Minimum similarity score for retrieval results.
+    mcp_servers : Optional[List[Any]]
+        List of MCP server connections.
+    mcp_server_names : Optional[List[str]]
+        List of MCP server names.
+    model_name : Optional[str]
+        Model identifier for Note Agent. For Gemini via LiteLLM, use 'gemini/gemini-1.5-pro'.
+        If None, uses default 'gpt-4o-mini'.
+    model_api_key : Optional[str]
+        API key for the model. If None, reads from environment variables.
+    """
 
     retrieve_local_context = build_retrieve_local_context_tool(
         retriever,
@@ -158,9 +243,12 @@ def build_note_agent(
         "- **Tone:** Academic, concise, and structured.\n"
     )
 
+    # Create model (Gemini via LiteLLM or default OpenAI)
+    agent_model = _create_note_agent_model(model_name, model_api_key)
+    
     return Agent(
         name="note_agent",
-        model="gpt-4o-mini",
+        model=agent_model,
         instructions=instructions,
         tools=[retrieve_local_context, fetch_full_document],  # REFACTOR: Added fetch_full_document
         mcp_servers=active_mcp_servers,

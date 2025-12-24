@@ -192,6 +192,7 @@ class TutorSystem:
             session_db_path=settings.paths.processed_data_dir / "sessions.sqlite",
             quiz_service=self.quiz_service,
             mcp_servers=self.mcp_servers,
+            note_agent_config=settings.note_agent,
         )
 
     @classmethod
