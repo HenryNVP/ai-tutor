@@ -24,7 +24,7 @@ from ai_tutor.learning.quiz_intent import (
 from ai_tutor.retrieval import create_vector_store
 from ai_tutor.retrieval.retriever import Retriever
 # SearchTool removed - web_agent uses WebSearchTool directly
-from ai_tutor.storage import ChunkJsonlStore
+from ai_tutor.storage import ChunkJsonlStore, DocumentCache
 from ai_tutor.utils.files import collect_documents
 from ai_tutor.utils.logging import configure_logging
 
@@ -146,6 +146,7 @@ class TutorSystem:
         threading.Thread(target=_preload_embedder, daemon=True).start()
         self.vector_store = create_vector_store(settings.paths.vector_store_dir)
         self.chunk_store = ChunkJsonlStore(settings.paths.chunks_index)
+        self.document_cache = DocumentCache(settings.paths.document_cache)
         
         # Initialize learner tracking and personalization (disabled in demo mode)
         if settings.demo_mode:
@@ -175,6 +176,7 @@ class TutorSystem:
             embedder=self.embedder,
             vector_store=self.vector_store,
             chunk_store=self.chunk_store,
+            document_cache=self.document_cache,  # Pass document cache for Note Agent
             use_ai_domain_detection=False,  # Use rule-based classification only
         )
         
@@ -197,6 +199,7 @@ class TutorSystem:
             note_agent_config=settings.note_agent,
             qa_agent_config=settings.qa_agent,
             quiz_agent_config=settings.quiz_agent,
+            document_cache=self.document_cache,  # Pass document cache for Note Agent
         )
 
     @classmethod
@@ -297,12 +300,21 @@ class TutorSystem:
         Ingest every supported document under a directory and persist the resulting chunks.
 
         Uses `collect_documents` to gather PDFs/Markdown/TXT files, then hands the paths to
-        `IngestionPipeline.ingest_paths`, which parses, chunks, embeds, and stores them via
-        `ChunkJsonlStore` and `SimpleVectorStore`. Logs a summary before returning the pipeline result.
+        `IngestionPipeline.ingest_paths` (or `cache_documents_only` in demo mode), which parses,
+        chunks, embeds, and stores them via `ChunkJsonlStore` and `SimpleVectorStore`.
+        Logs a summary before returning the pipeline result.
+        
+        In demo mode, only parses and caches documents (no chunking/embedding).
         """
         documents = collect_documents(directory)
-        logger.info("Found %s documents to ingest.", len(documents))
-        result = self.ingestion_pipeline.ingest_paths(documents)
+        logger.info("Found %s documents to process.", len(documents))
+        
+        # In demo mode, only cache documents (skip chunking/embedding)
+        if self.settings.demo_mode:
+            logger.info("Demo mode: Caching documents only (no chunking/embedding)")
+            result = self.ingestion_pipeline.cache_documents_only(documents)
+        else:
+            result = self.ingestion_pipeline.ingest_paths(documents)
         return result
 
     def answer_question(

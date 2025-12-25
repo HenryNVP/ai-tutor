@@ -35,6 +35,7 @@ paths:
   processed_data_dir: "data/processed"
   vector_store_dir: "data/vector_store"
   chunks_index: "data/processed/chunks.jsonl"
+  document_cache: "data/processed/documents.jsonl"  # Cache for parsed documents (for Note Agent optimization)
   logs_dir: "logs"
   profiles_dir: "data/processed/profiles"  # Not used in demo mode, but required by schema
 

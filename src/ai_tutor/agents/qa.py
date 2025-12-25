@@ -109,7 +109,7 @@ def build_qa_agent(
 
     # Create model (Gemini via LiteLLM or default OpenAI)
     agent_model = create_gemini_model(model_name, model_api_key, agent_name="QA Agent")
-    
+
     return Agent(
         name="qa_agent",
         model=agent_model,

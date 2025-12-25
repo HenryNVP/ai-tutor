@@ -53,9 +53,9 @@ def _prepare_uploaded_files(
     session_client: SessionClient,
 ) -> tuple[List[str], Optional[Dict[str, Any]]]:
     """
-    Save uploaded files and ingest them immediately.
+    Save uploaded files and cache them immediately.
     
-    Returns filenames that were ingested and the ingestion result.
+    Returns filenames that were cached and the processing result.
     """
     upload_dir = Path("data/uploads")
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -70,16 +70,16 @@ def _prepare_uploaded_files(
         file_path.write_bytes(file_bytes)
         saved_paths.append(file_path)
 
-    ingestion_result = None
+    processing_result = None
     if saved_paths:
-        ingestion_result = session_client.ingest_files(saved_paths)
+        processing_result = session_client.ingest_files(saved_paths)
 
-    # Extract successfully ingested filenames from ingestion result
-    ingested_filenames = []
-    if ingestion_result:
-        # Get list of successfully ingested document titles/filenames
-        ingested_docs = ingestion_result.get("documents", [])
-        skipped_files = ingestion_result.get("skipped_files", [])
+    # Extract successfully processed filenames
+    processed_filenames = []
+    if processing_result:
+        # Get list of successfully processed document titles/filenames
+        processed_docs = processing_result.get("documents", [])
+        skipped_files = processing_result.get("skipped_files", [])
         
         # Map document titles back to filenames (titles are usually derived from filenames)
         # Also include all uploaded files that weren't skipped
@@ -87,19 +87,17 @@ def _prepare_uploaded_files(
             path_str = str(path)
             # Check if this file was skipped
             if path_str not in skipped_files:
-                # File was either successfully ingested or not in skipped list
-                ingested_filenames.append(path.name)
+                # File was successfully processed
+                processed_filenames.append(path.name)
         
-        # Also track successfully ingested documents by their titles
-        # (in case title differs from filename)
-        if ingested_docs:
-            logger.debug(f"Successfully ingested documents: {ingested_docs}")
+        if processed_docs:
+            logger.debug(f"Successfully processed documents: {processed_docs}")
     
-    # Fallback: if no ingestion result, assume all files were ingested
-    if not ingested_filenames and saved_paths:
-        ingested_filenames = [path.name for path in saved_paths]
+    # Fallback: if no processing result, assume all files were processed
+    if not processed_filenames and saved_paths:
+        processed_filenames = [path.name for path in saved_paths]
     
-    return ingested_filenames, ingestion_result
+    return processed_filenames, processing_result
 
 
 def _default_api_base_url() -> str:
@@ -622,11 +620,11 @@ def render() -> None:
     if "chat_uploaded_files" not in st.session_state:
         st.session_state.chat_uploaded_files = []
     if "chat_uploaded_filenames" not in st.session_state:
-        st.session_state.chat_uploaded_filenames = []  # Track ingested filenames
+        st.session_state.chat_uploaded_filenames = []  # Track uploaded filenames
     if "chat_upload_processing_done" not in st.session_state:
         st.session_state.chat_upload_processing_done = False
-    if "chat_files_just_ingested" not in st.session_state:
-        st.session_state.chat_files_just_ingested = False
+    if "chat_files_just_processed" not in st.session_state:
+        st.session_state.chat_files_just_processed = False
     if "quiz" not in st.session_state:
         st.session_state.quiz = None
     if "quiz_answers" not in st.session_state:
@@ -662,7 +660,7 @@ def render() -> None:
             session_client = None
 
         st.subheader("📤 Upload Documents")
-        st.caption("Upload documents for Q&A and quiz generation. They will be automatically ingested when you ask questions.")
+        st.caption("Upload documents for Q&A and quiz generation. They will be automatically processed when you ask questions.")
         
         uploaded_files = st.file_uploader(
             "Add PDFs, Markdown, or TXT files",
@@ -677,18 +675,18 @@ def render() -> None:
             if not st.session_state.chat_uploaded_files or \
                len(uploaded_files) != len(st.session_state.chat_uploaded_files) or \
                any(new.name != old.name for new, old in zip(uploaded_files, st.session_state.chat_uploaded_files)):
-                # New files uploaded - reset ingestion flag
+                # New files uploaded - reset processing flag
                 st.session_state.chat_uploaded_files = uploaded_files
                 st.session_state.chat_uploaded_filenames = []
                 st.session_state.chat_upload_processing_done = False
-                st.session_state.chat_files_just_ingested = False
+                st.session_state.chat_files_just_processed = False
         else:
             # No files in uploader - clear session state
             if st.session_state.chat_uploaded_files:
                 st.session_state.chat_uploaded_files = []
                 st.session_state.chat_uploaded_filenames = []
                 st.session_state.chat_upload_processing_done = False
-                st.session_state.chat_files_just_ingested = False
+                st.session_state.chat_files_just_processed = False
         
         # Show status
         if st.session_state.chat_uploaded_files:
@@ -827,12 +825,12 @@ def render() -> None:
         prompt = st.chat_input("Ask the tutor a question...")
         if prompt:
             # Prepare uploaded files before answering
-            ingestion_happened = False
-            ingestion_result = None
+            files_processed = False
+            processing_result = None
             if st.session_state.chat_uploaded_files and not st.session_state.chat_upload_processing_done:
                 with st.spinner("Uploading documents..."):
                     try:
-                        ingested_filenames, ingestion_result = _prepare_uploaded_files(
+                        processed_filenames, processing_result = _prepare_uploaded_files(
                             st.session_state.chat_uploaded_files,
                             session_client,
                         )
@@ -841,15 +839,15 @@ def render() -> None:
                         logger.exception("Error preparing uploaded files")
                         st.stop()
 
-                st.session_state.chat_uploaded_filenames = ingested_filenames
+                st.session_state.chat_uploaded_filenames = processed_filenames
                 st.session_state.chat_upload_processing_done = True
-                ingestion_happened = bool(ingested_filenames)
-                st.session_state.chat_files_just_ingested = ingestion_happened
-                if ingestion_happened and session_client:
+                files_processed = bool(processed_filenames)
+                st.session_state.chat_files_just_processed = files_processed
+                if files_processed and session_client:
                     try:
                         session_client.post_event(
                             event_type="upload",
-                            file_ids=ingested_filenames,
+                            file_ids=processed_filenames,
                         )
                     except Exception as exc:
                         logger.warning("Failed to record upload event: %s", exc)
@@ -857,28 +855,26 @@ def render() -> None:
             # Now add user message to history
             st.session_state.messages.append({"role": "user", "content": prompt})
             
-            # If ingestion just happened, show a system message about it
-            if ingestion_happened and ingestion_result:
+            # If files were just processed, show a simple message
+            if files_processed and processing_result:
                 with st.chat_message("assistant"):
-                    doc_count = ingestion_result.get("document_count", 0)
-                    chunk_count = ingestion_result.get("chunk_count", 0)
-                    skipped_files = ingestion_result.get("skipped_files", [])
+                    doc_count = processing_result.get("document_count", 0)
+                    skipped_files = processing_result.get("skipped_files", [])
                     
                     if skipped_files:
                         st.warning(
-                            f"⚠️ {len(skipped_files)} file(s) were skipped during ingestion:\n"
-                            + "\n".join(f"  - {f}" for f in skipped_files)
+                            f"⚠️ {len(skipped_files)} file(s) could not be processed:\n"
+                            + "\n".join(f"  - {Path(f).name}" for f in skipped_files)
                             + "\n\nThese files may be corrupted, empty, or in an unsupported format."
                         )
                     
                     if doc_count > 0:
                         st.success(
-                            f"✅ Ingested {doc_count} document(s) into "
-                            f"{chunk_count} chunks! Now answering your question..."
+                            f"✅ Processed {doc_count} document(s)! Ready to answer your questions."
                         )
                     elif skipped_files:
                         st.error(
-                            "❌ No documents were successfully ingested. "
+                            "❌ No documents were successfully processed. "
                             "Please check the file formats and try again."
                         )
 
@@ -918,10 +914,10 @@ def render() -> None:
                         file_ids_to_use
                     )
             
-            # Validate that requested files were actually ingested
-            if doc_hints and ingestion_result:
-                skipped_files = ingestion_result.get("skipped_files", [])
-                ingested_docs = ingestion_result.get("documents", [])
+            # Validate that requested files were actually processed
+            if doc_hints and processing_result:
+                skipped_files = processing_result.get("skipped_files", [])
+                processed_docs = processing_result.get("documents", [])
                 
                 # Check if any requested files were skipped
                 missing_files = []
@@ -931,28 +927,27 @@ def render() -> None:
                         hint in skipped or Path(skipped).name == hint 
                         for skipped in skipped_files
                     )
-                    # Also check if it's in the ingested documents list
-                    hint_ingested = any(
+                    # Also check if it's in the processed documents list
+                    hint_processed = any(
                         hint.lower() in doc.lower() or Path(hint).stem.lower() in doc.lower()
-                        for doc in ingested_docs
+                        for doc in processed_docs
                     )
                     
-                    if hint_skipped or (ingested_docs and not hint_ingested):
+                    if hint_skipped or (processed_docs and not hint_processed):
                         missing_files.append(hint)
                 
                 if missing_files:
                     with st.chat_message("assistant"):
                         st.warning(
-                            f"⚠️ The following file(s) were not successfully ingested and cannot be accessed:\n"
+                            f"⚠️ The following file(s) could not be processed:\n"
                             + "\n".join(f"  - {f}" for f in missing_files)
-                            + "\n\nThese files may have been skipped due to errors, empty content, or unsupported format. "
-                            "Please check the ingestion results above."
+                            + "\n\nThese files may have been skipped due to errors, empty content, or unsupported format."
                         )
             
             # Visualization requests now go through the backend like other features
             # No special handling needed - backend will route to visualization agent
             
-            if not ingestion_happened:
+            if not files_processed:
                 with st.chat_message("user"):
                     st.markdown(prompt)
             

@@ -347,12 +347,20 @@ async def ingest_documents(
             saved_paths.append(destination)
             logger.info(f"Saved uploaded file to: {destination}")
 
-        # Ingest only the specific files we just saved (not the entire directory)
-        # to avoid re-ingesting old files
-        ingestion_result = await asyncio.to_thread(
-            service.system.ingestion_pipeline.ingest_paths,
-            saved_paths,
-        )
+        # In demo mode, only parse and cache documents (skip chunking/embedding)
+        # This is much faster and sufficient when using Gemini with large context window
+        if service.system.settings.demo_mode:
+            logger.info("Demo mode: Caching documents only (no chunking/embedding)")
+            ingestion_result = await asyncio.to_thread(
+                service.system.ingestion_pipeline.cache_documents_only,
+                saved_paths,
+            )
+        else:
+            # Full ingestion: parse, chunk, embed, and store
+            ingestion_result = await asyncio.to_thread(
+                service.system.ingestion_pipeline.ingest_paths,
+                saved_paths,
+            )
         
         # Clean up the files we just saved after ingestion completes
         # (Optional: could keep them for a period, but for now we clean up immediately)

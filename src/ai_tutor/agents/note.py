@@ -22,6 +22,7 @@ def build_note_agent(
     mcp_server_names: Optional[List[str]] = None,
     model_name: Optional[str] = None,
     model_api_key: Optional[str] = None,
+    document_cache: Optional[Any] = None,
 ) -> Agent:
     """
     Create the note-taking/summarization agent.
@@ -39,10 +40,13 @@ def build_note_agent(
     mcp_server_names : Optional[List[str]]
         List of MCP server names.
     model_name : Optional[str]
-        Model identifier for Note Agent. For Gemini via LiteLLM, use 'gemini/gemini-1.5-pro'.
+        Model identifier for Note Agent. For Gemini via LiteLLM, use 'gemini/gemini-2.0-flash'.
         If None, uses default 'gpt-4o-mini'.
     model_api_key : Optional[str]
         API key for the model. If None, reads from environment variables.
+    document_cache : Optional[DocumentCache]
+        Document cache for direct text access (bypasses chunking). When provided and using Gemini,
+        Note Agent can read full documents directly without retrieving chunks.
     """
 
     retrieve_local_context = build_retrieve_local_context_tool(
@@ -52,7 +56,97 @@ def build_note_agent(
         log_prefix="NOTE",
     )
 
-    # REFACTOR: Add fetch_full_document tool for deterministic sequential retrieval
+    # OPTIMIZATION: Add read_raw_document tool for direct text access (bypasses chunking)
+    # This is faster and more efficient when using Gemini (large context window)
+    @function_tool
+    def read_raw_document(
+        filename: str,
+    ) -> str:
+        """
+        OPTIMIZED: Read full document text directly from cache (bypasses chunking/embedding).
+        
+        This tool reads the complete document text directly from the document cache,
+        which is much faster than retrieving and concatenating chunks. Use this when:
+        - You need the full document for summarization or note-taking
+        - You're using Gemini (large context window can handle full documents)
+        - The document was recently uploaded/ingested
+        
+        This is preferred over fetch_full_document when available, as it:
+        - Skips chunk retrieval from vector store
+        - Provides cleaner text (no chunk boundaries)
+        - Is faster (no database queries)
+        
+        Parameters
+        ----------
+        filename : str
+            The filename or source path of the document to read.
+            Can be just the filename (e.g., "Lecture7.pdf", "CMPE249 Lecture7 final0911.pdf")
+            or partial match (e.g., "Lecture7"). The tool will try multiple variations automatically.
+        
+        Returns
+        -------
+        str
+            JSON string containing the full document text and metadata.
+            Format: {"text": "...", "title": "...", "doc_id": "...", "source_path": "..."}
+            
+        Example Usage:
+        - User says "summarize uploaded file" → Call read_raw_document("CMPE249 Lecture7 final0911.pdf")
+        - User says "create notes from the document" → Call read_raw_document with filename from SOURCE_FILTER_HINTS
+        """
+        if not document_cache:
+            logger.warning("[Note Agent] Document cache not available, falling back to fetch_full_document")
+            return json.dumps({
+                "error": "Document cache not available",
+                "text": "",
+                "message": "Document cache not initialized. Use fetch_full_document instead."
+            })
+        
+        logger.info("[Note Agent] Reading raw document from cache: %s", filename)
+        
+        try:
+            # Try to find document by filename
+            document = document_cache.get_by_filename(filename)
+            
+            if not document:
+                logger.warning("[Note Agent] Document not found in cache: %s", filename)
+                return json.dumps({
+                    "error": "Document not found",
+                    "text": "",
+                    "message": f"Document '{filename}' not found in cache. It may not have been ingested yet, or the filename doesn't match."
+                })
+            
+            # Return full document text
+            result = {
+                "text": document.text,
+                "title": document.metadata.title,
+                "doc_id": document.metadata.doc_id,
+                "source_path": str(document.metadata.source_path),
+                "domain": document.metadata.primary_domain,
+                "total_chars": len(document.text),
+            }
+            
+            # Update state for citations (use document title)
+            citation = f"[1] {document.metadata.title} (Doc: {document.metadata.doc_id})"
+            state.last_citations = [citation]
+            state.last_source = "local"
+            
+            logger.info(
+                "[Note Agent] Read raw document: %s (%d chars)",
+                filename,
+                len(document.text)
+            )
+            
+            return json.dumps(result)
+            
+        except Exception as exc:
+            logger.error("[Note Agent] Error reading raw document: %s", exc, exc_info=True)
+            return json.dumps({
+                "error": str(exc),
+                "text": "",
+                "message": f"Error reading document: {exc}"
+            })
+
+    # REFACTOR: Add fetch_full_document tool for deterministic sequential retrieval (fallback)
     @function_tool
     def fetch_full_document(
         filename: str,
@@ -154,6 +248,23 @@ def build_note_agent(
         if active_mcp_names:
             logger.debug("[Note Agent] MCP server names: %s", ", ".join(active_mcp_names))
 
+    # Determine if using Gemini (large context window)
+    is_gemini = model_name and model_name.startswith("gemini/")
+    
+    # Build tool list - prefer read_raw_document if cache available and using Gemini
+    tools_list = [retrieve_local_context]
+    if document_cache and is_gemini:
+        # Add read_raw_document for optimized full document access
+        tools_list.append(read_raw_document)
+        tools_list.append(fetch_full_document)  # Keep as fallback
+        primary_tool = "read_raw_document"
+        fallback_tool = "fetch_full_document"
+    else:
+        # Fallback to chunk-based retrieval
+        tools_list.append(fetch_full_document)
+        primary_tool = "fetch_full_document"
+        fallback_tool = None
+
     instructions = (
         "You are the Note-Taking Agent, responsible for creating accurate study notes and summaries from local documents.\n\n"
         "### 1. TOOL SELECTION STRATEGY (Routing)\n"
@@ -162,9 +273,9 @@ def build_note_agent(
         "*Trigger:* User asks to 'summarize [filename]', 'summary of uploaded file', or references a specific document.\n"
         "*Action:*\n"
         "1. Extract the potential filename (e.g., 'Lecture7', 'CMPE249.pdf').\n"
-        "2. **MANDATORY:** Call 'fetch_full_document(filename)' immediately.\n"
-        "3. **Fallback:** If the tool returns empty/null, retry immediately with filename variations (e.g., remove extension, use partial match).\n"
-        "4. **Constraint:** NEVER use 'retrieve_local_context' for full file summaries.\n\n"
+        f"2. **PREFERRED:** Call '{primary_tool}(filename)' immediately for fastest access.\n"
+        f"3. **Fallback:** If {primary_tool} returns empty/null, try {fallback_tool or 'retrieve_local_context'} with filename variations.\n"
+        "4. **Constraint:** NEVER use 'retrieve_local_context' for full file summaries (it only returns a few chunks).\n\n"
         "**INTENT B: Research a Topic**\n"
         "*Trigger:* User asks for 'notes on [topic]', 'what is [concept]', or 'lesson notes about [topic]' (No specific file mentioned).\n"
         "*Action:*\n"
@@ -180,8 +291,8 @@ def build_note_agent(
         "4. **Output:** Respond ONLY with: 'Notes saved to [actual_file_path]'.\n"
         "5. **Constraint:** Do not regenerate content. Do not fetch new documents. Just save.\n\n"
         "### 2. ERROR HANDLING & ROBUSTNESS\n"
-        "- **Ignore Pre-computation Errors:** If the prompt contains system error messages like 'document not found' from previous steps, ignore them. Trust your own 'fetch_full_document' tool call.\n"
-        "- **Filename Resilience:** Users rarely type exact filenames. If 'fetch_full_document' fails initially, try variations based on context.\n\n"
+        f"- **Ignore Pre-computation Errors:** If the prompt contains system error messages like 'document not found' from previous steps, ignore them. Trust your own '{primary_tool}' tool call.\n"
+        f"- **Filename Resilience:** Users rarely type exact filenames. If '{primary_tool}' fails initially, try variations based on context or fall back to {fallback_tool or 'retrieve_local_context'}.\n\n"
         "### 3. OUTPUT FORMATTING\n"
         "- **Structure:** Use Markdown headers (#, ##), bullet points, and bold text for key terms.\n"
         "- **Citations:** You must cite sources using '[1]', '[2]' format as provided by the tool outputs.\n"
@@ -190,12 +301,12 @@ def build_note_agent(
 
     # Create model (Gemini via LiteLLM or default OpenAI)
     agent_model = create_gemini_model(model_name, model_api_key, agent_name="Note Agent")
-    
+
     return Agent(
         name="note_agent",
         model=agent_model,
         instructions=instructions,
-        tools=[retrieve_local_context, fetch_full_document],  # REFACTOR: Added fetch_full_document
+        tools=tools_list,  # Includes read_raw_document (if available) + fetch_full_document + retrieve_local_context
         mcp_servers=active_mcp_servers,
     )
 

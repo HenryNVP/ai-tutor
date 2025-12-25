@@ -187,6 +187,7 @@ class TutorAgent:
         note_agent_config: Optional[NoteAgentConfig] = None,
         qa_agent_config: Optional[AgentConfig] = None,
         quiz_agent_config: Optional[AgentConfig] = None,
+        document_cache: Optional[Any] = None,
     ):
         """
         Initialize the multi-agent system with all required dependencies.
@@ -233,6 +234,7 @@ class TutorAgent:
         self.note_agent_config = note_agent_config
         self.qa_agent_config = qa_agent_config
         self.quiz_agent_config = quiz_agent_config
+        self.document_cache = document_cache
         
         # Temporary context for quiz generation (set during answer() calls)
         self._active_profile: Optional[LearnerProfile] = None
@@ -299,6 +301,7 @@ class TutorAgent:
             mcp_server_names=list(self.mcp_servers.keys()),
             model_name=note_model_name,
             model_api_key=note_api_key,
+            document_cache=self.document_cache,  # Pass document cache for direct text access
         )
         # Configure Quiz Agent model (Gemini via LiteLLM or default)
         quiz_model_name = None

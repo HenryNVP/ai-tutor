@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 from tqdm import tqdm
 
@@ -14,7 +14,7 @@ from ai_tutor.ingestion.domain_classifier import DomainClassifier
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.ingestion.parsers import parse_path
 from ai_tutor.retrieval.vector_store import VectorStore
-from ai_tutor.storage import ChunkJsonlStore
+from ai_tutor.storage import ChunkJsonlStore, DocumentCache
 from ai_tutor.agents.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,7 @@ class IngestionPipeline:
         embedder: EmbeddingClient,
         vector_store: VectorStore,
         chunk_store: ChunkJsonlStore,
+        document_cache: Optional[DocumentCache] = None,
         use_ai_domain_detection: bool = True,
     ):
         """
@@ -143,6 +144,12 @@ class IngestionPipeline:
         self.embedder = embedder
         self.vector_store = vector_store
         self.chunk_store = chunk_store
+        # Initialize document cache if path is provided
+        if document_cache is None:
+            # Create cache from settings path
+            self.document_cache = DocumentCache(settings.paths.document_cache)
+        else:
+            self.document_cache = document_cache
         
         # Initialize domain classifier
         llm_client = None
@@ -285,6 +292,10 @@ class IngestionPipeline:
             
             documents.append(document)
             
+            # Store parsed document in cache (before chunking) for Note Agent
+            # This allows Note Agent to read full document text directly when using Gemini
+            self.document_cache.store(document)
+            
             # Stage 3: Chunk document into overlapping segments
             doc_chunks = chunk_document(document, chunking_config)
             
@@ -339,4 +350,76 @@ class IngestionPipeline:
         # Log summary statistics
         logger.info("Ingested %s documents into %s chunks.", len(documents), len(chunks))
         return IngestionResult(documents=documents, chunks=chunks, skipped=skipped)
+
+    def cache_documents_only(self, paths: Iterable[Path]) -> IngestionResult:
+        """
+        Parse and cache documents only (skip chunking/embedding).
+        
+        This is a lightweight ingestion mode for demo mode where we only need to:
+        1. Parse documents (extract text)
+        2. Store in document cache (for Note Agent to read directly)
+        
+        Skips:
+        - Chunking
+        - Embedding generation
+        - Vector store storage
+        - Chunk store storage
+        
+        This is much faster and suitable when:
+        - Using Gemini with large context window (Note Agent can read full docs)
+        - Demo mode (simplified workflow)
+        - Only need document text, not semantic search
+        
+        Parameters
+        ----------
+        paths : Iterable[Path]
+            Iterable of file paths to parse and cache.
+        
+        Returns
+        -------
+        IngestionResult
+            Result object containing:
+            - documents: List of successfully parsed Document objects
+            - chunks: Empty list (no chunks created)
+            - skipped: List of file paths that failed parsing
+        """
+        documents: List[Document] = []
+        skipped: List[Path] = []
+
+        # Process each document with progress tracking
+        for path in tqdm(list(paths), desc="Caching documents"):
+            try:
+                # Stage 1: Parse document (PDF/Markdown/TXT → structured text)
+                document = parse_path(path)
+            except Exception as exc:  # noqa: BLE001
+                # Isolate parsing errors - continue with remaining files
+                logger.exception("Failed to parse %s: %s", path, exc)
+                skipped.append(path)
+                continue
+            
+            # Stage 2: Classify domain using rule-based methods only (fast)
+            initial_classification = self.domain_classifier.classify_from_path(path)
+            
+            # Attach domain metadata to document
+            document.metadata.primary_domain = initial_classification.primary_domain
+            document.metadata.secondary_domains = initial_classification.secondary_domains
+            document.metadata.domain_tags = initial_classification.tags
+            document.metadata.domain_confidence = initial_classification.confidence
+            # Legacy field for backward compatibility
+            document.metadata.domain = initial_classification.primary_domain
+            document.metadata.extra.setdefault("domain", initial_classification.primary_domain)
+            
+            documents.append(document)
+            
+            # Store parsed document in cache (for Note Agent to read directly)
+            self.document_cache.store(document)
+            
+            logger.debug(
+                f"Cached {path.name}: primary={initial_classification.primary_domain}, "
+                f"confidence={initial_classification.confidence:.2f}"
+            )
+
+        # Log summary statistics
+        logger.info("Cached %s documents (no chunks created).", len(documents))
+        return IngestionResult(documents=documents, chunks=[], skipped=skipped)
 

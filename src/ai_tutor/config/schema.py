@@ -83,6 +83,7 @@ class PathsConfig(BaseModel):
     processed_data_dir: Path = Field(Path("data/processed"))
     vector_store_dir: Path = Field(Path("data/vector_store"))
     chunks_index: Path = Field(Path("data/processed/chunks.jsonl"))
+    document_cache: Path = Field(Path("data/processed/documents.jsonl"), description="Cache for parsed documents (before chunking) for Note Agent")
     logs_dir: Path = Field(Path("logs"))
     profiles_dir: Path = Field(Path("data/processed/profiles"))
 

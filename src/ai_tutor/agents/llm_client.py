@@ -43,10 +43,10 @@ class LLMClient:
                 self.client = None  # Will use LiteLLM instead
         else:
             # For OpenAI models
-            key = api_key or os.getenv("OPENAI_API_KEY")
-            if not key and client is None:
-                raise RuntimeError("OPENAI_API_KEY must be set or an OpenAI client provided.")
-            self.client = client or OpenAI(api_key=key)
+        key = api_key or os.getenv("OPENAI_API_KEY")
+        if not key and client is None:
+            raise RuntimeError("OPENAI_API_KEY must be set or an OpenAI client provided.")
+        self.client = client or OpenAI(api_key=key)
 
     def generate(self, messages: List[Dict[str, Any]], **kwargs: Any) -> str:
         if self.use_gemini:

@@ -108,7 +108,7 @@ def build_quiz_agent(
 
     # Create model (Gemini via LiteLLM or default OpenAI)
     agent_model = create_gemini_model(model_name, model_api_key, agent_name="Quiz Agent")
-    
+
     return Agent(
         name="quiz_agent",
         model=agent_model,

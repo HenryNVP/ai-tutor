@@ -20,14 +20,14 @@ def render_corpus_management_tab(system: TutorSystem) -> None:
 	col1, col2 = st.columns([1, 1])
 	
 	with col1:
-		st.subheader("📤 Upload & Ingest Documents")
+		st.subheader("📤 Upload & Process Documents")
 		st.markdown("""
-		Upload PDF, Markdown, or TXT files to add them to the permanent knowledge base.
-		These documents will be chunked, embedded, and stored in the vector database for future retrieval.
+		Upload PDF, Markdown, or TXT files to add them to the knowledge base.
+		Documents will be processed and cached for use with Q&A, quiz generation, and note-taking.
 		""")
 		
 		uploaded_files = st.file_uploader(
-			"Select files to ingest into vector store",
+			"Select files to process",
 			type=["pdf", "txt", "md"],
 			accept_multiple_files=True,
 			key="corpus_uploader"
@@ -35,13 +35,37 @@ def render_corpus_management_tab(system: TutorSystem) -> None:
 		
 		if uploaded_files:
 			st.session_state.uploaded_files_for_ingestion = uploaded_files
-			st.success(f"Queued {len(uploaded_files)} file(s) for ingestion.")
+			st.success(f"Queued {len(uploaded_files)} file(s) for processing.")
 
-		if st.button("🚀 Ingest queued files", use_container_width=True):
-			with st.spinner("Ingesting files..."):
-				result = system.ingestion_pipeline.ingest_files(uploaded_files)
+		if st.button("🚀 Process queued files", use_container_width=True):
+			with st.spinner("Processing files..."):
+				# Save uploaded files to disk first
+				from pathlib import Path
+				upload_dir = Path("data/uploads")
+				upload_dir.mkdir(parents=True, exist_ok=True)
+				saved_paths = []
+				for uploaded_file in uploaded_files:
+					if not uploaded_file.name:
+						continue
+					file_path = upload_dir / uploaded_file.name
+					file_path.write_bytes(uploaded_file.getvalue())
+					saved_paths.append(file_path)
+				
+				# In demo mode, only cache documents (no chunking/embedding)
+				if system.settings.demo_mode:
+					result = system.ingestion_pipeline.cache_documents_only(saved_paths)
+				else:
+					result = system.ingestion_pipeline.ingest_paths(saved_paths)
 				st.session_state.ingestion_result = result
-			st.success("Ingestion completed.")
+				
+				# Clean up uploaded files
+				for path in saved_paths:
+					try:
+						if path.exists():
+							path.unlink()
+					except Exception:
+						pass
+			st.success("Processing completed.")
 
 	with col2:
 		st.subheader("📈 Corpus Overview")
