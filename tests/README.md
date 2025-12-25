@@ -98,6 +98,25 @@ Structure verification tests (integrated from `scripts/` verification scripts):
 
 **Note**: Basic API endpoint tests (health, answer, quiz creation/evaluation) were removed as they're fully covered by E2E tests in `test_simplified_api.py`.
 
+**File: `test_mcp_servers.py`** (5 tests) - ⚠️ **Requires MCP servers running**
+
+Integration tests for MCP server functionality:
+
+- `test_mcp_servers_available` - Verifies MCP servers can be loaded
+- `test_chroma_mcp_tools` - Verifies ChromaDB MCP server provides expected tools
+- `test_filesystem_mcp_tools` - Verifies Filesystem MCP server provides expected tools
+- `test_list_collections_schema` - Verifies `list_collections` has correct schema for Gemini compatibility
+- `test_no_duplicate_tools` - Verifies MCP servers don't have duplicate tool names
+
+**File: `test_gemini_mcp_compat.py`** (4 tests) - ⚠️ **Requires MCP servers running**
+
+Integration tests for Gemini MCP compatibility:
+
+- `test_gemini_compat_configuration` - Verifies Gemini compatibility configuration is applied
+- `test_get_gemini_compatible_mcp_servers` - Verifies compatibility layer returns servers correctly
+- `test_gemini_compat_with_non_gemini_model` - Verifies non-Gemini models don't trigger compatibility mode
+- `test_gemini_mcp_integration` - Verifies Gemini models can use MCP servers (requires `GEMINI_API_KEY`)
+
 ### End-to-End Tests (`tests/e2e/`)
 
 Full system tests with real services (may require API keys and MCP servers).
@@ -130,6 +149,19 @@ Full API tests with real TutorSystem (or mocks when dependency override works):
 - `test_demo_mode_vs_production` - Demo mode vs production mode differences
 - `test_multiple_sessions_independent` - Multiple learners have independent sessions
 
+**File: `test_lecture8_document.py`** (5 tests) - ⚠️ **Uses real PDF document**
+
+E2E tests using CMPE249 Lecture8 PDF (object detection content):
+
+- `test_lecture8_qa_questions` - QA: Ask multiple questions about document content (BiFPN, R-CNN, FPN vs PANet, weighted fusion)
+- `test_lecture8_quiz_generation` - Generate 5-question quiz on object detection methods
+- `test_lecture8_summarize` - Summarize the entire Lecture8 document
+- `test_lecture8_note_generation` - Generate detailed study notes on BiFPN section
+- `test_lecture8_combined_flow` - Complete workflow: upload → QA → summarize → notes → quiz
+
+**Document**: `data/uploads/CMPE249 Lecture8 final0916.pdf`  
+**Content**: Deep learning object detection (FPN, PANet, BiFPN, NAS-FPN, R-CNN, Fast R-CNN, Faster R-CNN, YOLO, SSD, Mask-RCNN)
+
 ## Running Tests
 
 See [QUICK_START.md](QUICK_START.md) for quick reference commands.
@@ -147,6 +179,13 @@ pytest tests/ -m "" -v
 pytest tests/ -m unit -v
 pytest tests/ -m integration -v
 pytest tests/ -m e2e -v
+pytest tests/ -m mcp -v  # MCP server tests (requires servers running)
+
+# Run MCP tests (requires MCP servers to be started first)
+# Start servers: cd chroma_mcp_server && python server.py
+#              cd filesystem_mcp_server && python server.py
+pytest tests/integration/test_mcp_servers.py -m mcp -v
+pytest tests/integration/test_gemini_mcp_compat.py -m mcp -v
 ```
 
 ## Test Requirements
@@ -154,6 +193,10 @@ pytest tests/ -m e2e -v
 - **Unit tests**: No dependencies, just Python + pytest
 - **Integration tests**: Project dependencies (fastapi, etc.)
 - **E2E tests**: Full dependencies + `OPENAI_API_KEY` (optional: MCP servers)
+- **MCP tests** (`@pytest.mark.mcp`): Requires MCP servers running:
+  - ChromaDB MCP: `cd chroma_mcp_server && python server.py` (port 8200)
+  - Filesystem MCP: `cd filesystem_mcp_server && python server.py` (port 8100)
+  - Tests will skip gracefully if servers aren't available
 
 ## Configuration
 
@@ -163,8 +206,10 @@ pytest tests/ -m e2e -v
 ## Safety Features
 
 - E2E tests skipped by default to prevent crashes
+- MCP tests skipped by default (require servers running)
 - Import guards for graceful skipping if dependencies missing
-- Markers for easy filtering (`unit`, `integration`, `e2e`)
+- MCP tests skip gracefully if servers aren't available
+- Markers for easy filtering (`unit`, `integration`, `e2e`, `mcp`)
 
 ## Scripts Tests (`scripts/`)
 
@@ -176,4 +221,4 @@ The `scripts/` directory contains one remaining verification script:
 - Tests agent MCP tool usage end-to-end
 - **Purpose**: Manual MCP integration verification
 
-**Note**: Other verification scripts (`test_api_structure.py`, `test_simplifications.py`, `test_simplified_system.py`) have been integrated into `tests/integration/test_structure_verification.py` and can be run via pytest.
+**Note**: MCP server tests are now integrated into pytest. See `test_mcp_servers.py` and `test_gemini_mcp_compat.py` in `tests/integration/`. Other verification scripts (`test_api_structure.py`, `test_simplifications.py`, `test_simplified_system.py`) have been integrated into `tests/integration/test_structure_verification.py` and can be run via pytest.

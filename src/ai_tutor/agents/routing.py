@@ -122,7 +122,14 @@ def detect_ingestion_request(message: str) -> bool:
     lowered = message.lower()
     
     # Exclude questions about document content
-    if any(phrase in lowered for phrase in ["what is", "what does", "tell me about", "explain", "summarize"]):
+    # Check for question patterns that indicate content queries, not ingestion requests
+    content_question_patterns = [
+        "what is", "what does", "what are", "what was",
+        "how does", "how do", "how is", "how are", "how can",
+        "tell me about", "explain", "summarize", "describe",
+        "about the document", "about the file", "in the document", "in the file"
+    ]
+    if any(phrase in lowered for phrase in content_question_patterns):
         return False
     
     keywords = [
