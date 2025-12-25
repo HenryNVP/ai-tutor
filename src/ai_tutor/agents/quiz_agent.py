@@ -6,6 +6,7 @@ from agents import Agent, function_tool
 
 from ai_tutor.learning.models import LearnerProfile
 from ai_tutor.learning.quiz import QuizService
+from .model_utils import create_gemini_model
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +18,32 @@ def build_quiz_agent(
     get_extra_context: Callable[[], Optional[str]],
     get_source_filter: Callable[[], Optional[List[str]]],
     get_documents_only: Callable[[], bool],
+    model_name: Optional[str] = None,
+    model_api_key: Optional[str] = None,
 ) -> Agent:
-    """Create an agent that owns quiz generation responsibilities."""
+    """
+    Create an agent that owns quiz generation responsibilities.
+    
+    Parameters
+    ----------
+    quiz_service : QuizService
+        Service for generating quizzes.
+    state
+        Agent state for storing quiz results.
+    get_profile : Callable
+        Function to get learner profile.
+    get_extra_context : Callable
+        Function to get extra context.
+    get_source_filter : Callable
+        Function to get source filter hints.
+    get_documents_only : Callable
+        Function to check if documents_only flag is set.
+    model_name : Optional[str]
+        Model identifier for Quiz Agent. For Gemini via LiteLLM, use 'gemini/gemini-2.0-flash'.
+        If None, uses default 'gpt-4o-mini'.
+    model_api_key : Optional[str]
+        API key for the model. If None, reads from environment variables.
+    """
 
     _quiz_cache: dict[str, str] = {}
 
@@ -81,9 +106,12 @@ def build_quiz_agent(
         "- Do not answer academic questions — only prepare quizzes using the tool.\n"
     )
 
+    # Create model (Gemini via LiteLLM or default OpenAI)
+    agent_model = create_gemini_model(model_name, model_api_key, agent_name="Quiz Agent")
+    
     return Agent(
         name="quiz_agent",
-        model="gpt-4o-mini",
+        model=agent_model,
         instructions=instructions,
         tools=[generate_quiz],
     )

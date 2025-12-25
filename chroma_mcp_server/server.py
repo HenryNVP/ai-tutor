@@ -70,11 +70,18 @@ _embedding_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="embe
 
 
 @mcp.tool()
-def list_collections() -> str:
+def list_collections(_unused: str = "") -> str:
     """List all collections in the Chroma database.
     
     Returns a formatted string with all collection names, document counts, and their metadata.
+    
+    Note: The _unused parameter is included for Gemini compatibility - it ensures
+    the function schema has OBJECT type parameters. This parameter is ignored and can be omitted.
+    
+    Args:
+        _unused: Unused parameter (for Gemini schema compatibility). Ignored.
     """
+    # _unused parameter is ignored - it's only for Gemini schema compatibility
     print("[debug-server] list_collections()")
     
     try:

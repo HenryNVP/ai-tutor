@@ -5,7 +5,9 @@ from typing import Any, List, Optional
 
 from agents import Agent
 
+from .model_utils import create_gemini_model
 from .retrieval_tools import build_retrieve_local_context_tool
+from .mcp_compat import get_gemini_compatible_mcp_servers
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +18,30 @@ def build_qa_agent(
     min_confidence: float,
     mcp_servers: Optional[List[Any]] = None,
     mcp_server_names: Optional[List[str]] = None,
+    model_name: Optional[str] = None,
+    model_api_key: Optional[str] = None,
 ) -> Agent:
-    """Create the local QA agent that consults the vector store."""
+    """
+    Create the local QA agent that consults the vector store.
+    
+    Parameters
+    ----------
+    retriever
+        Vector retriever for document search.
+    state
+        Agent state for storing context and citations.
+    min_confidence : float
+        Minimum similarity score for retrieval results.
+    mcp_servers : Optional[List[Any]]
+        List of MCP server connections.
+    mcp_server_names : Optional[List[str]]
+        List of MCP server names.
+    model_name : Optional[str]
+        Model identifier for QA Agent. For Gemini via LiteLLM, use 'gemini/gemini-2.0-flash'.
+        If None, uses default 'gpt-4o-mini'.
+    model_api_key : Optional[str]
+        API key for the model. If None, reads from environment variables.
+    """
 
     retrieve_local_context = build_retrieve_local_context_tool(
         retriever,
@@ -26,8 +50,12 @@ def build_qa_agent(
         log_prefix="QA",
     )
 
-    # If MCP servers are available, use them; otherwise use direct retriever
-    active_mcp_servers = [server for server in (mcp_servers or []) if server]
+    # Filter MCP servers for Gemini compatibility
+    active_mcp_servers, active_mcp_names = get_gemini_compatible_mcp_servers(
+        mcp_servers,
+        mcp_server_names,
+        model_name,
+    )
     
     if active_mcp_servers:
         logger.info(f"[QA Agent] Building with {len(active_mcp_servers)} MCP server(s) - tools will be automatically available")
@@ -79,9 +107,12 @@ def build_qa_agent(
         "- For greetings and simple conversational prompts, respond directly without retrieval."
     )
 
+    # Create model (Gemini via LiteLLM or default OpenAI)
+    agent_model = create_gemini_model(model_name, model_api_key, agent_name="QA Agent")
+    
     return Agent(
         name="qa_agent",
-        model="gpt-4o-mini",
+        model=agent_model,
         instructions=instructions,
         tools=[retrieve_local_context],
         mcp_servers=active_mcp_servers,  # Add MCP servers if provided (shared connection, tools cached)

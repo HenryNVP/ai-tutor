@@ -5,9 +5,9 @@ project_name: "AI Tutor Demo"
 
 # LLM Configuration (Essential)
 model:
-  name: "gpt-4o-mini"           # Fast and cost-effective for demo
-  provider: "openai"
-  temperature: 0.7              # Slightly higher for more natural responses
+  name: "gemini/gemini-2.0-flash"  # Gemini Flash for large context window
+  provider: "openai"               # Provider name (not used for Gemini)
+  temperature: 0.7                 # Slightly higher for more natural responses
   max_output_tokens: 2048
   mode: "chat"
 
@@ -55,3 +55,22 @@ course_defaults:
 # Demo Mode (Enabled - simplifies features)
 demo_mode: true                  # Disables personalization, uses static defaults
 
+# Agent Configurations (using Gemini Flash for large context window)
+
+# Note Agent Configuration (for summarization)
+note_agent:
+  model: "gemini/gemini-2.0-flash"  # Fast, cost-effective, 1M token context
+  api_key: null  # Uses GEMINI_API_KEY env var if null
+  use_full_context: true
+
+# QA Agent Configuration (for question answering)
+qa_agent:
+  model: "gemini/gemini-2.0-flash"  # Fast, cost-effective, 1M token context
+  api_key: null  # Uses GEMINI_API_KEY env var if null
+  use_full_context: true
+
+# Quiz Agent Configuration (for quiz generation)
+quiz_agent:
+  model: "gemini/gemini-2.0-flash"  # Fast, cost-effective, 1M token context
+  api_key: null  # Uses GEMINI_API_KEY env var if null
+  use_full_context: true

@@ -161,6 +161,7 @@ data/
 examples/
 *.csv
 chroma-mcp/
+mcp-server-gemini/
 
 # Chroma MCP server artifacts
 chroma_mcp_server/**

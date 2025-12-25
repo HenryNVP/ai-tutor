@@ -2,8 +2,8 @@ project_name: "Personal STEM Instructor"
 
 # LLM Configuration
 model:
-  name: "gpt-4o-mini"                  # Model for agent orchestration and quiz generation
-  provider: "openai"                    # OpenAI API
+  name: "gemini/gemini-2.0-flash"       # Gemini Flash for large context window
+  provider: "openai"                     # Provider name (not used for Gemini)
   temperature: 0.15                     # Low temperature for consistent, focused responses
   max_output_tokens: 2048               # Default max tokens (overridden for large quizzes)
   mode: "chat"                          # Chat mode for conversational context
@@ -51,16 +51,22 @@ course_defaults:
 # Demo Mode Configuration
 demo_mode: true  # Enable demo mode: disables personalization, simplifies features for demo showcase
 
-# Note Agent Configuration (for summarization with large context window)
+# Agent Configurations (using Gemini Flash for large context window)
+
+# Note Agent Configuration (for summarization)
 note_agent:
-  # Model for Note Agent. Use Gemini for large context window (1M tokens):
-  #   - "gemini/gemini-1.5-pro" (best quality, slower)
-  #   - "gemini/gemini-1.5-flash" (faster, cost-effective)
-  # Set to null to use default model (gpt-4o-mini)
-  model: null  # Example: "gemini/gemini-1.5-pro"
-  
-  # API key for Note Agent model. If null, reads from GEMINI_API_KEY env var
-  api_key: null  # Example: "your-gemini-api-key"
-  
-  # Use full document context for summarization (requires large context window model)
+  model: "gemini/gemini-2.0-flash"  # Fast, cost-effective, 1M token context
+  api_key: null  # Uses GEMINI_API_KEY env var if null
+  use_full_context: true
+
+# QA Agent Configuration (for question answering)
+qa_agent:
+  model: "gemini/gemini-2.0-flash"  # Fast, cost-effective, 1M token context
+  api_key: null  # Uses GEMINI_API_KEY env var if null
+  use_full_context: true
+
+# Quiz Agent Configuration (for quiz generation)
+quiz_agent:
+  model: "gemini/gemini-2.0-flash"  # Fast, cost-effective, 1M token context
+  api_key: null  # Uses GEMINI_API_KEY env var if null
   use_full_context: true

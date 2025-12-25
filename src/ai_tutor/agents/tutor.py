@@ -27,7 +27,7 @@ from .routing import (
 from .viz_agent import build_visualization_agent
 from .web import build_web_agent
 
-from ai_tutor.config.schema import RetrievalConfig, NoteAgentConfig
+from ai_tutor.config.schema import RetrievalConfig, NoteAgentConfig, AgentConfig
 from ai_tutor.data_models import RetrievalHit
 from ai_tutor.ingestion.embeddings import EmbeddingClient
 from ai_tutor.learning.models import LearnerProfile
@@ -185,6 +185,8 @@ class TutorAgent:
         quiz_service: QuizService,
         mcp_servers: Optional[Dict[str, Any]] = None,
         note_agent_config: Optional[NoteAgentConfig] = None,
+        qa_agent_config: Optional[AgentConfig] = None,
+        quiz_agent_config: Optional[AgentConfig] = None,
     ):
         """
         Initialize the multi-agent system with all required dependencies.
@@ -227,8 +229,10 @@ class TutorAgent:
         # Quiz and assessment infrastructure
         self.quiz_service = quiz_service
         
-        # Note Agent configuration (for Gemini support)
+        # Agent configurations (for Gemini support)
         self.note_agent_config = note_agent_config
+        self.qa_agent_config = qa_agent_config
+        self.quiz_agent_config = quiz_agent_config
         
         # Temporary context for quiz generation (set during answer() calls)
         self._active_profile: Optional[LearnerProfile] = None
@@ -263,12 +267,22 @@ class TutorAgent:
         logger.debug("[TutorAgent] Building specialist agents with persistent MCP context")
         self.ingestion_agent = build_ingestion_agent(self.ingest_fn)
         self.web_agent = build_web_agent(state=self.state)
+        
+        # Configure QA Agent model (Gemini via LiteLLM or default)
+        qa_model_name = None
+        qa_api_key = None
+        if self.qa_agent_config:
+            qa_model_name = self.qa_agent_config.model
+            qa_api_key = self.qa_agent_config.api_key
+        
         self.qa_agent = build_qa_agent(
             self.retriever, 
             self.state, 
             self.MIN_CONFIDENCE, 
             mcp_servers=list(self.mcp_servers.values()),  # Pass persistent MCP connections (tools cached per session)
             mcp_server_names=list(self.mcp_servers.keys()),  # Pass server names for proper detection
+            model_name=qa_model_name,
+            model_api_key=qa_api_key,
         )
         # Configure Note Agent model (Gemini via LiteLLM or default)
         note_model_name = None
@@ -286,6 +300,13 @@ class TutorAgent:
             model_name=note_model_name,
             model_api_key=note_api_key,
         )
+        # Configure Quiz Agent model (Gemini via LiteLLM or default)
+        quiz_model_name = None
+        quiz_api_key = None
+        if self.quiz_agent_config:
+            quiz_model_name = self.quiz_agent_config.model
+            quiz_api_key = self.quiz_agent_config.api_key
+        
         self.quiz_agent = build_quiz_agent(
             self.quiz_service,
             self.state,
@@ -293,6 +314,8 @@ class TutorAgent:
             get_extra_context=lambda: self._active_extra_context,
             get_source_filter=lambda: self._active_source_filter,
             get_documents_only=lambda: self._documents_only_request,
+            model_name=quiz_model_name,
+            model_api_key=quiz_api_key,
         )
         self.visualization_agent = build_visualization_agent(
             state=self.state,
@@ -789,6 +812,21 @@ class TutorAgent:
             logger.error("[TutorAgent] Agent %s failed: %s", agent.name, exc, exc_info=True)
             # Provide user-friendly error messages
             error_str = str(exc)
+            
+            # Handle Gemini function schema errors (MCP tool compatibility)
+            if "functionDeclaration parameters schema should be of type OBJECT" in error_str or \
+               "BadRequestError" in error_str and "schema" in error_str.lower():
+                logger.warning(
+                    "[TutorAgent] Gemini function schema error detected. "
+                    "This may be due to MCP tool compatibility issues. "
+                    "The agent will continue but some MCP tools may be unavailable."
+                )
+                return (
+                    f"I encountered a compatibility issue with some tools while using {agent.name}. "
+                    "This is a known issue with certain MCP tools and Gemini models. "
+                    "Please try your request again, or contact support if the issue persists."
+                )
+            
             if "429" in error_str or "rate_limit" in error_str.lower() or "tokens per min" in error_str.lower():
                 if agent.name == "ingestion_agent":
                     return (
@@ -858,6 +896,22 @@ class TutorAgent:
         saved_file_path = None
         try:
             result = await Runner.run(self.note_agent, input=prompt, session=session)
+        except Exception as exc:
+            error_str = str(exc)
+            # Handle Gemini function schema errors (MCP tool compatibility)
+            if "functionDeclaration parameters schema should be of type OBJECT" in error_str or \
+               "BadRequestError" in error_str and "schema" in error_str.lower():
+                logger.warning(
+                    "[TutorAgent] Note agent: Gemini function schema error. "
+                    "MCP tools may have compatibility issues. Attempting to continue..."
+                )
+                # Try to provide a helpful response despite the error
+                return (
+                    "I encountered a compatibility issue with some tools. "
+                    "This may be due to MCP tool schema compatibility with Gemini. "
+                    "Please try your request again, or use direct document access instead of MCP tools."
+                ), None
+            raise  # Re-raise if it's not a schema error
             
             # Try to detect saved file from tool calls or response text
             # Check if result has tool calls we can inspect

@@ -169,11 +169,13 @@ class TutorSystem:
         )
 
         # Build document ingestion pipeline
+        # Disable AI domain detection to avoid OpenAI API calls (use rule-based only)
         self.ingestion_pipeline = IngestionPipeline(
             settings=settings,
             embedder=self.embedder,
             vector_store=self.vector_store,
             chunk_store=self.chunk_store,
+            use_ai_domain_detection=False,  # Use rule-based classification only
         )
         
         # Normalize optional MCP servers (supports legacy single-server parameter)
@@ -193,6 +195,8 @@ class TutorSystem:
             quiz_service=self.quiz_service,
             mcp_servers=self.mcp_servers,
             note_agent_config=settings.note_agent,
+            qa_agent_config=settings.qa_agent,
+            quiz_agent_config=settings.quiz_agent,
         )
 
     @classmethod

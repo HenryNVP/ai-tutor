@@ -14,23 +14,28 @@ class ModelConfig(BaseModel):
     mode: str = Field("chat", description="chat or completion style.")
 
 
-class NoteAgentConfig(BaseModel):
-    """Configuration for the Note Agent (summarization)."""
+class AgentConfig(BaseModel):
+    """Configuration for individual agents (QA, Quiz, Note)."""
     
     model: str | None = Field(
         None,
-        description="Model name for Note Agent. If None, uses default model. "
-        "For Gemini via LiteLLM, use 'gemini/gemini-1.5-pro' or 'gemini/gemini-1.5-flash'."
+        description="Model name. For Gemini via LiteLLM, use 'gemini/gemini-2.0-flash' (recommended) "
+        "or 'gemini/gemini-1.5-pro'. If None, uses default model (gpt-4o-mini)."
     )
     api_key: str | None = Field(
         None,
-        description="API key for Note Agent model. If None, reads from environment variable "
+        description="API key for the model. If None, reads from environment variable "
         "(GEMINI_API_KEY for Gemini, or model-specific env var)."
     )
     use_full_context: bool = Field(
         True,
-        description="Use full document context for summarization (requires large context window model like Gemini)."
+        description="Use full document context when uploaded documents detected (requires large context window model like Gemini)."
     )
+
+
+class NoteAgentConfig(AgentConfig):
+    """Configuration for the Note Agent (summarization)."""
+    pass
 
 
 class EmbeddingConfig(BaseModel):
@@ -118,6 +123,14 @@ class Settings(BaseModel):
     note_agent: NoteAgentConfig = Field(
         default_factory=NoteAgentConfig,
         description="Configuration for Note Agent (summarization with large context window)."
+    )
+    qa_agent: AgentConfig = Field(
+        default_factory=AgentConfig,
+        description="Configuration for QA Agent (question answering)."
+    )
+    quiz_agent: AgentConfig = Field(
+        default_factory=AgentConfig,
+        description="Configuration for Quiz Agent (quiz generation)."
     )
 
     @validator("paths")

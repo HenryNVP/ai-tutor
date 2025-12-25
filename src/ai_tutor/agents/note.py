@@ -2,77 +2,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional
 
 from agents import Agent, function_tool
 
+from .model_utils import create_gemini_model
 from .retrieval_tools import build_retrieve_local_context_tool
+from .mcp_compat import get_gemini_compatible_mcp_servers
 from ai_tutor.data_models import RetrievalHit
 
 logger = logging.getLogger(__name__)
-
-
-def _create_note_agent_model(
-    model_name: Optional[str] = None,
-    api_key: Optional[str] = None,
-) -> Union[str, Any]:
-    """
-    Create model for Note Agent.
-    
-    If model_name starts with 'gemini/', uses LiteLLM with Gemini.
-    Otherwise, returns the model name string for default OpenAI model.
-    
-    Parameters
-    ----------
-    model_name : Optional[str]
-        Model identifier. For Gemini via LiteLLM, use 'gemini/gemini-1.5-pro' or 'gemini/gemini-1.5-flash'.
-        If None, uses default 'gpt-4o-mini'.
-    api_key : Optional[str]
-        API key for the model. If None, reads from environment variables.
-        
-    Returns
-    -------
-    Union[str, Any]
-        Model name string (for OpenAI) or LitellmModel instance (for Gemini).
-    """
-    if not model_name:
-        return "gpt-4o-mini"
-    
-    # Check if using Gemini via LiteLLM
-    if model_name.startswith("gemini/"):
-        try:
-            from agents.extensions.models.litellm_model import LitellmModel
-            
-            # Get API key from parameter or environment
-            gemini_api_key = api_key or os.getenv("GEMINI_API_KEY")
-            if not gemini_api_key:
-                logger.warning(
-                    "[Note Agent] Gemini model specified but GEMINI_API_KEY not found. "
-                    "Falling back to default model."
-                )
-                return "gpt-4o-mini"
-            
-            logger.info(
-                "[Note Agent] Using Gemini model via LiteLLM: %s",
-                model_name
-            )
-            return LitellmModel(model=model_name, api_key=gemini_api_key)
-        except ImportError:
-            logger.warning(
-                "[Note Agent] litellm not installed. Install with: pip install 'openai-agents[litellm]'. "
-                "Falling back to default model."
-            )
-            return "gpt-4o-mini"
-        except Exception as e:
-            logger.error(
-                "[Note Agent] Error creating LiteLLM model: %s. Falling back to default model.",
-                e
-            )
-            return "gpt-4o-mini"
-    
-    # Default: return model name string (for OpenAI)
-    return model_name
 
 
 def build_note_agent(
@@ -203,11 +142,17 @@ def build_note_agent(
                 "chunks": []
             })
 
-    active_mcp_servers = [server for server in (mcp_servers or []) if server]
+    # Filter MCP servers for Gemini compatibility
+    active_mcp_servers, active_mcp_names = get_gemini_compatible_mcp_servers(
+        mcp_servers,
+        mcp_server_names,
+        model_name,
+    )
+    
     if active_mcp_servers:
         logger.info("[Note Agent] MCP servers detected (%d)", len(active_mcp_servers))
-        if mcp_server_names:
-            logger.debug("[Note Agent] MCP server names: %s", ", ".join(mcp_server_names))
+        if active_mcp_names:
+            logger.debug("[Note Agent] MCP server names: %s", ", ".join(active_mcp_names))
 
     instructions = (
         "You are the Note-Taking Agent, responsible for creating accurate study notes and summaries from local documents.\n\n"
@@ -244,7 +189,7 @@ def build_note_agent(
     )
 
     # Create model (Gemini via LiteLLM or default OpenAI)
-    agent_model = _create_note_agent_model(model_name, model_api_key)
+    agent_model = create_gemini_model(model_name, model_api_key, agent_name="Note Agent")
     
     return Agent(
         name="note_agent",

@@ -4,10 +4,14 @@ import os
 import sys
 from pathlib import Path
 
-# Add project root to path so we can import apps module
+# Add project root and src directory to path so we can import ai_tutor and apps modules
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 # Disable MCP servers for all tests to prevent connection hangs
 # This must be set before any modules that check these env vars are imported
