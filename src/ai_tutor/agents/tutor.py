@@ -285,6 +285,7 @@ class TutorAgent:
             mcp_server_names=list(self.mcp_servers.keys()),  # Pass server names for proper detection
             model_name=qa_model_name,
             model_api_key=qa_api_key,
+            document_cache=self.document_cache,  # Pass document cache for direct text access
         )
         # Configure Note Agent model (Gemini via LiteLLM or default)
         note_model_name = None
