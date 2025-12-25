@@ -8,8 +8,9 @@
 # Python 3.10+
 pip install -r requirements.txt
 
-# Set your OpenAI API key
-export OPENAI_API_KEY=your_key_here
+# Set API keys
+export OPENAI_API_KEY=your_key_here      # For OpenAI models
+export GEMINI_API_KEY=your_key_here      # For Gemini models
 ```
 
 ### Launch the App
@@ -18,25 +19,29 @@ export OPENAI_API_KEY=your_key_here
 streamlit run apps/ui.py
 ```
 
-## Demo Mode
+### Launch FastAPI Backend
+
+```bash
+uvicorn apps.api:app --reload --port 8080
+```
+
+## Configuration
 
 Demo mode is **enabled by default** in `config/default.yaml`. It simplifies the system by:
 - ✅ Disabling personalization (faster startup)
 - ✅ Using static "stepwise" style (consistent experience)
-- ✅ Focusing on core RAG capabilities
+- ✅ Documents cached (no chunking/embedding in demo mode)
 
-### Using Demo Config
+**Edit `config/default.yaml` to customize:**
+```yaml
+model:
+  name: "gemini/gemini-2.0-flash"  # Main model
 
-For minimal configuration, use `config/demo.yaml`:
+demo_mode: true  # Enable demo mode
 
-```python
-from ai_tutor.system import TutorSystem
-system = TutorSystem.from_config('config/demo.yaml')
-```
-
-Or just use the default config (demo mode already enabled):
-```bash
-streamlit run apps/ui.py  # Uses config/default.yaml
+note_agent:
+  model: "gemini/gemini-2.0-flash"  # Agent-specific models
+  use_full_context: true
 ```
 
 ## Core Use Cases

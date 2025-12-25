@@ -351,13 +351,12 @@ quiz:
 
 ## 📚 Documentation
 
-- **[Getting Started](docs/GETTING_STARTED.md)** – Quick start guide and core use cases
-- **[Agents](docs/AGENTS.md)** – Detailed documentation of all 6 specialized agents
-- **[Gemini Setup](docs/GEMINI_SETUP.md)** – Using Gemini for Note Agent with large context window
-- **[Manual Testing](docs/MANUAL_TESTING.md)** – Step-by-step manual testing guide for use cases and multi-agent system
-- **[Architecture](docs/ARCHITECTURE.md)** – System design and data flow
-- **[Testing](docs/TESTING.md)** – Automated test documentation
-- **[Simplification](docs/SIMPLIFICATION.md)** – Simplification guide and demo mode
+- **[Getting Started](docs/GETTING_STARTED.md)** – Quick start and configuration
+- **[Agents](docs/AGENTS.md)** – All 6 specialized agents
+- **[Gemini](docs/GEMINI.md)** – Gemini integration and setup
+- **[Architecture](docs/ARCHITECTURE.md)** – System design
+- **[Testing](docs/TESTING.md)** – Automated tests
+- **[Manual Testing](docs/MANUAL_TESTING.md)** – Manual testing guide
 - **[MCP Servers](docs/mcp.md)** – MCP server setup (optional)
 
 ## 📝 License
