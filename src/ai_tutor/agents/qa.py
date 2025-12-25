@@ -227,8 +227,8 @@ def build_qa_agent(
         "- For greetings and simple conversational prompts, respond directly without retrieval."
     )
 
-    # Create model (Gemini via LiteLLM or default OpenAI)
-    agent_model = create_gemini_model(model_name, model_api_key, agent_name="QA Agent")
+    # Create model (Gemini via LiteLLM or default OpenAI) with usage tracking
+    agent_model, model_settings = create_gemini_model(model_name, model_api_key, agent_name="QA Agent")
 
     return Agent(
         name="qa_agent",
@@ -236,4 +236,5 @@ def build_qa_agent(
         instructions=instructions,
         tools=tools_list,  # Includes read_raw_document (if available) + retrieve_local_context
         mcp_servers=active_mcp_servers,  # Add MCP servers if provided (shared connection, tools cached)
+        model_settings=model_settings,  # Enable usage tracking for LiteLLM models
     )

@@ -106,13 +106,14 @@ def build_quiz_agent(
         "- Do not answer academic questions — only prepare quizzes using the tool.\n"
     )
 
-    # Create model (Gemini via LiteLLM or default OpenAI)
-    agent_model = create_gemini_model(model_name, model_api_key, agent_name="Quiz Agent")
+    # Create model (Gemini via LiteLLM or default OpenAI) with usage tracking
+    agent_model, model_settings = create_gemini_model(model_name, model_api_key, agent_name="Quiz Agent")
 
     return Agent(
         name="quiz_agent",
         model=agent_model,
         instructions=instructions,
         tools=[generate_quiz],
+        model_settings=model_settings,  # Enable usage tracking for LiteLLM models
     )
 
