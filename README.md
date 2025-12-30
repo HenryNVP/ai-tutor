@@ -427,13 +427,6 @@ demo_mode: true  # Caches documents only (no chunking/embedding)
 
 ## ⚠️ Notes
 
-### Rate Limiting
-
-When using Gemini API, you may encounter rate limit errors (429) during testing or heavy usage. The system includes:
-- Automatic retries with exponential backoff (up to 5 retries)
-- Delays between requests in E2E tests
-- If rate limits persist, wait a few minutes between test runs or check your API quota
-
 ### Demo Mode vs Full Ingestion
 
 - **Demo Mode** (default): Documents are cached only (parsed, not chunked/embedded). Ideal for large context models like Gemini that can process full documents.
