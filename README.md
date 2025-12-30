@@ -24,9 +24,35 @@ An intelligent tutoring system that ingests STEM course materials, answers quest
 ```bash
 # Python 3.10+
 pip install -r requirements.txt
+```
 
-# Set your OpenAI API key
-export OPENAI_API_KEY=your_key_here
+### API Keys & Model Configuration
+
+The system supports both **OpenAI** and **Gemini** models. Set the appropriate API keys:
+
+```bash
+# For OpenAI models (e.g., gpt-4o-mini, gpt-4o)
+export OPENAI_API_KEY=your_openai_key_here
+
+# For Gemini models (e.g., gemini-2.0-flash, gemini-1.5-pro)
+export GEMINI_API_KEY=your_gemini_key_here
+```
+
+**Default Configuration** (`config/default.yaml`):
+- **Model**: `gemini/gemini-2.0-flash` (recommended for large context window)
+- **All Agents**: Use Gemini Flash by default
+- **API Key**: Reads from `GEMINI_API_KEY` environment variable
+
+**To use OpenAI instead**, edit `config/default.yaml`:
+```yaml
+model:
+  name: "gpt-4o-mini"  # or "gpt-4o"
+  # ... other settings
+
+# Individual agents can also be configured:
+note_agent:
+  model: "gpt-4o-mini"
+  api_key: null  # Uses OPENAI_API_KEY env var
 ```
 
 ### Demo Mode
@@ -35,7 +61,10 @@ The system includes demo mode (enabled by default in `config/default.yaml`) whic
 - ✅ Disables personalization (faster startup, simpler code)
 - ✅ Uses static difficulty/style (consistent experience)
 - ✅ Simplified routing (keyword-based only)
+- ✅ **Document caching only** – Documents are parsed and cached but not chunked/embedded (faster for large context models like Gemini)
 - ✅ Focuses on core RAG capabilities
+
+**Note**: In demo mode, documents are cached for direct access by agents using large context models (e.g., Gemini with 1M+ token context). Full chunking and embedding are skipped for faster processing.
 
 **Alternative**: Use `config/demo.yaml` for minimal configuration:
 ```bash
@@ -58,7 +87,7 @@ The app opens at `http://localhost:8501` with two tabs:
 ### Launch the FastAPI Backend
 
 ```bash
-uvicorn apps.api:app --reload --port 8080
+uvicorn apps.api:app --reload --port 8000
 ```
 
 Endpoints:
@@ -70,7 +99,7 @@ Endpoints:
 
 ### (Optional) Start MCP Servers
 
-Enable richer tool access by launching the MCP servers before opening the UI:
+Enable richer tool access by launching the MCP servers before opening the UI. **Required for file operations** (e.g., saving lesson notes to files):
 
 ```bash
 # Terminal 1 — Chroma retrieval tools (collections, queries, etc.)
@@ -92,6 +121,8 @@ export FS_MCP_USE_SERVER=true         # Filesystem MCP (port 8100 by default)
 ```
 
 You can customise ports and root directories via `MCP_PORT`, `FS_MCP_PORT`, and `FS_MCP_ROOT`. The sidebar shows connection status and restart hints if a server is unavailable.
+
+**Note**: The filesystem MCP server is required for the Note Agent to save lesson notes to files. Without it, the agent can generate notes but cannot save them to disk.
 
 ## 💬 How to Use
 
@@ -120,8 +151,10 @@ You can customise ports and root directories via `MCP_PORT`, `FS_MCP_PORT`, and 
    ```
    You: "Create lesson notes about RegNet"
    AI: [Generates structured notes from uploaded documents]
-   You: "Save these notes to a file"
-   AI: "Notes saved to data/generated/regnet_notes.txt"
+   
+   # Or create and save in one step:
+   You: "Create a lesson note file about the uploaded document"
+   AI: "Notes saved to data/generated/lesson_note_regnet.txt"
    ```
 
 5. **Generate Quizzes from Documents**
@@ -157,6 +190,8 @@ You can customise ports and root directories via `MCP_PORT`, `FS_MCP_PORT`, and 
 # Lesson Notes
 "Create lesson notes about RegNet"
 "Create lesson notes from the uploaded file"
+"Create a lesson note file about the uploaded document"  # Creates and saves to file
+"Summarize the uploaded document"  # Returns summary without saving
 
 # Quizzes
 "Create 10 review quizzes from the uploaded file"
@@ -202,9 +237,11 @@ Requests are automatically routed based on keywords (e.g., "quiz" → Quiz Agent
 
 **1. Document Ingestion**
 - Supports PDF, TXT, Markdown
-- Semantic chunking (512 tokens)
-- Vector embeddings (all-MiniLM-L6-v2)
+- **Document Cache** – Parsed documents stored for direct access (demo mode)
+- Semantic chunking (512 tokens) – Full ingestion mode
+- Vector embeddings (all-MiniLM-L6-v2) – Full ingestion mode
 - Metadata tracking (title, page, source)
+- **Demo Mode**: Documents cached only (no chunking/embedding) for faster processing with large context models
 
 **2. Retrieval System**
 - ChromaDB vector store (default, production-ready)
@@ -322,11 +359,15 @@ data/
 ├── raw/                      # Original documents (PDFs, MD, TXT)
 ├── uploads/                  # CSV files for visualization
 ├── processed/
-│   ├── chunks.jsonl         # Extracted and chunked content
+│   ├── chunks.jsonl         # Extracted and chunked content (full ingestion mode)
+│   ├── documents.jsonl       # Document cache (parsed documents, demo mode)
 │   ├── profiles/            # Learner profiles (JSON)
 │   └── sessions.sqlite      # Conversation history
+├── generated/               # Generated files (notes, quizzes, charts, code)
+│   ├── lesson_note_*.txt    # Lesson notes saved by Note Agent
+│   └── ...
 └── vector_store/
-    ├── embeddings.npy       # Vector embeddings
+    ├── embeddings.npy       # Vector embeddings (full ingestion mode)
     └── metadata.json        # Chunk metadata
 ```
 
@@ -335,29 +376,68 @@ data/
 Edit `config/default.yaml`:
 
 ```yaml
+# LLM Configuration
 model:
-  name: gpt-4o-mini
-  temperature: 0.7
-  max_output_tokens: 1024  # Auto-adjusted for large quizzes
+  name: "gemini/gemini-2.0-flash"  # or "gpt-4o-mini" for OpenAI
+  temperature: 0.15
+  max_output_tokens: 2048
 
+# Individual Agent Configuration
+note_agent:
+  model: "gemini/gemini-2.0-flash"  # Large context for full document access
+  api_key: null  # Uses GEMINI_API_KEY env var if null
+  use_full_context: true
+
+qa_agent:
+  model: "gemini/gemini-2.0-flash"
+  api_key: null
+  use_full_context: true
+
+quiz_agent:
+  model: "gemini/gemini-2.0-flash"
+  api_key: null
+  use_full_context: true
+
+# Retrieval Configuration
 retrieval:
-  top_k: 8
-  embedding_model: all-MiniLM-L6-v2
+  top_k: 5  # Auto-increased to 50 for uploaded document queries
 
-quiz:
-  default_questions: 4
-  max_questions: 40
+# Embedding Model (for full ingestion mode)
+embeddings:
+  model: "BAAI/bge-base-en"  # Local embeddings (no API calls)
+  provider: "sentence-transformers"
+
+# Demo Mode
+demo_mode: true  # Caches documents only (no chunking/embedding)
 ```
+
+**Model Options**:
+- **Gemini**: `gemini/gemini-2.0-flash` (recommended, 1M+ token context), `gemini/gemini-1.5-pro`
+- **OpenAI**: `gpt-4o-mini`, `gpt-4o`, `gpt-4-turbo`
 
 ## 📚 Documentation
 
-- **[Getting Started](docs/GETTING_STARTED.md)** – Quick start and configuration
+- **[Getting Started](docs/GETTING_STARTED.md)** – Quick start, configuration, and Gemini setup
 - **[Agents](docs/AGENTS.md)** – All 6 specialized agents
 - **[Gemini](docs/GEMINI.md)** – Gemini integration and setup
 - **[Architecture](docs/ARCHITECTURE.md)** – System design
 - **[Testing](docs/TESTING.md)** – Automated tests
 - **[Manual Testing](docs/MANUAL_TESTING.md)** – Manual testing guide
-- **[MCP Servers](docs/mcp.md)** – MCP server setup (optional)
+- **[MCP Servers](docs/MCP.md)** – MCP server setup (required for file operations)
+
+## ⚠️ Notes
+
+### Rate Limiting
+
+When using Gemini API, you may encounter rate limit errors (429) during testing or heavy usage. The system includes:
+- Automatic retries with exponential backoff (up to 5 retries)
+- Delays between requests in E2E tests
+- If rate limits persist, wait a few minutes between test runs or check your API quota
+
+### Demo Mode vs Full Ingestion
+
+- **Demo Mode** (default): Documents are cached only (parsed, not chunked/embedded). Ideal for large context models like Gemini that can process full documents.
+- **Full Ingestion**: Documents are chunked and embedded for vector search. Use when you need semantic search across many documents.
 
 ## 📝 License
 
