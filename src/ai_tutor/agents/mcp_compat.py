@@ -189,7 +189,20 @@ def configure_litellm_for_gemini_mcp(model_name: Optional[str] = None) -> None:
     try:
         import litellm
         litellm.drop_params = True  # Drop invalid parameters instead of failing
-        logger.info("[MCP Compat] Configured LiteLLM for Gemini MCP compatibility")
+        
+        # Configure automatic retries for rate limit errors (429)
+        # LiteLLM will automatically retry with exponential backoff
+        # Set max retries and retry delay for rate limit errors
+        if not hasattr(litellm, '_rate_limit_retry_config'):
+            # Configure retry behavior for rate limit errors
+            # This helps handle burst throttling and temporary rate limits
+            os.environ.setdefault("LITELLM_NUM_RETRIES", "5")  # Retry up to 5 times
+            os.environ.setdefault("LITELLM_RETRY_DELAY", "3")  # Initial delay of 3 seconds
+            litellm.num_retries = 5  # Set programmatically as well
+            litellm.retry_delay = 3  # Initial delay between retries
+            logger.info("[MCP Compat] Configured LiteLLM for Gemini MCP compatibility with rate limit retries")
+        else:
+            logger.info("[MCP Compat] Configured LiteLLM for Gemini MCP compatibility")
     except Exception as e:
         logger.debug("[MCP Compat] Could not configure LiteLLM settings: %s", e)
 

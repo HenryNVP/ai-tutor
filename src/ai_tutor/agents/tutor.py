@@ -733,9 +733,10 @@ class TutorAgent:
             sections.append("")
         if decision.source_filter:
             sections.append(
-                "Source filter hints (pass via `source_filter` when calling retrieve_local_context): "
-                + ", ".join(decision.source_filter)
+                "Source filter hints: " + ", ".join(decision.source_filter)
             )
+            sections.append("")
+            sections.append("IMPORTANT: Use the filename(s) from 'Source filter hints' above when calling document retrieval tools (read_raw_document, fetch_full_document, or retrieve_local_context).")
             sections.append("")
         if decision.target == "quiz":
             sections.append("Quiz metadata:")
