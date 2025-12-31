@@ -17,7 +17,9 @@ An intelligent tutoring system that ingests STEM course materials, answers quest
 - **🌐 Web Search** – Falls back to current information when needed
 - **⚡ FastAPI Backend** – REST API for questions, quizzes, ingestion, and session resets
 
-## 🚀 Quick Start
+## 🚀[aitutor-demo.webm](https://github.com/user-attachments/assets/0fb97ebb-db95-404c-8a80-5bb03d86bc9a)
+
+ Quick Start
 
 ### Prerequisites
 
